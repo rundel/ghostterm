@@ -50,6 +50,8 @@ const TerminalOpt = {
   COLOR_BACKGROUND: 13,
   COLOR_CURSOR: 14,
   COLOR_PALETTE: 15,
+  DEFAULT_CURSOR_STYLE: 23,
+  DEFAULT_CURSOR_BLINK: 24,
   SCROLLBACK_MAX_BYTES: 28,
   SCROLLBACK_MAX_LINES: 29,
   MODE_DEFAULT: 34,
@@ -1499,6 +1501,27 @@ export class GhosttyTerminal {
     this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
 
+  /**
+   * The cursor shape and blink the user configured. Programs can change them
+   * (DECSCUSR, mode 12); `CSI 0 q` returns to these. getCursor() reports
+   * what is in effect.
+   */
+  setDefaultCursor(style: 'block' | 'underline' | 'bar', blink: boolean): void {
+    const ptr = this.scratch;
+    const view = this.mem.view();
+    const value =
+      style === 'bar'
+        ? CursorStyle.BAR
+        : style === 'underline'
+          ? CursorStyle.UNDERLINE
+          : CursorStyle.BLOCK;
+    view.setUint32(ptr, value, true);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_STYLE, ptr);
+    view.setUint8(ptr, blink ? 1 : 0);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_BLINK, ptr);
+    this.pendingUpdate = true;
+  }
+
   /** Cell size in pixels, reported to programs (in-band resize, mode 2048). */
   private cellPx = { width: 0, height: 0 };
 
@@ -1660,6 +1683,7 @@ export class GhosttyTerminal {
    * Get default colors from render state
    */
   getColors(): RenderStateColors {
+    if (this.pendingUpdate) this.update();
     // Forced so the cursor color below is read from a fresh copy in scratch.
     this.loadColors(true);
     const ptr = this.scratch;

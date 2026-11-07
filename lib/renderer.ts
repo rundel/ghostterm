@@ -27,7 +27,17 @@ export interface IRenderable {
   setViewportOffset?(offset: number): void;
   /** Grapheme string at a row of the displayed viewport. */
   getViewportGraphemeString?(row: number, col: number): string;
-  getCursor(): { x: number; y: number; visible: boolean };
+  getCursor(): {
+    x: number;
+    y: number;
+    visible: boolean;
+    /** Shape in effect (the program may have changed it); overrides cursorStyle. */
+    style?: 'block' | 'underline' | 'bar';
+    /** Whether it blinks (the program may have changed it); overrides cursorBlink. */
+    blinking?: boolean;
+  };
+  /** Colors in effect; a cursor color set by the program (OSC 12) overrides the theme's. */
+  getColors?(): { cursor: { r: number; g: number; b: number } | null };
   getDimensions(): { cols: number; rows: number };
   isRowDirty(y: number): boolean;
   /** Returns true if a full redraw is needed (e.g., screen change) */
@@ -123,6 +133,11 @@ export class CanvasRenderer {
   // Cursor blinking state
   private cursorVisible: boolean = true;
   private cursorBlinkInterval?: number;
+  /** Shape and color in effect this frame (options, or what the program set). */
+  private cursorShape: 'block' | 'underline' | 'bar' = 'block';
+  private cursorColor = '';
+  /** Whether the blink timer is running. */
+  private blinkActive = false;
   private lastCursorPosition: { x: number; y: number } = { x: 0, y: 0 };
 
   // Viewport tracking (for scrolling)
@@ -202,9 +217,7 @@ export class CanvasRenderer {
     this.metrics = this.measureFont();
 
     // Setup cursor blinking if enabled
-    if (this.cursorBlink) {
-      this.startCursorBlink();
-    }
+    this.applyCursorBlink(this.cursorBlink);
   }
 
   // ==========================================================================
@@ -310,6 +323,12 @@ export class CanvasRenderer {
     // Multiple update() calls are safe - dirty state persists until clearDirty().
     const cursor = buffer.getCursor();
     const dims = buffer.getDimensions();
+    this.cursorShape = cursor.style ?? this.cursorStyle;
+    this.applyCursorBlink(cursor.blinking ?? this.cursorBlink);
+    const programCursor = buffer.getColors?.().cursor;
+    this.cursorColor = programCursor
+      ? `rgb(${programCursor.r}, ${programCursor.g}, ${programCursor.b})`
+      : this.theme.cursor;
     const scrollbackLength = scrollbackProvider ? scrollbackProvider.getScrollbackLength() : 0;
 
     // Check if buffer needs full redraw (e.g., screen change between normal/alternate)
@@ -341,7 +360,7 @@ export class CanvasRenderer {
     // Check if cursor position changed or if blinking (need to redraw cursor line)
     const cursorMoved =
       cursor.x !== this.lastCursorPosition.x || cursor.y !== this.lastCursorPosition.y;
-    if ((cursorMoved || this.cursorBlink) && (viewportY === 0 || !ownsViewport)) {
+    if ((cursorMoved || this.blinkActive) && (viewportY === 0 || !ownsViewport)) {
       // Mark cursor lines as needing redraw
       if (!forceAll && !buffer.isRowDirty(cursor.y)) {
         // Need to redraw cursor line
@@ -748,9 +767,9 @@ export class CanvasRenderer {
     const cursorX = x * this.metrics.width;
     const cursorY = y * this.metrics.height;
 
-    this.ctx.fillStyle = this.theme.cursor;
+    this.ctx.fillStyle = this.cursorColor;
 
-    switch (this.cursorStyle) {
+    switch (this.cursorShape) {
       case 'block':
         // Full cell block
         this.ctx.fillRect(cursorX, cursorY, this.metrics.width, this.metrics.height);
@@ -862,15 +881,22 @@ export class CanvasRenderer {
   }
 
   /**
-   * Enable/disable cursor blinking
+   * Enable/disable cursor blinking (the default; a program can change it)
    */
   public setCursorBlink(enabled: boolean): void {
-    if (enabled && !this.cursorBlink) {
-      this.cursorBlink = true;
+    this.cursorBlink = enabled;
+    this.applyCursorBlink(enabled);
+  }
+
+  /** Run the blink timer exactly when the cursor should blink. */
+  private applyCursorBlink(blink: boolean): void {
+    if (blink === this.blinkActive) return;
+    this.blinkActive = blink;
+    if (blink) {
       this.startCursorBlink();
-    } else if (!enabled && this.cursorBlink) {
-      this.cursorBlink = false;
+    } else {
       this.stopCursorBlink();
+      this.cursorVisible = true;
     }
   }
 

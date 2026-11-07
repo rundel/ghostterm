@@ -141,3 +141,47 @@ describe('theme', () => {
     expect(replies).toEqual(['\x1b[?997;2n']);
   });
 });
+
+describe('cursor', () => {
+  /** Render one frame and capture how the cursor was drawn. */
+  function drawnCursor() {
+    const renderer = (term as any).renderer;
+    renderer.render(term.wasmTerm, true, term.viewportY, term);
+    return {
+      shape: renderer.cursorShape,
+      color: renderer.cursorColor,
+      blink: renderer.blinkActive,
+    };
+  }
+
+  test('the configured style is the default', async () => {
+    const t = await createIsolatedTerminal({ cursorStyle: 'bar', cursorBlink: true });
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    t.open(c);
+    try {
+      expect(t.wasmTerm!.getCursor()).toMatchObject({ style: 'bar', blinking: true });
+    } finally {
+      t.dispose();
+      c.remove();
+    }
+  });
+
+  test('programs can change shape and blink (DECSCUSR), and reset to the default', () => {
+    expect(drawnCursor()).toMatchObject({ shape: 'block', blink: false });
+    term.write('\x1b[5 q'); // blinking bar, as vim uses in insert mode
+    expect(drawnCursor()).toMatchObject({ shape: 'bar', blink: true });
+    term.write('\x1b[0 q');
+    expect(drawnCursor()).toMatchObject({ shape: 'block', blink: false });
+  });
+
+  test('changing the option still applies while no program overrides it', () => {
+    term.options.cursorStyle = 'underline';
+    expect(drawnCursor().shape).toBe('underline');
+  });
+
+  test('programs can set the cursor color (OSC 12)', () => {
+    term.write('\x1b]12;#ff8800\x07');
+    expect(drawnCursor().color).toBe('rgb(255, 136, 0)');
+  });
+});

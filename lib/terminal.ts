@@ -228,6 +228,8 @@ export class Terminal implements ITerminalCore {
 
       case 'cursorBlink':
       case 'cursorStyle':
+        // libghostty keeps these as the defaults a program can override.
+        this.wasmTerm?.setDefaultCursor(this.options.cursorStyle, this.options.cursorBlink);
         if (this.renderer) {
           this.renderer.setCursorStyle(this.options.cursorStyle);
           this.renderer.setCursorBlink(this.options.cursorBlink);
@@ -1888,6 +1890,7 @@ export class Terminal implements ITerminalCore {
    */
   private connectEffects(wasmTerm: GhosttyTerminal): void {
     wasmTerm.setColors(this.themeColors());
+    wasmTerm.setDefaultCursor(this.options.cursorStyle, this.options.cursorBlink);
     wasmTerm.setEffects({
       bell: () => this.bellEmitter.fire(),
       titleChanged: (title) => {
