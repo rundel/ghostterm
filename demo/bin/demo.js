@@ -46,6 +46,15 @@ if (!fs.existsSync(path.join(repoRoot, 'ghostty-vt.wasm'))) {
   process.exit(1);
 }
 
+// What the page needs; everything else in the repo (.git, scripts, ...) is not served.
+const SERVED_PATHS = [
+  path.join(repoRoot, 'demo'),
+  path.join(repoRoot, 'lib'),
+  path.join(repoRoot, 'node_modules'),
+  path.join(repoRoot, 'ghostty-vt.wasm'),
+  path.join(repoRoot, 'ghostty-vt-fast.wasm'),
+];
+
 // ============================================================================
 // HTTP helpers
 // ============================================================================
@@ -117,11 +126,32 @@ function getShell() {
   return process.env.SHELL || '/bin/bash';
 }
 
+/** A terminal width or height from the client, or null unless it is an integer from 1 to 1000. */
+function parseDimension(value) {
+  const n = typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : value;
+  return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : null;
+}
+
+/** A valid control message from a text frame, or null. */
+function parseControlMessage(text) {
+  let msg;
+  try {
+    msg = JSON.parse(text);
+  } catch (_error) {
+    return null;
+  }
+  if (msg?.type === 'resize') {
+    const cols = parseDimension(msg.cols);
+    const rows = parseDimension(msg.rows);
+    return cols && rows ? { type: 'resize', cols, rows } : null;
+  }
+  return null;
+}
+
 function createPtySession(cols, rows) {
   const shell = getShell();
-  const shellArgs = process.platform === 'win32' ? [] : [];
 
-  const ptyProcess = pty.spawn(shell, shellArgs, {
+  const ptyProcess = pty.spawn(shell, [], {
     name: 'xterm-256color',
     cols: cols,
     rows: rows,
@@ -193,8 +223,8 @@ wss.on('connection', (ws, req) => {
     ws.close();
     return;
   }
-  const cols = Number.parseInt(url.searchParams.get('cols') || '80');
-  const rows = Number.parseInt(url.searchParams.get('rows') || '24');
+  const cols = parseDimension(url.searchParams.get('cols')) ?? 80;
+  const rows = parseDimension(url.searchParams.get('rows')) ?? 24;
 
   // Create PTY
   const ptyProcess = createPtySession(cols, rows);
@@ -214,25 +244,17 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  // WebSocket -> PTY
-  ws.on('message', (data) => {
-    const message = data.toString('utf8');
-
-    // Check for resize message
-    if (message.startsWith('{')) {
-      try {
-        const msg = JSON.parse(message);
-        if (msg.type === 'resize') {
-          ptyProcess.resize(msg.cols, msg.rows);
-          return;
-        }
-      } catch (e) {
-        // Not JSON, treat as input
-      }
+  // WebSocket -> PTY. Binary frames are terminal input; text frames are JSON control messages,
+  // so nothing typed or pasted is ever taken for a command.
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      ptyProcess.write(data.toString('utf8'));
+      return;
     }
-
-    // Send to PTY
-    ptyProcess.write(message);
+    const msg = parseControlMessage(data.toString('utf8'));
+    if (msg?.type === 'resize') {
+      ptyProcess.resize(msg.cols, msg.rows);
+    }
   });
 
   ws.on('close', () => {
@@ -336,6 +358,10 @@ process.on('SIGINT', () => {
       strictPort: true,
       cors: false,
       allowedHosts: AUTH_CONFIG.allowedHosts,
+      fs: {
+        strict: true,
+        allow: SERVED_PATHS,
+      },
     },
   });
 

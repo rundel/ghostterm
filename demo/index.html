@@ -167,18 +167,18 @@
           fitAddon.fit();
         });
 
-        // Handle terminal resize
+        // Control messages go as JSON in text frames, terminal input as binary frames, so the
+        // server never mistakes typed or pasted text for a command.
         term.onResize((size) => {
           if (ws && ws.readyState === WebSocket.OPEN) {
-            // Send resize as control sequence (server expects this format)
             ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
           }
         });
 
-        // Handle user input
+        const encoder = new TextEncoder();
         term.onData((data) => {
           if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(data);
+            ws.send(encoder.encode(data));
           }
         });
 
