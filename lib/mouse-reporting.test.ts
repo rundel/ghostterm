@@ -144,7 +144,7 @@ describe('wheel', () => {
     wheel(3, 4, 100);
     expect(sent).toEqual(['\x1b[<64;2;3M', '\x1b[<65;4;5M']);
     expect(up.defaultPrevented).toBe(true);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
   });
 
   test('horizontal movement reports wheel left and right', () => {

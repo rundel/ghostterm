@@ -3,5 +3,5 @@
 
 [test]
 # Preload Happy DOM before running tests to provide browser-like globals
-# (window, document, HTMLElement, etc.)
-preload = "./happydom.ts"
+# (window, document, HTMLElement, etc.), then the checks run after each test
+preload = ["./happydom.ts", "./test-cleanup.ts"]

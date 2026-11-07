@@ -24,6 +24,8 @@ export interface DecorationHost {
   /** The absolute buffer line at the top of the viewport. */
   topLine(): number;
   isAlternateScreen(): boolean;
+  /** Schedule a frame, which places the elements (refresh()) and draws cell colors. */
+  requestRender(): void;
 }
 
 export class Decoration implements IDecoration {
@@ -86,7 +88,7 @@ export class DecorationService implements IDisposable {
   attach(parent: HTMLElement, canvas: HTMLElement): void {
     this.parent = parent;
     this.canvas = canvas;
-    this.refreshQueued = true;
+    this.queueRefresh();
   }
 
   /** The elements' container, added to the parent with the first element. */
@@ -107,7 +109,7 @@ export class DecorationService implements IDisposable {
     if (options.marker.isDisposed) return undefined;
     const decoration = new Decoration(options, this);
     this.list.push(decoration);
-    this.refreshQueued = true;
+    this.queueRefresh();
     return decoration;
   }
 
@@ -115,11 +117,18 @@ export class DecorationService implements IDisposable {
   remove(decoration: Decoration): void {
     const index = this.list.indexOf(decoration);
     if (index >= 0) this.list.splice(index, 1);
+    // Its cell colors are drawn until the next frame.
+    this.host.requestRender();
   }
 
   /** Position the elements again on the next refresh (cell size or layout changed). */
   invalidate(): void {
+    this.queueRefresh();
+  }
+
+  private queueRefresh(): void {
     this.refreshQueued = true;
+    this.host.requestRender();
   }
 
   /**

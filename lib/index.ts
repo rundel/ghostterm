@@ -38,48 +38,16 @@ export type {
   IBufferCell,
 } from './interfaces';
 
-// Ghostty WASM components (for advanced usage)
-export {
-  Ghostty,
-  GhosttyTerminal,
-  KeyEncoder,
-  CellFlags,
-  DirtyState,
-  KeyEncoderOption,
-  FormatterExtras,
-  MouseAction,
-  MouseButton,
-  SelectionAutoscroll,
-} from './ghostty';
+// The libghostty-vt module, for loading one yourself (new Terminal({ ghostty }))
+export { Ghostty } from './ghostty';
 export type {
-  FormatScreenOptions,
-  MouseEncoder,
-  MouseGeometry,
-  SelectionAdjust,
-  SelectionGeometry,
-  SelectionGesture,
-  SelectionRange,
-  TerminalColors,
-  TerminalSearch,
   ClipboardLocation,
-  ClipboardWriteRequest,
   GhosttyOptimizeMode,
   ProgramStatus,
   ProgressReport,
   SemanticPromptEvent,
-  TerminalEffects,
   TerminalNotification,
 } from './ghostty';
-export { Key, KeyAction, Mods, UnderlineStyle } from './types';
-export type { KeyEvent, GhosttyCell, RGB, Cursor, TerminalHandle } from './types';
-export type { TrackedRow } from './ghostty';
-
-// Low-level components (for custom integrations)
-export { CanvasRenderer } from './renderer';
-export type { RendererOptions, FontMetrics, IRenderable, HighlightRange } from './renderer';
-export { InputHandler } from './input-handler';
-export { EventEmitter } from './event-emitter';
-export { SelectionManager } from './selection-manager';
 
 // Addons
 export { FitAddon } from './addons/fit';
@@ -92,8 +60,3 @@ export type {
   ISearchResultChangeEvent,
 } from './addons/search';
 export type { ITerminalDimensions } from './addons/fit';
-
-// Link providers
-export { OSC8LinkProvider } from './providers/osc8-link-provider';
-export { UrlRegexProvider } from './providers/url-regex-provider';
-export { LinkDetector } from './link-detector';

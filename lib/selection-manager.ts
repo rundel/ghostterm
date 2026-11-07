@@ -22,6 +22,7 @@ import {
   type SelectionGesture,
 } from './ghostty';
 import type { IEvent } from './interfaces';
+import type { PointerRouter } from './pointer-router';
 import type { CanvasRenderer } from './renderer';
 import type { Terminal } from './terminal';
 
@@ -32,7 +33,7 @@ import type { Terminal } from './terminal';
 export class SelectionManager {
   private terminal: Terminal;
   private renderer: CanvasRenderer;
-  private initialWasmTerm: GhosttyTerminal;
+  private wasmTerm: GhosttyTerminal;
   private textarea: HTMLTextAreaElement;
 
   private gesture: SelectionGesture | null = null;
@@ -64,42 +65,22 @@ export class SelectionManager {
     terminal: Terminal,
     renderer: CanvasRenderer,
     wasmTerm: GhosttyTerminal,
-    textarea: HTMLTextAreaElement
+    textarea: HTMLTextAreaElement,
+    private pointer: PointerRouter
   ) {
     this.terminal = terminal;
     this.renderer = renderer;
-    this.initialWasmTerm = wasmTerm;
+    this.wasmTerm = wasmTerm;
     this.textarea = textarea;
 
     // Attach mouse event listeners
     this.attachEventListeners();
   }
 
-  /**
-   * The terminal's current WASM terminal. Terminal.reset() replaces it, so it
-   * is looked up on every use rather than kept.
-   */
-  private get wasmTerm(): GhosttyTerminal {
-    return this.terminal.wasmTerm ?? this.initialWasmTerm;
-  }
-
-  /** The gesture for the current WASM terminal, recreated after a reset. */
+  /** The selection gesture, made on first use. */
   private getGesture(): SelectionGesture {
-    const term = this.wasmTerm;
-    if (this.gesture && this.gesture.terminal !== term) {
-      // The old terminal has been freed; release the gesture without it.
-      this.gesture.dispose(false);
-      this.gesture = null;
-    }
-    if (!this.gesture) this.gesture = term.createSelectionGesture();
+    this.gesture ??= this.wasmTerm.createSelectionGesture();
     return this.gesture;
-  }
-
-  /**
-   * Get current viewport Y position (how many lines scrolled into history)
-   */
-  private getViewportY(): number {
-    return Math.max(0, Math.floor(this.terminal.getViewportY()));
   }
 
   /** Number of rows in the buffer: scrollback, then the screen. */
@@ -236,11 +217,9 @@ export class SelectionManager {
     this.stopAutoScroll();
     this.restoreTextarea();
 
-    // The terminal may already have been freed by the time we are disposed.
-    if (this.gesture) {
-      this.gesture.dispose(this.terminal.wasmTerm === this.gesture.terminal);
-      this.gesture = null;
-    }
+    // Terminal disposes this before it frees the WASM terminal.
+    this.gesture?.dispose();
+    this.gesture = null;
 
     // Clean up document event listeners
     if (this.boundMouseUpHandler) {
@@ -287,21 +266,12 @@ export class SelectionManager {
   }
 
   /**
-   * Point libghostty's viewport at what is displayed, so viewport cells under
-   * the pointer resolve to the content the user sees.
-   */
-  private syncViewport(): void {
-    this.wasmTerm.setViewportOffset(this.getViewportY());
-  }
-
-  /**
    * Feed a drag at canvas position (x, y), which may lie outside the canvas.
    * Holding Alt makes it a block (rectangular) selection, as in Ghostty.
    */
   private dragTo(x: number, y: number, altKey: boolean): void {
     this.lastPointer = { x, y };
     this.rectangle = altKey;
-    this.syncViewport();
     const cell = this.pixelToCell(x, y);
     this.getGesture().drag(cell.col, cell.row, x, y, this.geometry(), this.rectangle);
 
@@ -330,14 +300,13 @@ export class SelectionManager {
       }
       if (e.button !== 0) return;
 
-      // A program tracking the mouse gets plain clicks and drags (reported by
-      // the InputHandler); Shift+drag still selects, as in Ghostty.
-      if (this.wasmTerm.hasMouseTracking() && !e.shiftKey) return;
+      // Presses on the scrollbar, and ones reported to a program tracking the
+      // mouse, aren't selections (Shift+drag still selects, as in Ghostty).
+      if ((this.pointer.gestureTarget() ?? this.pointer.targetFor(e)) !== 'selection') return;
 
       // Keyboard input, IME composition included, goes to the textarea.
       this.textarea.focus();
 
-      this.syncViewport();
       const cell = this.pixelToCell(e.offsetX, e.offsetY);
       const time = e.timeStamp > 0 ? e.timeStamp : performance.now();
       const hadSelection = this.hasSelection();
@@ -492,7 +461,6 @@ export class SelectionManager {
         this.stopAutoScroll();
         return;
       }
-      this.syncViewport();
       const { x, y } = this.lastPointer;
       const cell = this.pixelToCell(x, y);
       const ok = this.getGesture().autoscrollTick(

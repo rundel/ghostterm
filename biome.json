@@ -52,7 +52,13 @@
   },
   "overrides": [
     {
-      "include": ["happydom.ts", "lib/test-helpers.ts", "**/*.test.ts", "e2e/**"],
+      "include": [
+        "happydom.ts",
+        "test-cleanup.ts",
+        "lib/test-helpers.ts",
+        "**/*.test.ts",
+        "e2e/**"
+      ],
       "linter": {
         "rules": {
           "complexity": {

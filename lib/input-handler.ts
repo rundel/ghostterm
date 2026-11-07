@@ -20,6 +20,7 @@ import {
   type SelectionAdjust,
 } from './ghostty';
 import type { IKeyEvent } from './interfaces';
+import type { PointerRouter, PointerTarget } from './pointer-router';
 import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
 
 /** Keys that extend a selection when Shift is held (Ghostty's defaults). */
@@ -198,8 +199,7 @@ export interface InputHandlerOptions {
    */
   inputElement?: HTMLElement;
   /**
-   * The WASM terminal, looked up on every use (Terminal.reset() replaces it).
-   * The key encoder follows its keyboard modes; paste, focus and mouse reports
+   * The WASM terminal (undefined once freed). The key encoder follows its keyboard modes; paste, focus and mouse reports
    * are encoded for it.
    */
   getTerminal: () => GhosttyTerminal | undefined;
@@ -214,6 +214,11 @@ export interface InputHandlerOptions {
   /** Copy shortcut (Cmd+C, Ctrl+Shift+C): returns true if there was a selection to copy. */
   onCopy?: () => boolean;
   mouseConfig?: MouseTrackingConfig;
+  /**
+   * Decides which presses and wheel events go to the program (Terminal's router). Without one, a
+   * program tracking the mouse gets them unless Shift is held.
+   */
+  pointer?: PointerRouter;
 }
 
 export class InputHandler {
@@ -230,6 +235,7 @@ export class InputHandler {
   onSelectionAdjusted?: () => void;
   private onCopyCallback?: () => boolean;
   private mouseConfig?: MouseTrackingConfig;
+  private pointer?: PointerRouter;
   private listeners: Array<[EventTarget, string, EventListener, AddEventListenerOptions?]> = [];
   private isComposing = false;
   private isDisposed = false;
@@ -261,6 +267,7 @@ export class InputHandler {
     this.customWheelEventHandler = options.customWheelEventHandler;
     this.onCopyCallback = options.onCopy;
     this.mouseConfig = options.mouseConfig;
+    this.pointer = options.pointer;
     this.getTerminal = options.getTerminal;
 
     this.attach();
@@ -539,9 +546,14 @@ export class InputHandler {
     if (data) this.onDataCallback(data);
   }
 
-  /** Whether a program is receiving mouse reports for this event. */
-  isReportingMouse(event: MouseEvent): boolean {
-    return !this.isDisposed && !!this.mouseConfig?.hasMouseTracking() && !event.shiftKey;
+  /** Whether the program gets this press (the router's choice, made by the first listener). */
+  private pressTarget(event: MouseEvent): PointerTarget {
+    if (this.pointer) return this.pointer.gestureTarget() ?? this.pointer.targetFor(event);
+    return this.programTracksMouse(event) ? 'program' : 'selection';
+  }
+
+  private programTracksMouse(event: MouseEvent): boolean {
+    return !!this.mouseConfig?.hasMouseTracking() && !event.shiftKey;
   }
 
   /**
@@ -755,7 +767,7 @@ export class InputHandler {
     if (this.isDisposed) return;
     const button = InputHandler.DOM_BUTTONS[event.button];
     if (button === undefined) return;
-    if (!this.mouseConfig?.hasMouseTracking() || event.shiftKey) return;
+    if (this.pressTarget(event) !== 'program') return;
     this.mouseButtonsPressed |= 1 << button;
     this.reportMouse(event, MouseAction.PRESS, button);
     this.startDragTracking();
@@ -852,7 +864,13 @@ export class InputHandler {
    * tracking the mouse.
    */
   private handleWheel(event: WheelEvent): void {
-    if (this.isDisposed || !this.isReportingMouse(event)) return;
+    if (this.isDisposed) return;
+    const target = this.pointer
+      ? this.pointer.wheelTarget(event)
+      : this.programTracksMouse(event)
+        ? 'program'
+        : 'scroll';
+    if (target !== 'program') return;
     // As in xterm.js, a custom handler returning false stops all processing
     // (and the page may scroll).
     if (this.customWheelEventHandler && this.customWheelEventHandler(event) === false) return;

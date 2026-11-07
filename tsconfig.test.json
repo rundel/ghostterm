@@ -12,6 +12,7 @@
     "lib/**/*.test.ts",
     "lib/test-helpers.ts",
     "happydom.ts",
+    "test-cleanup.ts",
     "scripts/**/*.ts",
     "bench/**/*.ts",
     "demo/bin/*.test.ts",

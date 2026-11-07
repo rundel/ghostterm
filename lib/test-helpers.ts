@@ -118,7 +118,8 @@ export interface TerminalInternals {
 }
 
 export function internals(term: Terminal): TerminalInternals {
-  const { renderer, wasmTerm, textarea } = term;
+  const { wasmTerm, textarea } = term;
+  const renderer = term['renderer'];
   const inputHandler = term['inputHandler'];
   const selectionManager = term['selectionManager'];
   const canvas = term['canvas'];

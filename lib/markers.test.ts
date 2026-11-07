@@ -159,8 +159,12 @@ describe('registerMarker', () => {
     expect(marker.isDisposed).toBe(true);
   });
 
-  test('needs an opened terminal', () => {
-    const term = fixture.create();
-    expect(() => term.registerMarker()).toThrow();
+  test('works before open(), and throws once disposed', () => {
+    const term = fixture.create({ cols: 20, rows: 5 });
+    term.write('a\r\nb');
+    const marker = term.registerMarker();
+    expect(marker.line).toBe(1);
+    term.dispose();
+    expect(() => term.registerMarker()).toThrow('disposed');
   });
 });

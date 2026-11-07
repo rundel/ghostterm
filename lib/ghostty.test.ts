@@ -1,7 +1,7 @@
 /**
  * Tests for the libghostty-vt bridge itself, against the official WASM module.
  *
- * These cover the parts of lib/ghostty.ts that talk to the C ABI directly:
+ * These cover the parts of lib/ghostty.ts and lib/bridge/ that talk to the C ABI directly:
  * write_pty replies, cell decoding, colors, grid access and key encoding.
  */
 
@@ -13,6 +13,7 @@ import {
   Ghostty,
   type GhosttyTerminal,
   KeyEncoderOption,
+  Scratch,
   SelectionAutoscroll,
 } from './ghostty';
 import { drawnText, terminalFixture } from './test-helpers';
@@ -48,6 +49,34 @@ describe('Ghostty module', () => {
     fixture.defer(() => term.free());
     term.write('hello');
     expect(text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd()).toBe('hello');
+  });
+});
+
+describe('scratch slots', () => {
+  test('lay slots out end to end, 8-byte aligned, without overlap', () => {
+    const exports = fixture.ghostty['exports'];
+    const scratch = new Scratch(exports, { a: 3, b: 16, c: 1, d: 9 });
+    fixture.defer(() => scratch.free());
+    const slots = (['a', 'b', 'c', 'd'] as const).map((k) => ({
+      start: scratch.at(k),
+      end: scratch.at(k) + scratch.sizeOf(k),
+    }));
+    for (const s of slots) expect(s.start % 8).toBe(0);
+    for (let i = 1; i < slots.length; i++)
+      expect(slots[i].start).toBeGreaterThanOrEqual(slots[i - 1].end);
+    expect(scratch.size).toBe(8 + 16 + 8 + 16);
+  });
+
+  test('zero() clears exactly its slot', () => {
+    const exports = fixture.ghostty['exports'];
+    const scratch = new Scratch(exports, { a: 8, b: 8 });
+    fixture.defer(() => scratch.free());
+    const bytes = new Uint8Array(exports.memory.buffer);
+    bytes.fill(0xff, scratch.at('a'), scratch.at('a') + 16);
+    scratch.zero('a', new Uint8Array(exports.memory.buffer));
+    const after = new Uint8Array(exports.memory.buffer);
+    expect([...after.subarray(scratch.at('a'), scratch.at('a') + 8)]).toEqual(Array(8).fill(0));
+    expect([...after.subarray(scratch.at('b'), scratch.at('b') + 8)]).toEqual(Array(8).fill(0xff));
   });
 });
 

@@ -64,31 +64,31 @@ describe('wheel on the normal screen', () => {
   test('scrolls the history and sends nothing', () => {
     fill(50);
     const up = wheel(-3);
-    expect(term.viewportY).toBe(3);
+    expect(term.getViewportY()).toBe(3);
     expect(up.defaultPrevented).toBe(true);
     wheel(2);
-    expect(term.viewportY).toBe(1);
+    expect(term.getViewportY()).toBe(1);
     expect(sent).toEqual([]);
   });
 
   test('line, page and pixel delta modes', () => {
     fill(100);
     wheel(-3);
-    expect(term.viewportY).toBe(3);
+    expect(term.getViewportY()).toBe(3);
     wheel(-1, WheelEvent.DOM_DELTA_PAGE);
-    expect(term.viewportY).toBe(3 + term.rows);
+    expect(term.getViewportY()).toBe(3 + term.rows);
     wheel(2);
-    expect(term.viewportY).toBe(1 + term.rows);
+    expect(term.getViewportY()).toBe(1 + term.rows);
     const lineHeight = internals(term).renderer.charHeight;
     wheel(4 * lineHeight, WheelEvent.DOM_DELTA_PIXEL);
-    expect(term.viewportY).toBe(term.rows - 3);
+    expect(term.getViewportY()).toBe(term.rows - 3);
   });
 
   test('a zero delta is swallowed without moving', () => {
     fill(50);
     const event = wheel(0);
     expect(event.defaultPrevented).toBe(true);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
   });
 
   test('wheel scrolls accumulate while a smooth scroll runs', async () => {
@@ -96,9 +96,9 @@ describe('wheel on the normal screen', () => {
     fill(100);
     wheel(-5);
     wheel(-5);
-    expect(term.viewportY).toBeLessThan(10);
-    for (let i = 0; i < 50 && term.viewportY !== 10; i++) await nextFrame();
-    expect(term.viewportY).toBe(10);
+    expect(term.getViewportY()).toBeLessThan(10);
+    for (let i = 0; i < 50 && term.getViewportY() !== 10; i++) await nextFrame();
+    expect(term.getViewportY()).toBe(10);
   });
 
   test('immediate scrolls stop a running smooth scroll', async () => {
@@ -107,7 +107,7 @@ describe('wheel on the normal screen', () => {
     wheel(-30);
     term.scrollToBottom();
     for (let i = 0; i < 5; i++) await nextFrame();
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
 
     wheel(-30);
     term.scrollToLine(10);
@@ -125,7 +125,7 @@ describe('wheel on the alternate screen', () => {
     sent.length = 0;
     wheel(2);
     expect(sent).toEqual(['\x1b[B', '\x1b[B']);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
   });
 
   test('pixel deltas convert at one line per cell height', () => {
@@ -164,11 +164,11 @@ describe('wheel on the alternate screen', () => {
     term.write('\x1b[?1049l');
     fill(30);
     wheel(-3);
-    expect(term.viewportY).toBe(3);
+    expect(term.getViewportY()).toBe(3);
     expect(sent).toEqual([]);
 
     term.write('\x1b[?1049h');
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     wheel(-1);
     expect(sent).toEqual(['\x1b[A']);
 
@@ -176,7 +176,7 @@ describe('wheel on the alternate screen', () => {
     term.write('\x1b[?1049l');
     wheel(-2);
     expect(sent).toEqual([]);
-    expect(term.viewportY).toBe(2);
+    expect(term.getViewportY()).toBe(2);
   });
 });
 
@@ -190,7 +190,7 @@ describe('custom wheel handler', () => {
     fill(50);
     const event = wheel(-3);
     expect(seen).toEqual([event]);
-    expect(term.viewportY).toBe(3);
+    expect(term.getViewportY()).toBe(3);
     expect(event.defaultPrevented).toBe(true);
 
     term.write('\x1b[?1049h');
@@ -202,7 +202,7 @@ describe('custom wheel handler', () => {
     term.attachCustomWheelEventHandler(() => false);
     fill(50);
     const scroll = wheel(-3);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(scroll.defaultPrevented).toBe(false);
 
     term.write('\x1b[?1049h');
@@ -216,7 +216,7 @@ describe('custom wheel handler', () => {
     term.attachCustomWheelEventHandler(undefined);
     fill(50);
     wheel(-3);
-    expect(term.viewportY).toBe(3);
+    expect(term.getViewportY()).toBe(3);
   });
 });
 
@@ -225,30 +225,30 @@ describe('scroll methods', () => {
 
   test('scrollLines moves by lines, clamped to the history', () => {
     term.scrollLines(-10);
-    expect(term.viewportY).toBe(10);
+    expect(term.getViewportY()).toBe(10);
     term.scrollLines(5);
-    expect(term.viewportY).toBe(5);
+    expect(term.getViewportY()).toBe(5);
     term.scrollLines(1000);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     term.scrollLines(-1000);
-    expect(term.viewportY).toBe(term.buffer.active.baseY);
+    expect(term.getViewportY()).toBe(term.buffer.active.baseY);
     expect(term.buffer.active.viewportY).toBe(0);
   });
 
   test('scrollPages moves by screenfuls', () => {
     fill(50, 'More');
     term.scrollPages(-2);
-    expect(term.viewportY).toBe(2 * term.rows);
+    expect(term.getViewportY()).toBe(2 * term.rows);
     term.scrollPages(1);
-    expect(term.viewportY).toBe(term.rows);
+    expect(term.getViewportY()).toBe(term.rows);
   });
 
   test('scrollToTop and scrollToBottom', () => {
     term.scrollToTop();
-    expect(term.viewportY).toBe(term.buffer.active.baseY);
+    expect(term.getViewportY()).toBe(term.buffer.active.baseY);
     expect(term.buffer.active.viewportY).toBe(0);
     term.scrollToBottom();
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
   });
 
@@ -256,11 +256,11 @@ describe('scroll methods', () => {
     // Line 15 of the buffer (0 = oldest scrollback line), as in xterm.js.
     term.scrollToLine(15);
     expect(term.buffer.active.viewportY).toBe(15);
-    expect(term.viewportY).toBe(term.buffer.active.baseY - 15);
+    expect(term.getViewportY()).toBe(term.buffer.active.baseY - 15);
     expect(drawnRows()[0]).toBe('Line 15');
 
     term.scrollToLine(1000);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     term.scrollToLine(-5);
     expect(term.buffer.active.viewportY).toBe(0);
   });
@@ -328,14 +328,14 @@ describe('rendering while scrolled', () => {
     expect(before[0]).toBe('Line 22');
 
     for (let i = 50; i < 60; i++) term.write(`Line ${i}\r\n`);
-    expect(term.viewportY).toBe(15);
+    expect(term.getViewportY()).toBe(15);
     expect(drawnRows()).toEqual(before);
   });
 
   test('output while at the bottom keeps following it', () => {
     fill(50);
     term.write('fresh');
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(drawnRows()[23]).toBe('fresh');
   });
 
@@ -344,7 +344,7 @@ describe('rendering while scrolled', () => {
     term.scrollLines(-5);
     keyDown(internals(term).textarea, 'KeyX', 'x');
     expect(sent).toEqual(['x']);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
   });
 
   test('stays within the history when it is pruned underneath the view', () => {
@@ -352,9 +352,9 @@ describe('rendering while scrolled', () => {
     fill(600);
     term.scrollLines(-100);
     for (let i = 600; i < 3000; i++) term.write(`Line ${i}\r\n`);
-    expect(term.viewportY).toBeGreaterThan(0);
-    expect(term.viewportY).toBeLessThanOrEqual(term.buffer.active.baseY);
-    expect(term.wasmTerm?.getViewportOffset()).toBe(Math.floor(term.viewportY));
+    expect(term.getViewportY()).toBeGreaterThan(0);
+    expect(term.getViewportY()).toBeLessThanOrEqual(term.buffer.active.baseY);
+    expect(term.wasmTerm?.getViewportOffset()).toBe(Math.floor(term.getViewportY()));
     // The rows drawn are the history rows at that offset.
     const top = term.buffer.active.viewportY;
     expect(drawnRows()[0]).toBe(term.buffer.active.getLine(top)?.translateToString(true) ?? '');
@@ -364,7 +364,7 @@ describe('rendering while scrolled', () => {
     fill(100);
     term.scrollLines(-10);
     term.write('\x1b[?1049h\x1b[Hvim');
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(drawnRows()[0]).toBe('vim');
     term.write('\x1b[?1049l');
     expect(term.buffer.active.baseY).toBe(77);
@@ -378,7 +378,11 @@ describe('scrollbar', () => {
   });
 
   const bar = () =>
-    internals(term).renderer.getScrollbarThumb(term.viewportY, term.buffer.active.baseY, term.rows);
+    internals(term).renderer.getScrollbarThumb(
+      term.getViewportY(),
+      term.buffer.active.baseY,
+      term.rows
+    );
 
   test('clicking the track jumps there', () => {
     const b = bar();
@@ -388,7 +392,7 @@ describe('scrollbar', () => {
     expect(term.buffer.active.viewportY).toBe(0);
 
     container.dispatchEvent(mouseEvent('mousedown', b.x + 1, b.trackY + b.trackHeight / 2));
-    expect(term.viewportY).toBe(Math.round(term.buffer.active.baseY / 2));
+    expect(term.getViewportY()).toBe(Math.round(term.buffer.active.baseY / 2));
   });
 
   test('dragging the thumb scrolls in proportion, and mouseup ends the drag', () => {
@@ -398,7 +402,7 @@ describe('scrollbar', () => {
     container.dispatchEvent(mouseEvent('mousedown', b.x + 1, startY));
     const travel = b.trackHeight - b.height;
     container.dispatchEvent(mouseEvent('mousemove', b.x + 1, startY - travel / 2));
-    expect(term.viewportY).toBe(Math.round(scrollback / 2));
+    expect(term.getViewportY()).toBe(Math.round(scrollback / 2));
     container.dispatchEvent(mouseEvent('mousemove', b.x + 1, startY - travel * 2));
     expect(term.buffer.active.viewportY).toBe(0);
 
@@ -407,13 +411,36 @@ describe('scrollbar', () => {
     expect(term.buffer.active.viewportY).toBe(0);
   });
 
+  test('a press on the scrollbar goes to the scrollbar even while a program tracks the mouse', () => {
+    term.write('\x1b[?1000h');
+    sent.length = 0;
+    const b = bar();
+    const { canvas } = internals(term);
+    canvas.dispatchEvent(mouseEvent('mousedown', b.x + 1, b.trackY + b.trackHeight / 2));
+    document.dispatchEvent(mouseEvent('mouseup', b.x + 1, b.trackY + b.trackHeight / 2));
+    expect(sent).toEqual([]);
+    expect(term.getViewportY()).toBe(Math.round(term.buffer.active.baseY / 2));
+    expect(term.hasSelection()).toBe(false);
+
+    // Over the text, the program gets the press; Shift+press selects instead.
+    canvas.dispatchEvent(mouseEvent('mousedown', 5, 5));
+    document.dispatchEvent(mouseEvent('mouseup', 5, 5));
+    expect(sent.length).toBe(2);
+    sent.length = 0;
+    canvas.dispatchEvent(mouseEvent('mousedown', 5, 5, { shiftKey: true }));
+    canvas.dispatchEvent(mouseEvent('mousemove', 5, 50, { shiftKey: true }));
+    document.dispatchEvent(mouseEvent('mouseup', 5, 50, { shiftKey: true }));
+    expect(sent).toEqual([]);
+    expect(term.hasSelection()).toBe(true);
+  });
+
   test('clicks left of the scrollbar are not taken', () => {
     // They start a selection instead.
     const { canvas } = internals(term);
     canvas.dispatchEvent(mouseEvent('mousedown', 5, 5));
     canvas.dispatchEvent(mouseEvent('mousemove', 5, 50));
     document.dispatchEvent(mouseEvent('mouseup', 5, 50));
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.hasSelection()).toBe(true);
   });
 
@@ -453,5 +480,33 @@ describe('scrollbar', () => {
     timers[0].fn();
     now += 300;
     expect(thumbs()).toEqual([]);
+  });
+});
+
+describe('viewport reads between frames', () => {
+  /** Viewport row 0 as libghostty reads it now, without drawing a frame first. */
+  const viewportTop = () =>
+    (internals(term).wasmTerm.getViewportLine(0) ?? [])
+      .map((c) => (c.codepoint ? String.fromCodePoint(c.codepoint) : ' '))
+      .join('')
+      .trimEnd();
+  const displayedTop = () =>
+    term.buffer.active.getLine(term.buffer.active.viewportY)?.translateToString(true) ?? '';
+
+  test('follow a scroll immediately', () => {
+    fill(50);
+    term.scrollLines(-5);
+    expect(viewportTop()).toBe(displayedTop());
+    term.scrollToTop();
+    expect(viewportTop()).toBe('Line 0');
+    term.scrollToBottom();
+    expect(viewportTop()).toBe(displayedTop());
+  });
+
+  test('stay on the displayed offset after a resize reflows the history', () => {
+    fill(50);
+    term.scrollLines(-10);
+    term.resize(40, 12);
+    expect(viewportTop()).toBe(displayedTop());
   });
 });

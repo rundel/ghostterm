@@ -6,8 +6,8 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { RecordingContext } from '../happydom';
 import type { ITerminalAddon } from './interfaces';
-import type { Terminal } from './terminal';
-import { internals, nextFrame, stub, terminalFixture } from './test-helpers';
+import { type Terminal, splitWrite } from './terminal';
+import { drawnText, internals, nextFrame, render, stub, terminalFixture } from './test-helpers';
 import { UNICODE_VERSIONS } from './unicode';
 
 const fixture = terminalFixture();
@@ -45,11 +45,29 @@ describe('construction and open()', () => {
     expect(() => disposed.open(container)).toThrow('has been disposed');
   });
 
-  test('methods that need the screen throw before open()', () => {
+  test('the terminal works without open(), as @xterm/headless does', () => {
+    const term = fixture.create({ cols: 20, rows: 5 });
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+    term.write('\x1b[?2004hhello');
+    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('hello');
+    expect(term.getMode(25)).toBe(true);
+    expect(term.hasBracketedPaste()).toBe(true);
+    term.paste('x');
+    expect(sent).toEqual(['\x1b[200~x\x1b[201~']);
+    // Programs' queries are answered too.
+    term.write('\x1b[6n');
+    expect(sent.at(-1)).toBe('\x1b[1;6R');
+    term.resize(30, 6);
+    expect([term.cols, term.rows]).toEqual([30, 6]);
+  });
+
+  test('methods throw once disposed', () => {
     const term = fixture.create();
-    expect(() => term.getMode(25)).toThrow('must be opened');
-    expect(() => term.hasBracketedPaste()).toThrow('must be opened');
-    expect(() => term.paste('x')).toThrow('must be opened');
+    term.dispose();
+    expect(() => term.getMode(25)).toThrow('disposed');
+    expect(() => term.paste('x')).toThrow('disposed');
+    expect(() => term.write('x')).toThrow('disposed');
   });
 
   test('focus() and blur() before open() do nothing', () => {
@@ -113,7 +131,7 @@ describe('construction and open()', () => {
 });
 
 describe('writing', () => {
-  test('writes before open() are kept and written by open(), as in xterm.js', async () => {
+  test('writes before open() are processed, and open() draws them, as in xterm.js', async () => {
     const term = fixture.create({ cols: 20, rows: 5 });
     let called = false;
     term.write('hello ', () => {
@@ -121,16 +139,18 @@ describe('writing', () => {
     });
     term.writeln('world');
     term.write('next');
-    expect(term.buffer.active.getLine(0)).toBeUndefined();
+    expect(bufferLine(term, 0)).toBe('hello world');
+    expect(bufferLine(term, 1)).toBe('next');
+    await Promise.resolve();
+    expect(called).toBe(true);
     const container = document.createElement('div');
     document.body.appendChild(container);
     fixture.defer(() => container.remove());
     term.open(container);
-    expect(bufferLine(term, 0)).toBe('hello world');
-    expect(bufferLine(term, 1)).toBe('next');
-    expect(called).toBe(false);
-    await nextFrame();
-    expect(called).toBe(true);
+    const text = drawnText(term, render(term))
+      .map((t) => t.text)
+      .join('');
+    expect(text).toBe('helloworldnext');
   });
 
   test('strings and bytes are written in order', () => {
@@ -150,15 +170,90 @@ describe('writing', () => {
     expect([bufferLine(term, 0), bufferLine(term, 1)]).toEqual(['one', 'two']);
   });
 
-  test('write callbacks run in order after the next frame', async () => {
+  test('write callbacks run in order once their data is processed, never inside write()', async () => {
     const { term } = fixture.open();
     const order: number[] = [];
     term.write('First', () => order.push(1));
     term.write('Second', () => order.push(2));
     term.write('Third', () => order.push(3));
     expect(order).toEqual([]);
-    await nextFrame();
+    await Promise.resolve();
     expect(order).toEqual([1, 2, 3]);
+  });
+
+  describe('large writes', () => {
+    /** Make performance.now() advance by `step` ms on every call, so each batch runs out of time. */
+    function slowClock(step: number): () => void {
+      let t = 0;
+      const now = spyOn(performance, 'now').mockImplementation(() => {
+        t += step;
+        return t;
+      });
+      return () => now.mockRestore();
+    }
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `row ${i}\r\n`).join('');
+
+    test('are processed over several tasks, in order, with callbacks after their data', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5, scrollback: 100000 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      const big = lines(30000); // several chunks
+      const order: string[] = [];
+      let parsed = 0;
+      term.onWriteParsed(() => parsed++);
+      term.write(big, () => order.push('big'));
+      term.write('tail', () => order.push('tail'));
+      // Only the first chunk ran; 'tail' waits behind the rest of the big write.
+      expect(parsed).toBe(1);
+      expect(term.buffer.active.length).toBeLessThan(30000);
+      await Promise.resolve();
+      expect(order).toEqual([]);
+      while (order.length < 2) await new Promise((r) => setTimeout(r, 0));
+      restore();
+      expect(order).toEqual(['big', 'tail']);
+      expect(parsed).toBeGreaterThan(2);
+      const last = term.buffer.active.getLine(term.buffer.active.length - 1);
+      expect(last?.translateToString(true)).toBe('tail');
+      const above = term.buffer.active.getLine(term.buffer.active.length - 2);
+      expect(above?.translateToString(true)).toBe('row 29999');
+    });
+
+    test('a write while a large one continues is queued behind it', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5, scrollback: 100000 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      term.write(lines(30000));
+      term.write('after');
+      restore();
+      await new Promise((r) => setTimeout(r, 0));
+      while (term['pendingWrites'].length > 0) await new Promise((r) => setTimeout(r, 0));
+      const last = term.buffer.active.getLine(term.buffer.active.length - 1);
+      expect(last?.translateToString(true)).toBe('after');
+    });
+
+    test('dispose() drops what is left', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      let called = false;
+      term.write(lines(30000), () => {
+        called = true;
+      });
+      term.dispose();
+      restore();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(called).toBe(false);
+    });
+  });
+
+  test('splitWrite() never cuts a surrogate pair or a UTF-8 sequence', () => {
+    expect(splitWrite('ab\u{1F600}cd', 3)).toEqual(['ab', '\u{1F600}cd']);
+    expect(splitWrite('abcd', 2)).toEqual(['ab', 'cd']);
+    expect(splitWrite('ab', 5)).toEqual(['ab', null]);
+    const bytes = new TextEncoder().encode('a\u{1F600}b'); // 1 + 4 + 1 bytes
+    const [head, rest] = splitWrite(bytes, 3);
+    expect([...(head as Uint8Array)]).toEqual([0x61]);
+    expect(new TextDecoder().decode(rest as Uint8Array)).toBe('\u{1F600}b');
   });
 
   test('cursor movement sequences are applied', () => {
@@ -210,18 +305,15 @@ describe('writing', () => {
   test('onWriteParsed fires once the queued writes are processed', () => {
     const term = fixture.create({ cols: 20, rows: 5 });
     const seen: Array<string | undefined> = [];
-    term.onWriteParsed(() => seen.push(bufferLine(term, 0)));
-    term.write('one ');
-    term.write('two');
-    expect(seen).toEqual([]);
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    fixture.defer(() => container.remove());
-    // Both writes queued before open() are processed together.
-    term.open(container);
-    expect(seen).toEqual(['one two']);
+    term.onWriteParsed(() => {
+      seen.push(bufferLine(term, 0));
+      // A write from a listener is queued and processed after it, in the same batch.
+      if (seen.length === 1) term.write(' two');
+    });
+    term.write('one');
+    expect(seen).toEqual(['one', 'one two']);
     term.write('!');
-    expect(seen).toEqual(['one two', 'one two!']);
+    expect(seen).toEqual(['one', 'one two', 'one two!']);
   });
 
   test('a write from onWriteParsed is processed and reported too', () => {
@@ -316,11 +408,11 @@ describe('resize()', () => {
     const { term } = fixture.open({ cols: 20, rows: 5 });
     for (let i = 0; i < 10; i++) term.write(`${i}\r\n`);
     term.scrollToTop();
-    expect(term.viewportY).toBe(6);
+    expect(term.getViewportY()).toBe(6);
     // Taller: history rows move back onto the screen.
     term.resize(20, 15);
     expect(term.getScrollbackLength()).toBe(0);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.wasmTerm?.getViewportOffset()).toBe(0);
   });
 
@@ -349,7 +441,7 @@ describe('clear() and reset()', () => {
     expect(buf.length).toBe(5);
     expect([0, 1, 2, 3, 4].map((y) => bufferLine(term, y))).toEqual(['$ cmd', '', '', '', '']);
     expect([buf.cursorX, buf.cursorY]).toEqual([5, 0]);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(sent).toEqual([]);
 
     // Output continues on the kept line
@@ -422,7 +514,7 @@ describe('clear() and reset()', () => {
     term.reset();
 
     expect(term.wasmTerm).toBe(wasmTerm); // same handle: addons keep working
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.buffer.active.baseY).toBe(0);
     expect(bufferLine(term, 0)).toBe('');
     expect(term.hasBracketedPaste()).toBe(false);
@@ -443,7 +535,7 @@ describe('clear() and reset()', () => {
     term.write('\x1b]2;old\x07');
     term.scrollLines(-2);
     term.write('\x1bcafter');
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(titles).toEqual(['old', '']);
     expect(bufferLine(term, 0)).toBe('after');
     term.write('\x1b]2;old\x07');
@@ -549,9 +641,9 @@ describe('dispose()', () => {
 
     expect(beforeInput()).toBe(false);
     // The document-level mouseup (scrollbar drag) is gone too.
-    term['isDraggingScrollbar'] = true;
+    term['scrollbar']['drag'] = { startY: 0, startViewportY: 0 };
     document.dispatchEvent(new MouseEvent('mouseup'));
-    expect(term['isDraggingScrollbar']).toBe(true);
+    expect(term['scrollbar'].dragging).toBe(true);
     const wheel = new WheelEvent('wheel', { deltaY: 100, cancelable: true });
     container.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(false);

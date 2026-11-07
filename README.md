@@ -42,6 +42,8 @@ websocket.onmessage = (e) => term.write(e.data);
 
 See [`demo/index.html`](./demo/index.html) for a complete client connected to a shell.
 
+A `Terminal` that is never opened works headless, like `@xterm/headless`: it processes writes, answers the program's queries through `onData`, and its buffer and `SerializeAddon` can be read, without a DOM element or drawing.
+
 ### Faster WebAssembly build
 
 `init()` loads the size-optimized libghostty-vt module, which is bundled into the library. The package also ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same release. It has the same features, is 10-20% faster on output heavy in escape sequences, and is about 1.5 times larger (1.2 MB instead of 840 KB). To use it, pass its URL to `init()`:
@@ -53,7 +55,7 @@ import fastWasm from 'ghostterm/ghostty-vt-fast.wasm?url'; // Vite; other bundle
 await init({ wasmPath: fastWasm });
 ```
 
-`Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded. The module is loaded once: later `init()` calls, concurrent ones included, share it, and one asking for a different `wasmPath` logs a warning.
+`Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded. The module is loaded once: later `init()` calls, concurrent ones included, share it, and one asking for a different `wasmPath` logs a warning. A terminal can also be given its own module, without `init()`: `new Terminal({ ghostty: await Ghostty.load(path) })`.
 
 ### Smaller bundle
 
@@ -181,6 +183,7 @@ These follow Ghostty rather than xterm.js:
 Other differences from xterm.js:
 
 - `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
+- The container: `open()` makes the element it is given focusable and `contenteditable` (so browser extensions such as Vimium treat it as a text field), and gives it `role="textbox"`. Edits are never applied to it: only the terminal's hidden textarea takes input. `dispose()` undoes all of this.
 - No password indicator: Ghostty marks password prompts (a lock at the cursor) from the PTY's terminal settings (echo off), which only its own PTY code can see. libghostty-vt has no way to be told, so ghostterm can't show one.
 - `onLineFeed` fires once per LF, VT or FF byte written, after the write is processed rather than as each is parsed: libghostty doesn't report line feeds, so they are counted in the data, and one inside an OSC or DCS string counts too. `onWriteParsed` fires once the queued writes have been processed.
 - `unicode`: character widths and grapheme clusters come from libghostty's Unicode tables (Unicode 18 in libghostty-vt 1.0.0), so `unicode.activeVersion` is that version and `unicode.versions` lists only it. Setting another version or calling `unicode.register()` changes nothing and logs a warning once.
