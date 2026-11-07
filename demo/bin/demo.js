@@ -189,7 +189,9 @@ const HTML_TEMPLATE = `<!doctype html>
 
       .terminal-content {
         height: 600px;
-        padding: 16px;
+        /* No right padding: the scrollbar gutter (at least 15px) spaces the text
+           from the edge, and the scrollbar sits against it. */
+        padding: 16px 0 16px 16px;
         background: #1e1e1e;
         position: relative;
         overflow: hidden;
