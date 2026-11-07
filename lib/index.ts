@@ -78,6 +78,7 @@ export {
   CellFlags,
   DirtyState,
   KeyEncoderOption,
+  FormatterExtras,
 } from './ghostty';
 export type {
   ClipboardLocation,
@@ -102,6 +103,8 @@ export type { SelectionCoordinates } from './selection-manager';
 // Addons
 export { FitAddon } from './addons/fit';
 export { SearchAddon } from './addons/search';
+export { SerializeAddon } from './addons/serialize';
+export type { ISerializeOptions, IHTMLSerializeOptions } from './addons/serialize';
 export type {
   ISearchOptions,
   ISearchDecorationOptions,

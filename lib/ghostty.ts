@@ -148,8 +148,29 @@ const Formatter = {
   OPT_UNWRAP: 2,
   OPT_TRIM: 3,
   OPT_SELECTION: 4,
+  OPT_EXTRAS: 5,
   FORMAT_PLAIN: 0,
+  FORMAT_VT: 1,
+  FORMAT_HTML: 2,
 } as const;
+
+/** Terminal state the VT formatter can restore (GHOSTTY_FORMATTER_EXTRA_*). */
+export enum FormatterExtras {
+  NONE = 0,
+  PALETTE = 1 << 0,
+  MODES = 1 << 1,
+  SCROLLING_REGION = 1 << 2,
+  TABSTOPS = 1 << 3,
+  PWD = 1 << 4,
+  KEYBOARD = 1 << 5,
+  CURSOR = 1 << 6,
+  STYLE = 1 << 7,
+  HYPERLINK = 1 << 8,
+  PROTECTION = 1 << 9,
+  KITTY_KEYBOARD = 1 << 10,
+  CHARSETS = 1 << 11,
+  ALL = (1 << 12) - 1,
+}
 
 const GestureEvent = {
   PRESS: 0,
@@ -2433,25 +2454,89 @@ export class GhosttyTerminal {
    * joined and trailing spaces trimmed.
    */
   getSelectionText(): string {
-    const ex = this.exports;
     const sel = this.selScratch;
-    if (ex.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) return '';
+    if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+      return '';
+    }
+    return this.format({ format: 'plain', unwrap: true, trim: true, selectionPtr: sel });
+  }
 
+  /**
+   * Format the active screen (scrollback included) with libghostty's
+   * formatter: plain text, VT sequences that recreate it when written to
+   * another terminal, or HTML. `fromRow` limits the output to absolute
+   * screen rows from there to the end.
+   */
+  formatScreen(options: {
+    format: 'plain' | 'vt' | 'html';
+    /** VT only: terminal state to restore (FormatterExtras bits). */
+    extras?: number;
+    unwrap?: boolean;
+    trim?: boolean;
+    fromRow?: number;
+    /** Only the terminal's current selection ('' when there is none). */
+    onlySelection?: boolean;
+  }): string {
+    let selectionPtr: number | undefined;
+    if (options.onlySelection) {
+      const sel = this.selScratch;
+      if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+        return '';
+      }
+      return this.format({ ...options, selectionPtr: sel });
+    }
+    if (options.fromRow !== undefined && options.fromRow > 0) {
+      // A selection from fromRow to the last cell narrows the output.
+      const S = this.L.selection;
+      const sel = this.selScratch + 128;
+      for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
+      const lastRow = this.getScrollbackLength() + this._rows - 1;
+      if (
+        this.gridRef(POINT_TAG_SCREEN, 0, options.fromRow, sel + S.start) &&
+        this.gridRef(POINT_TAG_SCREEN, this._cols - 1, lastRow, sel + S.end)
+      ) {
+        selectionPtr = sel;
+      }
+    }
+    return this.format({ ...options, selectionPtr });
+  }
+
+  private format(options: {
+    format: 'plain' | 'vt' | 'html';
+    extras?: number;
+    unwrap?: boolean;
+    trim?: boolean;
+    selectionPtr?: number;
+  }): string {
+    const ex = this.exports;
     const slot = ex.ghostty_wasm_alloc_opaque();
     const created = ex.ghostty_formatter_terminal_new(0, slot, this.handle);
     const formatter = ex.ghostty_wasm_take_opaque(slot);
     ex.ghostty_wasm_free_opaque(slot);
     if (created !== GHOSTTY_SUCCESS) return '';
 
-    const opt = this.selScratch + 128;
+    const opt = this.selScratch + 192;
     try {
       const view = this.mem.view();
-      view.setUint32(opt, Formatter.FORMAT_PLAIN, true);
+      const emit =
+        options.format === 'vt'
+          ? Formatter.FORMAT_VT
+          : options.format === 'html'
+            ? Formatter.FORMAT_HTML
+            : Formatter.FORMAT_PLAIN;
+      view.setUint32(opt, emit, true);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_EMIT, opt);
-      view.setUint8(opt, 1);
+      view.setUint8(opt, options.unwrap ? 1 : 0);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_UNWRAP, opt);
+      this.mem.view().setUint8(opt, options.trim ? 1 : 0);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_TRIM, opt);
-      ex.ghostty_formatter_set(formatter, Formatter.OPT_SELECTION, sel);
+      if (options.extras !== undefined) {
+        this.mem.view().setUint32(opt, options.extras, true);
+        ex.ghostty_formatter_set(formatter, Formatter.OPT_EXTRAS, opt);
+      }
+      if (options.selectionPtr !== undefined) {
+        ex.ghostty_formatter_set(formatter, Formatter.OPT_SELECTION, options.selectionPtr);
+      }
 
       const outPtr = opt + 16;
       const outLen = opt + 20;
