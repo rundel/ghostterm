@@ -38,7 +38,7 @@ Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test
 
 ```
 Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, render loop
-├─ GhosttyTerminal (lib/ghostty.ts)   the only code that touches the WASM module
+├─ GhosttyTerminal (lib/bridge/)      the only code that touches the WASM module
 ├─ CanvasRenderer (lib/renderer.ts)   draws the render state; cursor, scrollbar, highlights
 ├─ InputHandler (lib/input-handler.ts)    DOM keyboard/mouse/paste/focus → libghostty encoders
 ├─ SelectionManager (lib/selection-manager.ts)  DOM mouse → libghostty selection gesture
@@ -47,11 +47,12 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 └─ addons: FitAddon, SearchAddon, SerializeAddon (lib/addons/)
 ```
 
-### The bridge: `lib/ghostty.ts`, `lib/abi.ts`, `lib/types.ts`
+### The bridge: `lib/ghostty.ts`, `lib/bridge/`, `lib/abi.ts`, `lib/types.ts`
 
-- `Ghostty` loads the module (it has no imports), owns the per-module state and creates terminals and encoders.
-- `GhosttyTerminal` wraps one `GhosttyTerminal` handle plus its render state, row iterator and row cells. Its public methods are what the rest of the code uses; nothing else calls `exports.ghostty_*`.
-- `KeyEncoder`, `MouseEncoder`, `SelectionGesture`, `TerminalSearch` wrap the matching libghostty objects.
+- `Ghostty` (`lib/ghostty.ts`) loads the module (it has no imports), owns the per-module state and creates terminals and encoders. The file also re-exports everything in `lib/bridge/`, so the rest of the code imports the bridge from `./ghostty`. It must keep importing `./wasm-default`: the slim build swaps that import (`vite.config.js`).
+- `GhosttyTerminal` (`lib/bridge/terminal.ts`) wraps one `GhosttyTerminal` handle plus its render state, row iterator and row cells, and `TrackedRow` a tracked grid reference. Their public methods are what the rest of the code uses; nothing outside `lib/ghostty.ts` and `lib/bridge/` calls `exports.ghostty_*`.
+- `KeyEncoder`, `MouseEncoder`, `SelectionGesture`, `TerminalSearch` (`lib/bridge/key-encoder.ts`, `mouse-encoder.ts`, `selection-gesture.ts`, `search.ts`) wrap the matching libghostty objects.
+- `lib/bridge/abi-constants.ts` holds the C enum values and the effect payload types, `lib/bridge/layout.ts` the struct offsets and bit fields read from the manifest (`buildLayout()`), and `lib/bridge/memory.ts` `Memory`, `Scratch` and `wasmCallback()`.
 - `lib/types.ts` declares the exports used (`GhosttyWasmExports`) and the TS enums (`Key`, `Mods`, `KeyEncoderOption`, `CellFlags`, ...). `lib/abi-enums.test.ts` checks those enums against the loaded module, so a library upgrade that renumbers them fails a test instead of silently mis-encoding keys.
 
 Conventions in the bridge:

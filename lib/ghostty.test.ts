@@ -1,7 +1,7 @@
 /**
  * Tests for the libghostty-vt bridge itself, against the official WASM module.
  *
- * These cover the parts of lib/ghostty.ts that talk to the C ABI directly:
+ * These cover the parts of lib/ghostty.ts and lib/bridge/ that talk to the C ABI directly:
  * write_pty replies, cell decoding, colors, grid access and key encoding.
  */
 
