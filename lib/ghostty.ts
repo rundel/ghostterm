@@ -1129,10 +1129,12 @@ export class Ghostty {
       }
     }
 
-    // Try Node.js fs module if Bun.file didn't work
-    if (!wasmBytes) {
+    // Try Node.js fs module if Bun.file didn't work. The specifier is a variable so bundlers
+    // leave it alone; browsers never get here.
+    if (!wasmBytes && typeof process !== 'undefined' && process.versions?.node) {
       try {
-        const fs = await import('fs/promises');
+        const fsModule = 'node:fs/promises';
+        const fs = await import(/* @vite-ignore */ fsModule);
         const buffer = await fs.readFile(path);
         wasmBytes = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
       } catch {

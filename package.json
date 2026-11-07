@@ -12,7 +12,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/ghostterm.js"
     },
-    "./ghostty-vt.wasm": "./dist/ghostty-vt.wasm",
     "./ghostty-vt-fast.wasm": "./dist/ghostty-vt-fast.wasm"
   },
   "files": [
@@ -25,7 +24,7 @@
   "license": "MIT",
   "author": "Colin Rundel",
   "scripts": {
-    "build": "rm -rf dist && ./scripts/fetch-wasm.sh && vite build && cp ghostty-vt.wasm ghostty-vt-fast.wasm dist/",
+    "build": "rm -rf dist && ./scripts/fetch-wasm.sh && vite build && cp ghostty-vt-fast.wasm dist/",
     "demo": "node demo/bin/demo.js",
     "bench": "bun bench/versus.ts",
     "release": "bun scripts/release.ts",
