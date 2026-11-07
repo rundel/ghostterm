@@ -104,6 +104,8 @@ test('underline styles, underline color and overline are drawn differently', asy
     shapes.push({
       pixels: px.data.join(),
       rows: rowsWithColor(px, '#ff0000', 140).length,
+      // Rows in the full color: lines on whole device pixels have no blurred edges.
+      solidRows: rowsWithColor(px, '#ff0000'),
       cols: columnsWithColor(px, '#ff0000', 140).length,
       width: px.width,
     });
@@ -114,6 +116,17 @@ test('underline styles, underline color and overline are drawn differently', asy
   expect(single.rows).toBeGreaterThan(0);
   expect(single.cols).toBe(single.width);
   expect(curly.cols).toBe(curly.width);
+
+  // Crisp: single is one solid band of whole pixel rows and nothing else; double is two such
+  // bands with a gap of background between them; curly rises and falls over several rows.
+  const thick = Math.max(1, Math.round((await geometry(page)).scale));
+  expect(single.solidRows).toHaveLength(thick);
+  expect(single.rows).toBe(thick);
+  expect(double.solidRows).toHaveLength(2 * thick);
+  expect(double.rows).toBe(2 * thick);
+  const gap = double.solidRows[thick] - double.solidRows[thick - 1] - 1;
+  expect(gap).toBe(thick);
+  expect(curly.rows).toBeGreaterThanOrEqual(4 * thick);
   // Double covers more rows than single; dotted and dashed leave gaps, dotted more of them.
   expect(double.rows).toBeGreaterThan(single.rows);
   expect(dotted.cols).toBeLessThan(dotted.width / 2);

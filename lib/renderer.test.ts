@@ -96,20 +96,26 @@ describe('text attributes', () => {
 });
 
 describe('decorations', () => {
-  test('SGR 9 strikethrough and SGR 53 overline are stroked across the cell', () => {
+  /** Device pixel rows a horizontal line stroked at y covers (DPR 1 in these tests). */
+  const rowsCovered = (y: number, width: number) => [y - width / 2, y + width / 2];
+
+  test('SGR 9 strikethrough and SGR 53 overline are stroked across the cell on whole pixels', () => {
     const { w, h } = cell();
     term.write('\x1b[31;9ms\x1b[0m\x1b[53mo\x1b[0m\r\n');
+    const strike = Math.round(h / 2 - 0.5) + 0.5;
     expect(strokes(term)).toEqual([
       {
         strokeStyle: 'rgb(205, 49, 49)',
+        lineWidth: 1,
         lineDash: [],
         path: [
-          ['moveTo', 0, h / 2],
-          ['lineTo', w, h / 2],
+          ['moveTo', 0, strike],
+          ['lineTo', w, strike],
         ],
       },
       {
         strokeStyle: 'rgb(212, 212, 212)',
+        lineWidth: 1,
         lineDash: [],
         path: [
           ['moveTo', w, 0.5],
@@ -120,49 +126,57 @@ describe('decorations', () => {
   });
 
   describe('underlines', () => {
-    const y = () => internals(term).renderer.getMetrics().baseline + 2;
+    /** Top edge of the single underline: two pixels below the baseline. */
+    const top = () => internals(term).renderer.getMetrics().baseline + 2;
 
-    test('single underline in the text color', () => {
+    test('single underline in the text color, one whole pixel row below the baseline', () => {
       term.write('\x1b[4mu\x1b[0m\r\n');
-      expect(strokes(term)).toEqual([
-        {
-          strokeStyle: 'rgb(212, 212, 212)',
-          lineDash: [],
-          path: [
-            ['moveTo', 0, y()],
-            ['lineTo', cell().w, y()],
-          ],
-        },
-      ]);
+      const [line] = strokes(term);
+      expect(line).toEqual({
+        strokeStyle: 'rgb(212, 212, 212)',
+        lineWidth: 1,
+        lineDash: [],
+        path: [
+          ['moveTo', 0, top() + 0.5],
+          ['lineTo', cell().w, top() + 0.5],
+        ],
+      });
+      expect(rowsCovered(top() + 0.5, line.lineWidth)).toEqual([top(), top() + 1]);
     });
 
-    test('double underline is two lines, in the SGR 58 color', () => {
-      const { w } = cell();
+    test('double underline is two lines with a gap, in the SGR 58 color, inside the cell', () => {
+      const { w, h } = cell();
       term.write('\x1b[4:2;58:2::0:128:255mu\x1b[0m\r\n');
-      expect(strokes(term)).toEqual([
-        {
-          strokeStyle: '#0080ff',
-          lineDash: [],
-          path: [
-            ['moveTo', 0, y() - 1],
-            ['lineTo', w, y() - 1],
-            ['moveTo', 0, y() + 1],
-            ['lineTo', w, y() + 1],
-          ],
-        },
+      const [line] = strokes(term);
+      expect(line.strokeStyle).toBe('#0080ff');
+      const [first, second] = [line.path[0][2], line.path[2][2]];
+      expect(line.path).toEqual([
+        ['moveTo', 0, first],
+        ['lineTo', w, first],
+        ['moveTo', 0, second],
+        ['lineTo', w, second],
       ]);
+      const [a0, a1] = rowsCovered(first, line.lineWidth);
+      const [b0, b1] = rowsCovered(second, line.lineWidth);
+      expect([a0 % 1, b0 % 1]).toEqual([0, 0]);
+      expect(b0 - a1).toBe(line.lineWidth);
+      expect(b1).toBeLessThanOrEqual(h);
     });
 
-    test('curly underline is one wave per cell, so neighbors join up', () => {
-      const { w } = cell();
+    test('curly underline is one wave per cell rising and falling two pixels, so neighbors join up', () => {
+      const { w, h } = cell();
       term.write('\x1b[4:3;58;2;0;128;255mcu\x1b[0m\r\n');
       const drawn = strokes(term);
       expect(drawn.map((s) => s.strokeStyle)).toEqual(['#0080ff', '#0080ff']);
+      const mid = drawn[1].path[0][2];
       expect(drawn[1].path).toEqual([
-        ['moveTo', w, y()],
-        ['quadraticCurveTo', w + w / 4, y() - 1, w + w / 2, y()],
-        ['quadraticCurveTo', w + (3 * w) / 4, y() + 1, 2 * w, y()],
+        ['moveTo', w, mid],
+        ['quadraticCurveTo', w + w / 4, mid - 4, w + w / 2, mid],
+        ['quadraticCurveTo', w + (3 * w) / 4, mid + 4, 2 * w, mid],
       ]);
+      // The lowest point of the wave, with half the line width, stays in the cell.
+      expect(mid + 2 + 0.5).toBeLessThanOrEqual(h);
+      expect(mid).toBeGreaterThan(internals(term).renderer.getMetrics().baseline);
     });
 
     test.each([
@@ -174,9 +188,22 @@ describe('decorations', () => {
       const drawn = strokes(calls);
       expect(drawn.map((s) => s.lineDash)).toEqual([dash, dash]);
       expect(drawn[1].path).toEqual([
-        ['moveTo', cell().w, y()],
-        ['lineTo', 2 * cell().w, y()],
+        ['moveTo', cell().w, top() + 0.5],
+        ['lineTo', 2 * cell().w, top() + 0.5],
       ]);
+    });
+
+    test('lines get thicker with the font and stay on whole device pixels at DPR 2', () => {
+      term.options.fontSize = 32;
+      internals(term).renderer.setDevicePixelRatio(2);
+      term.write('\x1b[4mu\x1b[0m\x1b[4:2mu\x1b[0m\r\n');
+      const [single, double] = strokes(term);
+      // round(32 * 2 / 16) = 4 device pixels: 2 CSS px.
+      expect(single.lineWidth).toBe(2);
+      for (const y of [single.path[0][2], double.path[0][2], double.path[2][2]]) {
+        expect(((y - 1) * 2) % 1).toBe(0);
+      }
+      expect(double.path[2][2] - double.path[0][2]).toBe(4);
     });
   });
 });

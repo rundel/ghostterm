@@ -701,25 +701,15 @@ export class CanvasRenderer {
       this.drawUnderline(cell, cellX, cellY, cellWidth);
     }
 
-    // Draw overline (SGR 53)
+    // Draw overline (SGR 53) and strikethrough
+    const thick = this.lineThickness();
+    const textColor = String(this.ctx.fillStyle);
     if (cell.overline) {
-      this.ctx.strokeStyle = this.ctx.fillStyle;
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(cellX, cellY + 0.5);
-      this.ctx.lineTo(cellX + cellWidth, cellY + 0.5);
-      this.ctx.stroke();
+      this.strokeLine(cellX, cellWidth, this.lineY(cellY, thick), thick, textColor);
     }
-
-    // Draw strikethrough
     if (cell.flags & CellFlags.STRIKETHROUGH) {
-      const strikeY = cellY + this.metrics.height / 2;
-      this.ctx.strokeStyle = this.ctx.fillStyle;
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(cellX, strikeY);
-      this.ctx.lineTo(cellX + cellWidth, strikeY);
-      this.ctx.stroke();
+      const top = cellY + this.metrics.height / 2 - thick / this.devicePixelRatio / 2;
+      this.strokeLine(cellX, cellWidth, this.lineY(top, thick), thick, textColor);
     }
 
     // A hovered link is underlined once, whether it is an OSC 8 hyperlink (matched by ID) or a
@@ -732,14 +722,39 @@ export class CanvasRenderer {
           (y > range.startY && y < range.endY) ||
           (y === range.endY && x <= range.endX && (y > range.startY || x >= range.startX))));
     if (hovered) {
-      const underlineY = cellY + this.metrics.baseline + 2;
-      this.ctx.strokeStyle = '#4A90E2';
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(cellX, underlineY);
-      this.ctx.lineTo(cellX + cellWidth, underlineY);
-      this.ctx.stroke();
+      const y = this.lineY(this.underlineTop(cellY, thick), thick);
+      this.strokeLine(cellX, cellWidth, y, thick, '#4A90E2');
     }
+  }
+
+  /** Thickness of underlines and other lines, in whole device pixels growing with the font. */
+  private lineThickness(): number {
+    return Math.max(1, Math.round((this.fontSize * this.devicePixelRatio) / 16));
+  }
+
+  /**
+   * Where to stroke a line `thick` device pixels wide whose top edge is the device pixel row at
+   * `top` (CSS px, rounded), so that it covers whole rows: odd widths fall on half pixels.
+   */
+  private lineY(top: number, thick: number): number {
+    const dpr = this.devicePixelRatio;
+    return (Math.round(top * dpr) + thick / 2) / dpr;
+  }
+
+  /** Top edge of a single underline (CSS px): just below the baseline, inside the cell. */
+  private underlineTop(cellY: number, thick: number): number {
+    const t = thick / this.devicePixelRatio;
+    return Math.min(cellY + this.metrics.baseline + 2, cellY + this.metrics.height - t);
+  }
+
+  /** Stroke a horizontal line `thick` device pixels wide at y (from lineY). */
+  private strokeLine(x: number, width: number, y: number, thick: number, color: string): void {
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = thick / this.devicePixelRatio;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y);
+    this.ctx.lineTo(x + width, y);
+    this.ctx.stroke();
   }
 
   /**
@@ -782,38 +797,52 @@ export class CanvasRenderer {
   }
 
   /**
-   * Draw a cell's underline: single, double, curly, dotted or dashed. Dash
-   * patterns are offset by x so they continue across neighboring cells.
+   * Draw a cell's underline: single, double, curly, dotted or dashed. Lines cover whole device
+   * pixel rows (see lineY) and stay inside the cell. Dash patterns are offset by x so they
+   * continue across neighboring cells.
    */
   private drawUnderline(cell: GhosttyCell, x: number, cellY: number, width: number): void {
     const ctx = this.ctx;
-    const y = cellY + this.metrics.baseline + 2;
+    const dpr = this.devicePixelRatio;
+    const thick = this.lineThickness();
+    const t = thick / dpr;
+    const top = this.underlineTop(cellY, thick);
+    const y = this.lineY(top, thick);
+    const bottom = cellY + this.metrics.height;
     const style = cell.underline_style ?? UnderlineStyle.SINGLE;
     ctx.save();
     ctx.strokeStyle =
       cell.underline_color !== undefined
         ? `#${cell.underline_color.toString(16).padStart(6, '0')}`
         : ctx.fillStyle;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = t;
     ctx.beginPath();
     switch (style) {
-      case UnderlineStyle.DOUBLE:
-        ctx.moveTo(x, y - 1);
-        ctx.lineTo(x + width, y - 1);
-        ctx.moveTo(x, y + 1);
-        ctx.lineTo(x + width, y + 1);
+      case UnderlineStyle.DOUBLE: {
+        // Two lines with a gap as wide as one of them, moved up if the lower one would leave
+        // the cell.
+        const lower = Math.min(top + t, bottom - t);
+        const first = this.lineY(lower - 2 * t, thick);
+        const second = this.lineY(lower, thick);
+        ctx.moveTo(x, first);
+        ctx.lineTo(x + width, first);
+        ctx.moveTo(x, second);
+        ctx.lineTo(x + width, second);
         break;
+      }
       case UnderlineStyle.CURLY: {
-        // One wave per cell, so neighboring cells join up.
-        const amplitude = Math.max(1, Math.round(this.metrics.height * 0.08));
-        ctx.moveTo(x, y);
-        ctx.quadraticCurveTo(x + width / 4, y - amplitude, x + width / 2, y);
-        ctx.quadraticCurveTo(x + (3 * width) / 4, y + amplitude, x + width, y);
+        // One wave per cell, so neighboring cells join up. It rises and falls by twice the line
+        // thickness (a quadratic curve reaches half way to its control point), raised to fit.
+        const amplitude = 2 * t;
+        const mid = Math.min(y, bottom - amplitude - t / 2);
+        ctx.moveTo(x, mid);
+        ctx.quadraticCurveTo(x + width / 4, mid - 2 * amplitude, x + width / 2, mid);
+        ctx.quadraticCurveTo(x + (3 * width) / 4, mid + 2 * amplitude, x + width, mid);
         break;
       }
       case UnderlineStyle.DOTTED:
       case UnderlineStyle.DASHED:
-        ctx.setLineDash(style === UnderlineStyle.DOTTED ? [1, 2] : [3, 2]);
+        ctx.setLineDash(style === UnderlineStyle.DOTTED ? [t, 2 * t] : [3 * t, 2 * t]);
         ctx.lineDashOffset = x;
         ctx.moveTo(x, y);
         ctx.lineTo(x + width, y);

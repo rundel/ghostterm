@@ -188,6 +188,8 @@ export function paintedRects(source: Terminal | DrawCall[], color?: string): Pai
 
 export interface StrokedPath {
   strokeStyle: string;
+  /** Line width in CSS px. */
+  lineWidth: number;
   lineDash: number[];
   /** Path operations since beginPath, e.g. ['moveTo', 0, 10]. */
   path: Array<[string, ...number[]]>;
@@ -203,7 +205,12 @@ export function strokes(source: Terminal | DrawCall[]): StrokedPath[] {
     else if (c.op === 'moveTo' || c.op === 'lineTo' || c.op === 'quadraticCurveTo') {
       path.push([c.op, ...(c.args as number[])]);
     } else if (c.op === 'stroke') {
-      result.push({ strokeStyle: c.strokeStyle, lineDash: c.lineDash, path });
+      result.push({
+        strokeStyle: c.strokeStyle,
+        lineWidth: c.lineWidth,
+        lineDash: c.lineDash,
+        path,
+      });
     }
   }
   return result;

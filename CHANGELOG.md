@@ -32,6 +32,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - `init()` loads the module once even when called concurrently, and warns when a later call asks for a different `wasmPath`.
 - Without focus the cursor is drawn as a hollow block, as in Ghostty and xterm.js.
 - Programs asking for the terminfo name (XTGETTCAP `TN`) are told `xterm-ghostty`, as Ghostty answers.
+- Underlines, strikethrough and overlines are drawn on whole device pixels and thicken with the font; double underlines show two lines and curly underlines a visible wave.
 - Buffer, selection and search types (`IBuffer`, `IBufferLine`, `IBufferCell`, `IBufferNamespace`, `SelectionRange`, `TerminalSearch`, ...) are exported.
 - Loading in a browser no longer tries the Node fs module, and the package no longer ships a separate `ghostty-vt.wasm`, since the default module is bundled into the library.
 - Removed rarely used `GhosttyTerminal` methods (`getGrapheme`, `getGraphemeString`, `getViewportGraphemeString`, `isRowWrapped`, `getHyperlinkUri`, `hasResponse`) and `KeyEncoder.setKittyFlags`; use cell `chars`, `isScreenRowWrapped`, `getScreenHyperlinkUri` and `readResponse`. `GhosttyTerminal.getLine()` returns current content even while synchronized output holds the screen.

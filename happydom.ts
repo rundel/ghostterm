@@ -22,6 +22,7 @@ export interface DrawCall {
   strokeStyle: string;
   globalAlpha: number;
   font: string;
+  lineWidth: number;
   lineDash: number[];
 }
 
@@ -53,6 +54,7 @@ export class RecordingContext {
       strokeStyle: String(this.strokeStyle),
       globalAlpha: this.globalAlpha,
       font: this.font,
+      lineWidth: this.lineWidth,
       lineDash: [...this.lineDash],
     });
   }
