@@ -26,19 +26,6 @@ import type { CanvasRenderer } from './renderer';
 import type { Terminal } from './terminal';
 
 // ============================================================================
-// Type Definitions
-// ============================================================================
-
-export interface SelectionCoordinates {
-  startCol: number;
-  startRow: number;
-  endCol: number;
-  endRow: number;
-  /** A block selection: columns startCol..endCol on every row. */
-  rectangle?: boolean;
-}
-
-// ============================================================================
 // SelectionManager Class
 // ============================================================================
 
@@ -118,15 +105,6 @@ export class SelectionManager {
   /** Number of rows in the buffer: scrollback, then the screen. */
   private bufferLength(): number {
     return this.wasmTerm.getScrollbackLength() + this.wasmTerm.getDimensions().rows;
-  }
-
-  /**
-   * Convert absolute buffer row to viewport row (may be outside visible range)
-   */
-  private absoluteRowToViewport(absoluteRow: number): number {
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    const viewportY = this.getViewportY();
-    return absoluteRow - scrollbackLength + viewportY;
   }
 
   // ==========================================================================
@@ -239,21 +217,6 @@ export class SelectionManager {
       start: { x: range.startCol, y: range.startRow },
       end: { x: range.endCol + 1, y: range.endRow },
     };
-  }
-
-  /**
-   * Deselect all text
-   * xterm.js compatible API
-   */
-  deselect(): void {
-    this.clearSelection();
-  }
-
-  /**
-   * Get current selection coordinates (for rendering)
-   */
-  getSelectionCoords(): SelectionCoordinates | null {
-    return this.normalizeSelection();
   }
 
   /**
@@ -570,40 +533,6 @@ export class SelectionManager {
       col: Math.max(0, Math.min(col, this.terminal.cols - 1)),
       row: Math.max(0, Math.min(row, this.terminal.rows - 1)),
     };
-  }
-
-  /**
-   * The selection in VIEWPORT space for rendering, clamped to the visible area,
-   * or null when there is none or it is entirely off screen.
-   */
-  private normalizeSelection(): SelectionCoordinates | null {
-    const range = this.wasmTerm.getSelectionRange();
-    if (!range) return null;
-
-    let { startCol, endCol } = range;
-    let startRow = this.absoluteRowToViewport(range.startRow);
-    let endRow = this.absoluteRowToViewport(range.endRow);
-
-    const dims = this.wasmTerm.getDimensions();
-    const maxRow = dims.rows - 1;
-
-    // If entire selection is outside viewport, return null
-    if (endRow < 0 || startRow > maxRow) {
-      return null;
-    }
-
-    // Clamp rows to visible range. A linear selection continues to the start
-    // or end of the clamped row; a block keeps its columns.
-    if (startRow < 0) {
-      startRow = 0;
-      if (!range.rectangle) startCol = 0;
-    }
-    if (endRow > maxRow) {
-      endRow = maxRow;
-      if (!range.rectangle) endCol = dims.cols - 1;
-    }
-
-    return { startCol, startRow, endCol, endRow, rectangle: range.rectangle };
   }
 
   /**

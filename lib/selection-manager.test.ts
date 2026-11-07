@@ -170,33 +170,6 @@ describe('selection API (absolute buffer rows, as in xterm.js)', () => {
   });
 });
 
-describe('selection coordinates for the viewport', () => {
-  beforeEach(() => {
-    open(80, 24, 1000);
-    writeLines(50, (i) => `Line ${String(i).padStart(3, '0')}`);
-  });
-
-  const coords = () => internals(term).selectionManager.getSelectionCoords();
-
-  test('move with scrolling, are clamped at the edges and null when off screen', () => {
-    const base = term.buffer.active.baseY;
-    term.select(0, base, 80 * 5 + 10);
-    expect(coords()).toEqual({ startCol: 0, startRow: 0, endCol: 9, endRow: 5, rectangle: false });
-    term.scrollToLine(base - 10);
-    expect(coords()).toMatchObject({ startRow: 10, endRow: 15 });
-
-    // Partly above the top: the visible part starts at the top-left.
-    term.scrollToBottom();
-    term.select(5, base - 2, 80 * 4);
-    expect(coords()).toMatchObject({ startCol: 0, startRow: 0, endCol: 4, endRow: 2 });
-
-    term.scrollToTop();
-    term.select(0, base + 10, 8);
-    expect(coords()).toBeNull();
-    expect(term.getSelection()).toBe('Line 037');
-  });
-});
-
 describe('drawing', () => {
   beforeEach(() => {
     open(20, 3);
@@ -443,9 +416,6 @@ describe('block selection (Alt-drag)', () => {
     drag([1, 0], [3, 2], { altKey: true });
     expect(term.getSelection()).toBe('bcd\nhij\nnop');
     expect(drawnSelection()).toEqual({ 0: [1, 2, 3], 1: [1, 2, 3], 2: [1, 2, 3] });
-    expect(internals(term).selectionManager.getSelectionCoords()).toMatchObject({
-      rectangle: true,
-    });
   });
 
   test('a block dragged up and to the left is the same block', () => {
