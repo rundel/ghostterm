@@ -138,6 +138,32 @@ describe('Terminal', () => {
       term.dispose();
     });
 
+    test('the contenteditable parent is never edited, input reaching the textarea is', async () => {
+      const term = await createIsolatedTerminal();
+      term.open(container!);
+      const sent: string[] = [];
+      term.onData((d) => sent.push(d));
+      const drop = new InputEvent('beforeinput', {
+        inputType: 'insertFromDrop',
+        data: 'dropped',
+        bubbles: true,
+        cancelable: true,
+      });
+      container.dispatchEvent(drop);
+      expect(drop.defaultPrevented).toBe(true);
+      expect(sent).toEqual([]);
+
+      const typed = new InputEvent('beforeinput', {
+        inputType: 'insertText',
+        data: 'x',
+        bubbles: true,
+        cancelable: true,
+      });
+      term.textarea!.dispatchEvent(typed);
+      expect(sent).toEqual(['x']);
+      term.dispose();
+    });
+
     test('can be disposed without being opened', async () => {
       const term = await createIsolatedTerminal();
       expect(() => term.dispose()).not.toThrow();

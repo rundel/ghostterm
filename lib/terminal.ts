@@ -409,7 +409,11 @@ export class Terminal implements IAddonTerminal {
       // Mark as contenteditable so browser extensions (Vimium, etc.) recognize
       // this as an input element and don't intercept keyboard events.
       parent.setAttribute('contenteditable', 'true');
-      // Prevent actual content editing - we handle input ourselves
+      // Never let the browser edit the parent itself. Clicks on the canvas
+      // focus the textarea, but the parent can still be the editing host:
+      // focused with Tab (it has a tabindex), clicked outside the canvas (its
+      // padding), or the target of text dropped onto the terminal. Input on
+      // the textarea has the textarea as target and is handled there.
       this.listen(parent, 'beforeinput', (e) => {
         if (e.target === parent) {
           e.preventDefault();
