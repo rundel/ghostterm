@@ -6,7 +6,9 @@ export default defineConfig({
     dts({
       include: ['lib/**/*.ts'],
       exclude: ['lib/**/*.test.ts', 'lib/test-helpers.ts'],
-      // One rolled-up dist/index.d.ts (API Extractor) instead of a .d.ts per source file.
+      // One rolled-up dist/index.d.ts instead of a .d.ts per source file. It is API Extractor's
+      // public trimmed rollup, which leaves out everything tagged @internal; a public declaration
+      // that names an internal one is left dangling, which scripts/check-dist.ts catches.
       bundleTypes: true,
     }),
   ],

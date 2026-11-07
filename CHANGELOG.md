@@ -18,6 +18,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - Detected URLs keep their columns after emoji and wide characters, include balanced parentheses and work across wrapped lines. Links open only for http, https, mailto and ftp.
 - IME input always composes in the hidden textarea, and `focus()` and `blur()` act on it.
 - During synchronized output (mode 2026) the cursor stays with the frame on screen instead of moving ahead to where the program is drawing.
+- The published typings leave out internal members and compile without `skipLibCheck`; the addons' `activate()` takes an `ITerminalCore`.
 - Text dropped onto the terminal's canvas can no longer be inserted into the page, as was already the case for the rest of the terminal.
 - Fixed the canvas redrawing every frame at fractional device pixel ratios, a stale cursor after hiding it or changing its shape or color, smooth scrolling pulling the view back after a jump, and `allowClipboardWrite: false` being ignored.
 - The canvas follows device pixel ratio changes and web fonts finishing loading; a block cursor covers the whole of a wide character. Emoji and other multi-codepoint characters draw faster.

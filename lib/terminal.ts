@@ -61,7 +61,7 @@ import { Key } from './types';
 // Terminal Class
 // ============================================================================
 
-export class Terminal implements IAddonTerminal {
+export class Terminal implements ITerminalCore {
   // Public properties (xterm.js compatibility)
   public cols: number;
   public rows: number;
@@ -938,7 +938,7 @@ export class Terminal implements IAddonTerminal {
    * Load an addon
    */
   loadAddon(addon: ITerminalAddon): void {
-    addon.activate(this);
+    addon.activate(this satisfies IAddonTerminal);
     this.addons.push(addon);
   }
 

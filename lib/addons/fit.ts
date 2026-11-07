@@ -13,7 +13,7 @@
  * ```
  */
 
-import type { IAddonTerminal, ITerminalAddon } from '../interfaces';
+import type { IAddonTerminal, ITerminalAddon, ITerminalCore } from '../interfaces';
 import { SCROLLBAR_GUTTER } from '../renderer';
 
 // ============================================================================
@@ -44,10 +44,11 @@ export class FitAddon implements ITerminalAddon {
   private _isResizing: boolean = false;
 
   /**
-   * Activate the addon (called by Terminal.loadAddon)
+   * Activate the addon (called by Terminal.loadAddon). It needs a ghostterm Terminal, which
+   * provides the internal methods it uses.
    */
-  public activate(terminal: IAddonTerminal): void {
-    this._terminal = terminal;
+  public activate(terminal: ITerminalCore): void {
+    this._terminal = terminal as IAddonTerminal;
   }
 
   /**

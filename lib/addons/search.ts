@@ -25,7 +25,7 @@
 
 import { EventEmitter } from '../event-emitter';
 import type { GhosttyTerminal, SelectionRange, TerminalSearch } from '../ghostty';
-import type { IAddonTerminal, IEvent, ITerminalAddon } from '../interfaces';
+import type { IAddonTerminal, IEvent, ITerminalAddon, ITerminalCore } from '../interfaces';
 import type { HighlightRange } from '../renderer';
 
 export interface ISearchDecorationOptions {
@@ -81,8 +81,9 @@ export class SearchAddon implements ITerminalAddon {
   /** Fires after each search with the selected match and the match count. */
   public readonly onDidChangeResults: IEvent<ISearchResultChangeEvent> = this.resultsEmitter.event;
 
-  activate(terminal: IAddonTerminal): void {
-    this.terminal = terminal;
+  /** Called by Terminal.loadAddon; needs a ghostterm Terminal (it uses internal methods). */
+  activate(terminal: ITerminalCore): void {
+    this.terminal = terminal as IAddonTerminal;
   }
 
   dispose(): void {

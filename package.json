@@ -24,7 +24,7 @@
   "license": "MIT",
   "author": "Colin Rundel",
   "scripts": {
-    "build": "rm -rf dist && ./scripts/fetch-wasm.sh && vite build && cp ghostty-vt-fast.wasm dist/",
+    "build": "rm -rf dist && ./scripts/fetch-wasm.sh && vite build && cp ghostty-vt-fast.wasm dist/ && bun scripts/check-dist.ts",
     "demo": "node demo/bin/demo.js",
     "bench": "bun bench/versus.ts",
     "release": "bun scripts/release.ts",

@@ -21,7 +21,7 @@
  */
 
 import { FormatterExtras } from '../ghostty';
-import type { IAddonTerminal, ITerminalAddon } from '../interfaces';
+import type { IAddonTerminal, ITerminalAddon, ITerminalCore } from '../interfaces';
 
 /** Absolute buffer lines (0 = oldest scrollback line), both included. */
 export interface ISerializeRange {
@@ -65,8 +65,9 @@ const MODE_EXTRAS =
 export class SerializeAddon implements ITerminalAddon {
   private terminal?: IAddonTerminal;
 
-  activate(terminal: IAddonTerminal): void {
-    this.terminal = terminal;
+  /** Called by Terminal.loadAddon; needs a ghostterm Terminal (it uses internal methods). */
+  activate(terminal: ITerminalCore): void {
+    this.terminal = terminal as IAddonTerminal;
   }
 
   dispose(): void {

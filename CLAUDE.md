@@ -24,7 +24,7 @@ bun run test:e2e --project chromium  # one browser (chromium, firefox, webkit)
 bun run typecheck
 bun run lint                     # Biome; `bun run lint:fix` to fix
 bun run fmt                      # Prettier check; `bun run fmt:fix` to fix
-bun run build                    # fetch WASM + vite build into dist/ (ES module + ghostty-vt-fast.wasm)
+bun run build                    # fetch WASM, Vite 8 build into dist/ (ES module, ghostty-vt-fast.wasm, index.d.ts), then scripts/check-dist.ts
 bun run demo                     # Vite + PTY server: http://127.0.0.1:8000/demo/
 bun run bench                    # throughput against xterm.js
 bun run release <version>        # see "Releases" below
@@ -140,6 +140,7 @@ Known libghostty-vt 1.0 quirks the code works around or documents:
 ## Conventions
 
 - Keep the public API xterm.js-compatible where xterm.js has an equivalent; new events and methods are additive.
+- Tag exported things that are not public API (helpers for the addons, bridge tables, callback plumbing) `@internal`. API Extractor leaves them out of `dist/index.d.ts`, so a public declaration must not name one: that leaves a dangling name, and `scripts/check-dist.ts` (run by `bun run build`) fails. This is why the addons take an `ITerminalCore` in `activate()` and cast it to the internal `IAddonTerminal`. `scripts/dist-consumer.ts` compiles against the rollup, using the public API and expecting internals to be missing.
 - Document deliberate differences from xterm.js (they follow Ghostty) in the README's "Behavior worth knowing".
 - Tests accompany behavior changes; prefer asserting what a program would receive (bytes sent) or what is drawn.
 - Changes users would notice get a short, high-level line under `## Unreleased` in `CHANGELOG.md`, in the same commit. Internal refactors, tests and tooling don't.

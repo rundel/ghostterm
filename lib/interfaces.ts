@@ -86,8 +86,9 @@ export interface ITerminalCore {
 }
 
 /**
- * @internal What the bundled addons use from Terminal. Terminal implements it;
- * addons type their activate() parameter with it.
+ * @internal What the bundled addons use from Terminal. It is left out of the published typings
+ * along with the internal members it names, so addons take an ITerminalCore in activate() and
+ * cast; Terminal.loadAddon checks that Terminal satisfies it.
  */
 export interface IAddonTerminal extends ITerminalCore {
   readonly wasmTerm?: GhosttyTerminal;
