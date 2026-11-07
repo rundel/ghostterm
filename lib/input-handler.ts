@@ -198,8 +198,7 @@ export interface InputHandlerOptions {
    */
   inputElement?: HTMLElement;
   /**
-   * The WASM terminal, looked up on every use (Terminal.reset() replaces it).
-   * The key encoder follows its keyboard modes; paste, focus and mouse reports
+   * The WASM terminal (undefined once freed). The key encoder follows its keyboard modes; paste, focus and mouse reports
    * are encoded for it.
    */
   getTerminal: () => GhosttyTerminal | undefined;

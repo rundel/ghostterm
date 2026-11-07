@@ -3593,11 +3593,6 @@ export class SelectionGesture {
     ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_DISTANCE, p + 8);
   }
 
-  /** The terminal this gesture was created for. */
-  get terminal(): GhosttyTerminal {
-    return this.term;
-  }
-
   private setRef(event: number, col: number, row: number): void {
     const ref = this.scratch;
     if (this.term.viewportRef(col, row, ref)) {

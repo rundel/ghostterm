@@ -82,15 +82,11 @@ interface TextSearch {
   matches: SelectionRange[];
   /** Index of the selected match in `matches`, or -1. */
   selected: number;
-  /** The WASM terminal searched. */
-  wasmTerm: GhosttyTerminal;
 }
 
 export class SearchAddon implements ITerminalAddon {
   private terminal?: IAddonTerminal;
   private search?: TerminalSearch;
-  /** The WASM terminal the search was made for (Terminal.reset() replaces it). */
-  private searchTerm?: GhosttyTerminal;
   private textSearch?: TextSearch;
   private decorations?: ISearchDecorationOptions;
   private resultsEmitter = new EventEmitter<ISearchResultChangeEvent>();
@@ -140,18 +136,13 @@ export class SearchAddon implements ITerminalAddon {
     // A search may outlive its terminal; freeing it then releases only itself.
     this.search?.dispose();
     this.search = undefined;
-    this.searchTerm = undefined;
   }
 
-  /** The search for the current WASM terminal, made on first use. */
+  /** The terminal's libghostty search, made on first use (once the terminal is open). */
   private getSearch(): TerminalSearch | undefined {
     const wasmTerm = this.terminal?.wasmTerm;
     if (!wasmTerm) return undefined;
-    if (this.searchTerm !== wasmTerm) {
-      this.dropSearch();
-      this.search = wasmTerm.createSearch();
-      this.searchTerm = wasmTerm;
-    }
+    this.search ??= wasmTerm.createSearch();
     return this.search;
   }
 
@@ -250,7 +241,7 @@ export class SearchAddon implements ITerminalAddon {
       !!options.wholeWord,
       !!options.caseSensitive,
     ]);
-    const prev = this.textSearch?.wasmTerm === wasmTerm ? this.textSearch : undefined;
+    const prev = this.textSearch;
     const prevMatch = prev && prev.selected >= 0 ? prev.matches[prev.selected] : null;
     const matches = findMatches(wasmTerm, text, options);
     const count = matches.length;
@@ -269,7 +260,7 @@ export class SearchAddon implements ITerminalAddon {
         selected = direction === 'next' ? count - 1 : 0;
       }
     }
-    this.textSearch = { key, matches, selected, wasmTerm };
+    this.textSearch = { key, matches, selected };
 
     if (selected >= 0) {
       const m = matches[selected];
@@ -311,13 +302,12 @@ export class SearchAddon implements ITerminalAddon {
     const top = wasmTerm.getScrollbackLength() - Math.max(0, Math.floor(terminal.getViewportY()));
     const text = this.textSearch;
     if (text) {
-      if (text.wasmTerm !== wasmTerm) return [];
       const bottom = top + terminal.rows - 1;
       onScreen = text.matches.filter((m) => m.endRow >= top && m.startRow <= bottom);
       selected = text.selected >= 0 ? text.matches[text.selected] : null;
     } else {
       const search = this.search;
-      if (!search || this.searchTerm !== wasmTerm) return [];
+      if (!search) return [];
       onScreen = search.viewportMatches();
       selected = search.selectedMatch();
     }

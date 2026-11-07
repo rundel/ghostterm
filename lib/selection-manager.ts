@@ -32,7 +32,7 @@ import type { Terminal } from './terminal';
 export class SelectionManager {
   private terminal: Terminal;
   private renderer: CanvasRenderer;
-  private initialWasmTerm: GhosttyTerminal;
+  private wasmTerm: GhosttyTerminal;
   private textarea: HTMLTextAreaElement;
 
   private gesture: SelectionGesture | null = null;
@@ -68,30 +68,16 @@ export class SelectionManager {
   ) {
     this.terminal = terminal;
     this.renderer = renderer;
-    this.initialWasmTerm = wasmTerm;
+    this.wasmTerm = wasmTerm;
     this.textarea = textarea;
 
     // Attach mouse event listeners
     this.attachEventListeners();
   }
 
-  /**
-   * The terminal's current WASM terminal. Terminal.reset() replaces it, so it
-   * is looked up on every use rather than kept.
-   */
-  private get wasmTerm(): GhosttyTerminal {
-    return this.terminal.wasmTerm ?? this.initialWasmTerm;
-  }
-
-  /** The gesture for the current WASM terminal, recreated after a reset. */
+  /** The selection gesture, made on first use. */
   private getGesture(): SelectionGesture {
-    const term = this.wasmTerm;
-    if (this.gesture && this.gesture.terminal !== term) {
-      // The old terminal has been freed; release the gesture without it.
-      this.gesture.dispose(false);
-      this.gesture = null;
-    }
-    if (!this.gesture) this.gesture = term.createSelectionGesture();
+    this.gesture ??= this.wasmTerm.createSelectionGesture();
     return this.gesture;
   }
 
@@ -236,11 +222,9 @@ export class SelectionManager {
     this.stopAutoScroll();
     this.restoreTextarea();
 
-    // The terminal may already have been freed by the time we are disposed.
-    if (this.gesture) {
-      this.gesture.dispose(this.terminal.wasmTerm === this.gesture.terminal);
-      this.gesture = null;
-    }
+    // Terminal disposes this before it frees the WASM terminal.
+    this.gesture?.dispose();
+    this.gesture = null;
 
     // Clean up document event listeners
     if (this.boundMouseUpHandler) {
