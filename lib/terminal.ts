@@ -37,10 +37,8 @@ import type {
   IBufferRange,
   IDecoration,
   IDecorationOptions,
-  IDisposable,
   IEvent,
   IKeyEvent,
-  ILink,
   ILinkProvider,
   IMarker,
   IModes,
@@ -51,6 +49,7 @@ import type {
   IUnicodeHandling,
 } from './interfaces';
 import { LinkDetector } from './link-detector';
+import { LinkHover } from './link-hover';
 import { MarkerRegistry } from './markers';
 import { DEFAULT_MODES, readModes } from './modes';
 import { Parser, countLineFeeds } from './parser';
@@ -136,11 +135,8 @@ export class Terminal implements ITerminalCore {
 
   // Link detection system
   private linkDetector?: LinkDetector;
-  private currentHoveredLink?: ILink;
-  private mouseMoveThrottleTimeout?: number;
-  private pendingMouseMove?: MouseEvent;
-  /** Where the pointer last moved over the canvas, to re-check the hovered link when content moves. */
-  private lastPointer?: { clientX: number; clientY: number };
+  /** The hovered link's underline and pointer, and opening links on click. */
+  private linkHover?: LinkHover;
 
   // Event emitters
   private dataEmitter = new EventEmitter<string>();
@@ -324,6 +320,18 @@ export class Terminal implements ITerminalCore {
     // OSC 8 first (explicit hyperlinks take precedence), then plain-text URLs
     this.linkDetector.registerProvider(new OSC8LinkProvider(this));
     this.linkDetector.registerProvider(new UrlRegexProvider(this));
+    const links = this.linkDetector;
+    this.linkHover = new LinkHover({
+      links,
+      canvas: () => this.canvas,
+      element: () => this.element,
+      renderer: () => this.renderer,
+      rows: () => this.rows,
+      viewportLine: (row) => this.wasmTerm?.getViewportLine(row) ?? null,
+      viewportRowToBufferRow: (row) => this.viewportRowToBufferRow(row),
+      bufferRowToViewportRow: (row) => this.bufferRowToViewportRow(row),
+      programPointerShape: () => this.pointerShape(),
+    });
 
     // Initialize buffer API
     this.bufferNamespace = new BufferNamespace(this);
@@ -662,8 +670,11 @@ export class Terminal implements ITerminalCore {
       // then follow.
       this.listen(parent, 'mousedown', this.handleMouseDown, { capture: true });
       this.listen(parent, 'mousemove', this.handleMouseMove);
-      this.listen(parent, 'mouseleave', this.handleMouseLeave);
-      this.listen(parent, 'click', this.handleClick);
+      this.listen(parent, 'mouseleave', () => this.linkHover?.leave());
+      this.listen(parent, 'click', (e: MouseEvent) => {
+        // A press on the scrollbar never opens a link.
+        if (this.pointer?.gestureTarget() !== 'scrollbar') this.linkHover?.click(e);
+      });
 
       // A thumb drag ends wherever the pointer is released
       this.listen(document, 'mouseup', () => this.scrollbar.release());
@@ -831,17 +842,11 @@ export class Terminal implements ITerminalCore {
 
     // Invalidate link cache (content changed)
     this.linkDetector?.invalidateCache();
-    this.refreshHover();
+    this.linkHover?.refresh();
 
     // The program may have asked for another pointer shape (OSC 22); a hovered
     // link keeps its pointer.
-    if (this.canvas && !this.currentHoveredLink) {
-      const shape = this.pointerShape();
-      if (this.canvas.style.cursor !== shape) {
-        this.canvas.style.cursor = shape;
-        if (this.element) this.element.style.cursor = shape;
-      }
-    }
+    this.linkHover?.updatePointerShape();
 
     if (this.awaitingEcho) {
       this.awaitingEcho = false;
@@ -994,15 +999,7 @@ export class Terminal implements ITerminalCore {
     this.targetViewportY = 0;
     this.fireScrollIfMoved();
 
-    // Hover state
-    this.currentHoveredLink?.hover?.(false);
-    this.currentHoveredLink = undefined;
-    this.renderer?.setHoveredHyperlinkId(0);
-    this.renderer?.setHoveredLinkRange(null);
-    if (this.canvas) {
-      this.canvas.style.cursor = this.pointerShape();
-      if (this.element) this.element.style.cursor = this.canvas.style.cursor;
-    }
+    this.linkHover?.reset();
 
     this.renderer?.clear();
     this.checkBufferChange();
@@ -1332,18 +1329,7 @@ export class Terminal implements ITerminalCore {
     if (top === this.lastScrollTop) return;
     this.lastScrollTop = top;
     this.scrollEmitter.fire(top);
-    this.refreshHover();
-  }
-
-  /**
-   * Re-check the link under a pointer that hasn't moved, after output or scrolling moved the
-   * content under it. Only needed while a link is hovered: otherwise its underline would stay
-   * on screen over whatever replaced it until the next mousemove.
-   */
-  private refreshHover(): void {
-    if (!this.lastPointer || !this.renderer) return;
-    if (!this.currentHoveredLink && this.renderer.getHoveredHyperlinkId() === 0) return;
-    this.processMouseMove(this.lastPointer);
+    this.linkHover?.refresh();
   }
 
   private cancelScrollAnimation(): void {
@@ -1433,13 +1419,6 @@ export class Terminal implements ITerminalCore {
     this.pendingWrites.length = 0;
 
     this.cancelScrollAnimation();
-
-    // Clear mouse move throttle timeout
-    if (this.mouseMoveThrottleTimeout) {
-      clearTimeout(this.mouseMoveThrottleTimeout);
-      this.mouseMoveThrottleTimeout = undefined;
-    }
-    this.pendingMouseMove = undefined;
 
     // Dispose addons
     for (const addon of this.addons) {
@@ -1598,7 +1577,7 @@ export class Terminal implements ITerminalCore {
 
     this.scrollbar.dispose();
 
-    this.currentHoveredLink = undefined;
+    this.linkHover?.dispose();
     this.pointer = undefined;
     this.element = undefined;
     this.textarea = undefined;
@@ -1608,6 +1587,7 @@ export class Terminal implements ITerminalCore {
   private freeTerminal(): void {
     this.linkDetector?.dispose();
     this.linkDetector = undefined;
+    this.linkHover = undefined;
     this.decorationService.dispose();
     this.markerRegistry.dispose();
     this.wasmTerm?.free();
@@ -1622,165 +1602,10 @@ export class Terminal implements ITerminalCore {
     }
   }
 
-  /**
-   * Handle mouse move for link hover detection and scrollbar dragging
-   * Throttled to avoid blocking scroll events (except when dragging scrollbar)
-   */
+  /** Pointer movement: a scrollbar thumb drag (at once), else link hover (throttled). */
   private handleMouseMove = (e: MouseEvent): void => {
-    if (!this.canvas || !this.renderer || !this.wasmTerm) return;
-
-    // A thumb drag follows the pointer at once, without throttling
     if (this.scrollbar.move(e)) return;
-
-    if (!this.linkDetector) return;
-
-    // Throttle to ~60fps (16ms) to avoid blocking scroll/other events
-    if (this.mouseMoveThrottleTimeout) {
-      this.pendingMouseMove = e;
-      return;
-    }
-
-    this.processMouseMove(e);
-
-    this.mouseMoveThrottleTimeout = window.setTimeout(() => {
-      this.mouseMoveThrottleTimeout = undefined;
-      if (this.pendingMouseMove) {
-        const pending = this.pendingMouseMove;
-        this.pendingMouseMove = undefined;
-        this.processMouseMove(pending);
-      }
-    }, 16);
-  };
-
-  /**
-   * Process mouse move for link detection (internal, called by throttled handler)
-   */
-  private processMouseMove(e: { clientX: number; clientY: number }): void {
-    if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
-    this.lastPointer = { clientX: e.clientX, clientY: e.clientY };
-
-    // Convert mouse coordinates to terminal cell position
-    const rect = this.canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / this.renderer.charWidth);
-    const y = Math.floor((e.clientY - rect.top) / this.renderer.charHeight);
-
-    // Get hyperlink_id directly from the cell at this position
-    // Must account for viewportY (scrollback position)
-    const viewportRow = y; // Row in the viewport (0 to rows-1)
-    let hyperlinkId = 0;
-
-    // The viewport row as displayed (libghostty's viewport follows the scroll).
-    const line = this.wasmTerm.getViewportLine(viewportRow);
-
-    if (line && x >= 0 && x < line.length) {
-      hyperlinkId = line[x].hyperlink_id;
-    }
-
-    // Update renderer for underline rendering
-    // The renderer schedules a frame when it changes.
-    this.renderer.setHoveredHyperlinkId(hyperlinkId);
-
-    // Check if there's a link at this position (for click handling and cursor)
-    const bufferRow = this.viewportRowToBufferRow(viewportRow);
-
-    // Make async call non-blocking - don't await
-    this.linkDetector
-      .getLinkAt(x, bufferRow)
-      .then((link) => {
-        // Update hover state for cursor changes and click handling
-        if (link !== this.currentHoveredLink) {
-          // Notify old link we're leaving
-          this.currentHoveredLink?.hover?.(false);
-
-          // Update current link
-          this.currentHoveredLink = link;
-
-          // Notify new link we're entering
-          link?.hover?.(true);
-
-          // Update cursor style on both container and canvas
-          const cursorStyle = link ? 'pointer' : this.pointerShape();
-          if (this.element) {
-            this.element.style.cursor = cursorStyle;
-          }
-          if (this.canvas) {
-            this.canvas.style.cursor = cursorStyle;
-          }
-        }
-
-        // The underline is kept in viewport rows, so recompute it even for the same link: the
-        // view may have scrolled under a pointer that stayed put.
-        if (!this.renderer) return;
-        const startViewportY = link ? this.bufferRowToViewportRow(link.range.start.y) : -1;
-        const endViewportY = link ? this.bufferRowToViewportRow(link.range.end.y) : -1;
-        if (link && startViewportY < this.rows && endViewportY >= 0) {
-          this.renderer.setHoveredLinkRange({
-            startX: link.range.start.x,
-            startY: Math.max(0, startViewportY),
-            endX: link.range.end.x,
-            endY: Math.min(this.rows - 1, endViewportY),
-          });
-        } else {
-          this.renderer.setHoveredLinkRange(null);
-        }
-      })
-      .catch((err) => {
-        console.warn('Link detection error:', err);
-      });
-  }
-
-  /**
-   * Handle mouse leave to clear link hover
-   */
-  private handleMouseLeave = (): void => {
-    this.lastPointer = undefined;
-    // Clear hyperlink underline
-    if (this.renderer && this.wasmTerm) {
-      this.renderer.setHoveredHyperlinkId(0);
-      // Clear regex link underline
-      this.renderer.setHoveredLinkRange(null);
-    }
-
-    if (this.currentHoveredLink) {
-      // Notify link we're leaving
-      this.currentHoveredLink.hover?.(false);
-
-      // Clear hovered link
-      this.currentHoveredLink = undefined;
-
-      // Reset cursor
-      if (this.element) {
-        this.element.style.cursor = this.pointerShape();
-        if (this.canvas) {
-          this.canvas.style.cursor = this.pointerShape();
-        }
-      }
-    }
-  };
-
-  /**
-   * Handle mouse click for link activation
-   */
-  private handleClick = (e: MouseEvent): void => {
-    // The link is looked up at click time rather than taken from the hover
-    // state (which is throttled). The built-in providers answer synchronously,
-    // so the link opens within the click's user gesture and the default action
-    // can still be prevented; only custom asynchronous providers resolve later.
-    if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
-    // A press on the scrollbar never opens a link.
-    if (this.pointer?.gestureTarget() === 'scrollbar') return;
-
-    const rect = this.canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / this.renderer.charWidth);
-    const y = Math.floor((e.clientY - rect.top) / this.renderer.charHeight);
-    const found = this.linkDetector.findLinkAt(x, this.viewportRowToBufferRow(y));
-    if (found instanceof Promise) {
-      found.then((link) => link?.activate(e)).catch(() => {});
-      return;
-    }
-    if (!found) return;
-    if (e.ctrlKey || e.metaKey) e.preventDefault();
-    found.activate(e);
+    this.linkHover?.move(e);
   };
 
   /** A wheel event's vertical movement in lines (fractional for trackpads). */

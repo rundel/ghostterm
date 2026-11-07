@@ -46,6 +46,7 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 ├─ SelectionManager (lib/selection-manager.ts)  DOM mouse → libghostty selection gesture
 ├─ BufferNamespace (lib/buffer.ts)    xterm.js IBuffer over absolute screen rows
 ├─ LinkDetector + providers           OSC 8 (libghostty hyperlinks) and regex URLs
+├─ LinkHover (lib/link-hover.ts)      hovered link's underline and pointer, opening on click
 └─ addons: FitAddon, SearchAddon, SerializeAddon (lib/addons/)
 ```
 
