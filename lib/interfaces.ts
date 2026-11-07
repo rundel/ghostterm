@@ -198,26 +198,29 @@ export interface IBufferCell {
 
   /**
    * Color mode, with xterm.js's values (0 = default, 0x3000000 = RGB). Colors
-   * are reported resolved to RGB, so the foreground is always RGB and the
-   * background RGB unless it is the default.
+   * are reported resolved to RGB, so a color is RGB unless it is the default.
    */
   getFgColorMode(): number;
   /** Background color mode: 0 (default) or 0x3000000 (RGB); see getFgColorMode */
   getBgColorMode(): number;
-  /** Foreground color as 0xRRGGBB */
+  /** Foreground color as 0xRRGGBB (the default foreground for default cells) */
   getFgColor(): number;
   /** Background color as 0xRRGGBB (the default background for default cells) */
   getBgColor(): number;
-  /** Whether the foreground is RGB (always, see getFgColorMode) */
+  /** Whether the cell has a foreground color of its own */
   isFgRGB(): boolean;
-  /** Whether the cell has a background of its own */
+  /** Whether the cell has a background color of its own */
   isBgRGB(): boolean;
   /** Always false: palette colors are reported as RGB */
   isFgPalette(): boolean;
   /** Always false: palette colors are reported as RGB */
   isBgPalette(): boolean;
+  /** Whether the cell uses the default foreground */
+  isFgDefault(): boolean;
   /** Whether the cell shows the default background */
   isBgDefault(): boolean;
+  /** Whether no style is set (default colors, no attributes) */
+  isAttributeDefault(): boolean;
 
   /** Whether cell has bold style */
   isBold(): number;

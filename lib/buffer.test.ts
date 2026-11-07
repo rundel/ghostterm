@@ -455,20 +455,30 @@ describe('Buffer API', () => {
       expect(alternate.getLine(0)).toBeUndefined();
     });
 
-    test('background color modes follow xterm.js', () => {
-      term!.write('\x1b[41mr\x1b[0md\x1b[38;2;1;2;3mf');
+    test('color modes follow xterm.js', () => {
+      term!.write('\x1b[41mr\x1b[0md\x1b[38;2;1;2;3mf\x1b[0m\x1b[1mb');
       const line = term!.buffer.active.getLine(0)!;
       const red = line.getCell(0)!;
       expect(red.getBgColorMode()).toBe(0x3000000);
       expect(red.isBgRGB()).toBe(true);
       expect(red.isBgDefault()).toBe(false);
+      expect(red.isFgDefault()).toBe(true);
+      expect(red.isAttributeDefault()).toBe(false);
       const plain = line.getCell(1)!;
       expect(plain.getBgColorMode()).toBe(0);
+      expect(plain.getFgColorMode()).toBe(0);
       expect(plain.isBgDefault()).toBe(true);
+      expect(plain.isFgDefault()).toBe(true);
+      expect(plain.isAttributeDefault()).toBe(true);
       const fg = line.getCell(2)!;
       expect(fg.getFgColorMode()).toBe(0x3000000);
       expect(fg.isFgRGB()).toBe(true);
+      expect(fg.isFgDefault()).toBe(false);
+      expect(fg.isAttributeDefault()).toBe(false);
       expect(fg.getFgColor()).toBe(0x010203);
+      expect(line.getCell(3)!.isAttributeDefault()).toBe(false);
+      // An empty cell past the text
+      expect(line.getCell(10)!.isAttributeDefault()).toBe(true);
     });
   });
 });

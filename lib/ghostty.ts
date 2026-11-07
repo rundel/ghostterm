@@ -2353,6 +2353,7 @@ export class GhosttyTerminal {
     cell.overline = false;
     cell.selected = false;
     cell.bg_default = true;
+    cell.fg_default = true;
   }
 
   /**
@@ -2375,6 +2376,7 @@ export class GhosttyTerminal {
     let fg = this.fgDefault;
     let bg = this.bgDefault;
     let bgDefault = true;
+    let fgDefault = true;
     let flags = 0;
     let underlineStyle = UnderlineStyle.NONE;
     let underlineColor: number | undefined;
@@ -2384,7 +2386,11 @@ export class GhosttyTerminal {
       overline = readBits(style.getUint16(L.style.flags, true), 0, L.styleFlags.overline) !== 0;
       const ul = this.resolveStyleColor(style, L.style.underline);
       if (ul) underlineColor = (ul.r << 16) | (ul.g << 8) | ul.b;
-      fg = this.resolveStyleColor(style, L.style.fg) ?? fg;
+      const styleFg = this.resolveStyleColor(style, L.style.fg);
+      if (styleFg) {
+        fg = styleFg;
+        fgDefault = false;
+      }
       const styleBg = this.resolveStyleColor(style, L.style.bg);
       if (styleBg) {
         bg = styleBg;
@@ -2420,6 +2426,7 @@ export class GhosttyTerminal {
     cell.bg_g = bg.g;
     cell.bg_b = bg.b;
     cell.bg_default = bgDefault;
+    cell.fg_default = fgDefault;
     cell.flags = flags;
     const wide = readBits(lo, hi, L.cell.wide);
     cell.width = wide === CellWide.NARROW ? 1 : wide === CellWide.WIDE ? 2 : 0;

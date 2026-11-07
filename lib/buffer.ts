@@ -179,6 +179,7 @@ function blankCell(): GhosttyCell {
     hyperlink_id: 0,
     grapheme_len: 0,
     bg_default: true,
+    fg_default: true,
   };
 }
 
@@ -247,8 +248,8 @@ export class BufferLine implements IBufferLine {
 
 /**
  * A single cell in the buffer. Colors are the resolved RGB values libghostty
- * draws with: palette colors are reported as RGB, and the background as
- * default when the cell has none of its own.
+ * draws with: palette colors are reported as RGB, and a color as default when
+ * the cell has none of its own.
  */
 export class BufferCell implements IBufferCell {
   private cell: GhosttyCell;
@@ -287,9 +288,9 @@ export class BufferCell implements IBufferCell {
     return this.cell.width;
   }
 
-  /** Always RGB: the foreground is reported resolved (see getFgColor). */
+  /** Default when the cell has no foreground of its own, else RGB. */
   getFgColorMode(): number {
-    return COLOR_MODE_RGB;
+    return this.isFgDefault() ? COLOR_MODE_DEFAULT : COLOR_MODE_RGB;
   }
 
   /** Default when the cell has no background of its own, else RGB. */
@@ -308,7 +309,7 @@ export class BufferCell implements IBufferCell {
   }
 
   isFgRGB(): boolean {
-    return true;
+    return !this.isFgDefault();
   }
 
   isBgRGB(): boolean {
@@ -323,8 +324,23 @@ export class BufferCell implements IBufferCell {
     return false;
   }
 
+  isFgDefault(): boolean {
+    return this.cell.fg_default ?? false;
+  }
+
   isBgDefault(): boolean {
     return this.cell.bg_default ?? false;
+  }
+
+  /** Whether no style is set: default colors, no flags, underline or overline. */
+  isAttributeDefault(): boolean {
+    return (
+      this.cell.flags === 0 &&
+      this.isFgDefault() &&
+      this.isBgDefault() &&
+      !this.cell.overline &&
+      this.cell.underline_color === undefined
+    );
   }
 
   isBold(): number {
