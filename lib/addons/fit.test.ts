@@ -234,3 +234,111 @@ describe('Dimension Calculation', () => {
     expect(dims).toEqual({ cols: 88, rows: 24 });
   });
 });
+
+describe('FitAddon scrollbar gutter', () => {
+  test('the canvas fills the container and the scrollbar sits in the gutter', async () => {
+    const { createIsolatedTerminal } = await import('../test-helpers');
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 803, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: 480, configurable: true });
+    document.body.appendChild(container);
+    const term = await createIsolatedTerminal();
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(container);
+    try {
+      fit.fit();
+      const renderer = (term as any).renderer;
+      const { width: cellWidth } = renderer.getMetrics();
+      const canvas: HTMLCanvasElement = renderer.getCanvas();
+      const gridWidth = term.cols * cellWidth;
+
+      // Whole cells plus a gutter that takes up the rest of the width.
+      expect(Number.parseFloat(canvas.style.width)).toBeCloseTo(803, 0);
+      expect(803 - gridWidth).toBeGreaterThanOrEqual(15);
+
+      // The bar is right of every cell and close to the container's edge.
+      const bar = renderer.getScrollbarRect();
+      expect(bar.x).toBeGreaterThanOrEqual(gridWidth);
+      expect(803 - (bar.x + bar.width)).toBeLessThanOrEqual(4);
+
+      // The gutter tracks width changes too small to change cols. (fit()
+      // ignores calls for 50ms after a resize, so wait that out.)
+      await new Promise((r) => setTimeout(r, 60));
+      const cols = term.cols;
+      const slack = 803 - 15 - cols * cellWidth;
+      const wider = 803 + Math.max(1, Math.floor((cellWidth - slack) / 2));
+      Object.defineProperty(container, 'clientWidth', { value: wider });
+      fit.fit();
+      expect(term.cols).toBe(cols);
+      expect(Number.parseFloat(canvas.style.width)).toBeCloseTo(wider, 0);
+    } finally {
+      term.dispose();
+      container.remove();
+    }
+  });
+
+  test('drawing the scrollbar never paints over the last column', async () => {
+    const { createIsolatedTerminal } = await import('../test-helpers');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    term.open(container);
+    try {
+      for (let i = 0; i < 20; i++) term.write(`row ${i}\r\n`);
+      const renderer = (term as any).renderer;
+      const gridWidth = 20 * renderer.getMetrics().width;
+      const painted: number[] = [];
+      const ctx = renderer.ctx;
+      const fillRect = ctx.fillRect;
+      const clearRect = ctx.clearRect;
+      ctx.fillRect = (x: number, ...rest: number[]) => {
+        painted.push(x);
+        return fillRect.call(ctx, x, ...rest);
+      };
+      ctx.clearRect = (x: number, ...rest: number[]) => {
+        painted.push(x);
+        return clearRect.call(ctx, x, ...rest);
+      };
+      try {
+        (renderer as any).renderScrollbar(0, 15, 5, 1);
+      } finally {
+        ctx.fillRect = fillRect;
+        ctx.clearRect = clearRect;
+      }
+      expect(painted.length).toBeGreaterThan(0);
+      expect(Math.min(...painted)).toBeGreaterThanOrEqual(gridWidth);
+    } finally {
+      term.dispose();
+      container.remove();
+    }
+  });
+
+  test('scrollbar drags are hit-tested where the bar is drawn', async () => {
+    const { createIsolatedTerminal } = await import('../test-helpers');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    term.open(container);
+    try {
+      for (let i = 0; i < 50; i++) term.write(`row ${i}\r\n`);
+      const renderer = (term as any).renderer;
+      const canvas: HTMLCanvasElement = renderer.getCanvas();
+      const bar = renderer.getScrollbarRect();
+      // Pressing near the top of the track jumps toward the top of history.
+      const press = (x: number) => {
+        term.scrollToBottom();
+        canvas.dispatchEvent(
+          new MouseEvent('mousedown', { clientX: x, clientY: 10, bubbles: true })
+        );
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        return term.viewportY;
+      };
+      expect(press(bar.x + bar.width / 2)).toBeGreaterThan(0);
+      expect(press(5)).toBe(0);
+    } finally {
+      term.dispose();
+      container.remove();
+    }
+  });
+});

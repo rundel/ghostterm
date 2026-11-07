@@ -69,6 +69,14 @@ export interface FontMetrics {
 // Default Theme
 // ============================================================================
 
+/**
+ * Minimum width in CSS pixels kept free to the right of the cell grid for the
+ * scrollbar, so it never covers the last column. FitAddon reserves it.
+ */
+export const SCROLLBAR_GUTTER = 15;
+const SCROLLBAR_THUMB_WIDTH = 8;
+const SCROLLBAR_RIGHT_INSET = 3;
+
 export const DEFAULT_THEME: Required<ITheme> = {
   foreground: '#d4d4d4',
   background: '#1e1e1e',
@@ -119,6 +127,12 @@ export class CanvasRenderer {
 
   // Viewport tracking (for scrolling)
   private lastViewportY: number = 0;
+  /** Width of the scrollbar gutter right of the grid (CSS px). */
+  private scrollbarGutter = SCROLLBAR_GUTTER;
+  private gridCols = 0;
+  private gridRows = 0;
+  /** Set when the canvas was cleared outside render(), e.g. by resize(). */
+  private needsFullRender = false;
 
   // Current buffer being rendered (for grapheme lookups)
   private currentBuffer: IRenderable | null = null;
@@ -244,7 +258,10 @@ export class CanvasRenderer {
    * Resize canvas to fit terminal dimensions
    */
   public resize(cols: number, rows: number): void {
-    const cssWidth = cols * this.metrics.width;
+    this.gridCols = cols;
+    this.gridRows = rows;
+    this.needsFullRender = true;
+    const cssWidth = cols * this.metrics.width + this.scrollbarGutter;
     const cssHeight = rows * this.metrics.height;
 
     // Set CSS size (what user sees)
@@ -301,8 +318,13 @@ export class CanvasRenderer {
     }
 
     // Resize canvas if dimensions changed
+    if (this.needsFullRender) {
+      forceAll = true;
+      this.needsFullRender = false;
+    }
     const needsResize =
-      this.canvas.width !== dims.cols * this.metrics.width * this.devicePixelRatio ||
+      this.canvas.width !==
+        (dims.cols * this.metrics.width + this.scrollbarGutter) * this.devicePixelRatio ||
       this.canvas.height !== dims.rows * this.metrics.height * this.devicePixelRatio;
 
     if (needsResize) {
@@ -471,7 +493,9 @@ export class CanvasRenderer {
     }
 
     // Render scrollbar if scrolled or scrollback exists (with opacity for fade effect)
-    if (scrollbackProvider && scrollbarOpacity > 0) {
+    // Also called at zero opacity: the gutter isn't covered by row redraws, so
+    // the faded-out bar has to be cleared here.
+    if (scrollbackProvider) {
       this.renderScrollbar(viewportY, scrollbackLength, dims.rows, scrollbarOpacity);
     }
 
@@ -869,16 +893,16 @@ export class CanvasRenderer {
     const canvasHeight = this.canvas.height / this.devicePixelRatio;
     const canvasWidth = this.canvas.width / this.devicePixelRatio;
 
-    // Scrollbar dimensions
-    const scrollbarWidth = 8;
-    const scrollbarX = canvasWidth - scrollbarWidth - 4;
+    // Scrollbar dimensions: drawn in the gutter right of the cell grid
+    const { x: scrollbarX, width: scrollbarWidth } = this.getScrollbarRect();
     const scrollbarPadding = 4;
     const scrollbarTrackHeight = canvasHeight - scrollbarPadding * 2;
 
-    // Always clear the scrollbar area first (fixes ghosting when fading out)
-    ctx.clearRect(scrollbarX - 2, 0, scrollbarWidth + 6, canvasHeight);
+    // Always clear the gutter first (fixes ghosting when fading out)
+    const gutterX = canvasWidth - this.scrollbarGutter;
+    ctx.clearRect(gutterX, 0, this.scrollbarGutter, canvasHeight);
     ctx.fillStyle = this.theme.background;
-    ctx.fillRect(scrollbarX - 2, 0, scrollbarWidth + 6, canvasHeight);
+    ctx.fillRect(gutterX, 0, this.scrollbarGutter, canvasHeight);
 
     // Don't draw scrollbar if fully transparent or no scrollback
     if (opacity <= 0 || scrollbackLength === 0) return;
@@ -901,6 +925,27 @@ export class CanvasRenderer {
     ctx.fillStyle = `rgba(128, 128, 128, ${baseOpacity * opacity})`;
     ctx.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight);
   }
+  /** Horizontal position of the scrollbar in CSS px, for drawing and hit-testing. */
+  public getScrollbarRect(): { x: number; width: number } {
+    const canvasWidth = this.canvas.width / this.devicePixelRatio;
+    return {
+      x: canvasWidth - SCROLLBAR_RIGHT_INSET - SCROLLBAR_THUMB_WIDTH,
+      width: SCROLLBAR_THUMB_WIDTH,
+    };
+  }
+
+  /**
+   * Set the gutter right of the grid (at least SCROLLBAR_GUTTER). FitAddon
+   * widens it by the space left over after whole cells, so the canvas fills
+   * its container and the scrollbar sits against the container's edge.
+   */
+  public setScrollbarGutter(px: number): void {
+    const gutter = Math.max(SCROLLBAR_GUTTER, Math.floor(px));
+    if (gutter === this.scrollbarGutter) return;
+    this.scrollbarGutter = gutter;
+    if (this.gridCols > 0 && this.gridRows > 0) this.resize(this.gridCols, this.gridRows);
+  }
+
   public getMetrics(): FontMetrics {
     return { ...this.metrics };
   }

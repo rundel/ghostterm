@@ -14,6 +14,7 @@
  */
 
 import type { ITerminalAddon, ITerminalCore } from '../interfaces';
+import { SCROLLBAR_GUTTER } from '../renderer';
 
 // ============================================================================
 // Constants
@@ -21,7 +22,6 @@ import type { ITerminalAddon, ITerminalCore } from '../interfaces';
 
 const MINIMUM_COLS = 2;
 const MINIMUM_ROWS = 1;
-const DEFAULT_SCROLLBAR_WIDTH = 15; // Reserve space for future scrollback scrollbar
 const RESIZE_DEBOUNCE_MS = 100; // Debounce time for ResizeObserver
 
 // ============================================================================
@@ -92,6 +92,14 @@ export class FitAddon implements ITerminalAddon {
       return;
     }
 
+    // Give the space left over after whole cells to the scrollbar gutter, so
+    // the canvas fills the container. Done even when cols/rows are unchanged.
+    const gutter = this.measure()?.gutter;
+    const renderer = (this._terminal as any).renderer;
+    if (gutter !== undefined && typeof renderer?.setScrollbarGutter === 'function') {
+      renderer.setScrollbarGutter(gutter);
+    }
+
     // Access terminal to check current dimensions
     const terminal = this._terminal as any;
     const currentCols = terminal.cols;
@@ -133,11 +141,20 @@ export class FitAddon implements ITerminalAddon {
    * - Terminal container element dimensions (clientWidth/Height)
    * - Terminal element padding
    * - Font metrics (character cell size)
-   * - Scrollbar width reservation
+   * - The scrollbar gutter (SCROLLBAR_GUTTER)
    *
    * @returns Proposed dimensions or undefined if cannot calculate
    */
   public proposeDimensions(): ITerminalDimensions | undefined {
+    const m = this.measure();
+    return m ? { cols: m.cols, rows: m.rows } : undefined;
+  }
+
+  /**
+   * Fit the grid into the container and size the scrollbar gutter to take up
+   * the remaining width (at least SCROLLBAR_GUTTER).
+   */
+  private measure(): { cols: number; rows: number; gutter: number } | undefined {
     // Need terminal and its DOM element
     if (!this._terminal?.element) {
       return undefined;
@@ -185,14 +202,17 @@ export class FitAddon implements ITerminalAddon {
     }
 
     // Calculate available space (subtract padding since clientWidth includes padding)
-    const availableWidth = containerWidth - paddingLeft - paddingRight - DEFAULT_SCROLLBAR_WIDTH;
+    const contentWidth = containerWidth - paddingLeft - paddingRight;
+    const availableWidth = contentWidth - SCROLLBAR_GUTTER;
     const availableHeight = containerHeight - paddingTop - paddingBottom;
 
     // Calculate dimensions (enforce minimums)
     const cols = Math.max(MINIMUM_COLS, Math.floor(availableWidth / metrics.width));
     const rows = Math.max(MINIMUM_ROWS, Math.floor(availableHeight / metrics.height));
 
-    return { cols, rows };
+    const gutter = Math.max(SCROLLBAR_GUTTER, contentWidth - cols * metrics.width);
+
+    return { cols, rows, gutter };
   }
 
   /**

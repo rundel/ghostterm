@@ -1650,10 +1650,8 @@ export class Terminal implements ITerminalCore {
 
     // Calculate scrollbar dimensions (match renderer's logic)
     // Use rect dimensions which are already in CSS pixels
-    const canvasWidth = rect.width;
     const canvasHeight = rect.height;
-    const scrollbarWidth = 8;
-    const scrollbarX = canvasWidth - scrollbarWidth - 4;
+    const { x: scrollbarX, width: scrollbarWidth } = this.renderer.getScrollbarRect();
     const scrollbarPadding = 4;
 
     // Check if click is in scrollbar area
