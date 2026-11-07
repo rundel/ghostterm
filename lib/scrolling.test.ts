@@ -827,3 +827,87 @@ describe('Scrolled view under heavy output', () => {
     }
   });
 });
+
+describe('Scrollbar', () => {
+  let term: Terminal;
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term = await createIsolatedTerminal({ cols: 40, rows: 10 });
+    term.open(container);
+    for (let i = 0; i < 100; i++) term.write(`Line ${i}\r\n`);
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+  });
+
+  const bar = () =>
+    (term as any).renderer.getScrollbarThumb(
+      term.viewportY,
+      term.wasmTerm!.getScrollbackLength(),
+      term.rows
+    );
+  const mouse = (type: string, x: number, y: number) =>
+    new MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true });
+
+  test('clicking the track jumps there', () => {
+    const b = bar();
+    const down = mouse('mousedown', b.x + 1, b.trackY);
+    container.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    expect(term.buffer.active.viewportY).toBe(0);
+
+    container.dispatchEvent(mouse('mousedown', b.x + 1, b.trackY + b.trackHeight / 2));
+    const scrollback = term.wasmTerm!.getScrollbackLength();
+    expect(term.viewportY).toBe(Math.round(scrollback / 2));
+  });
+
+  test('dragging the thumb scrolls in proportion, and mouseup ends the drag', () => {
+    const b = bar();
+    const scrollback = term.wasmTerm!.getScrollbackLength();
+    const startY = b.y + b.height / 2;
+    container.dispatchEvent(mouse('mousedown', b.x + 1, startY));
+    const travel = b.trackHeight - b.height;
+    container.dispatchEvent(mouse('mousemove', b.x + 1, startY - travel / 2));
+    expect(term.viewportY).toBe(Math.round(scrollback / 2));
+    container.dispatchEvent(mouse('mousemove', b.x + 1, startY - travel * 2));
+    expect(term.buffer.active.viewportY).toBe(0);
+
+    document.dispatchEvent(mouse('mouseup', b.x + 1, 0));
+    expect((term as any).isDraggingScrollbar).toBe(false);
+    container.dispatchEvent(mouse('mousemove', b.x + 1, startY));
+    expect(term.buffer.active.viewportY).toBe(0);
+  });
+
+  test('clicks left of the scrollbar are not taken', () => {
+    const down = mouse('mousedown', 5, 5);
+    container.dispatchEvent(down);
+    expect((term as any).isDraggingScrollbar).toBe(false);
+    expect(term.viewportY).toBe(0);
+  });
+
+  test('fades in when scrolling and out after a delay, without its own animation loop', async () => {
+    expect((term as any).scrollbarOpacity).toBe(0);
+    let frames = 0;
+    const raf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => {
+      frames++;
+      return raf(cb);
+    };
+    try {
+      term.scrollLines(-1);
+      expect(frames).toBe(0);
+    } finally {
+      globalThis.requestAnimationFrame = raf;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    expect((term as any).scrollbarOpacity).toBe(1);
+    (term as any).hideScrollbar();
+    await new Promise((r) => setTimeout(r, 250));
+    expect((term as any).scrollbarOpacity).toBe(0);
+  });
+});
