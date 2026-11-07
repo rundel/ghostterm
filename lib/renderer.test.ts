@@ -1,180 +1,360 @@
 /**
- * Tests for Canvas Renderer
- *
- * There is no real drawing under happy-dom: drawing tests replace methods of
- * the renderer's 2D context and inspect the calls.
+ * CanvasRenderer: what a frame draws, read from the recording canvas
+ * (happydom.ts): text and its attributes, decorations, the cursor, which rows
+ * a frame repaints, colors, and link hover underlines.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { DEFAULT_THEME } from './renderer';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Terminal } from './terminal';
-import { createIsolatedTerminal } from './test-helpers';
+import {
+  type DrawCall,
+  drawnText,
+  internals,
+  mouseEvent,
+  paintedRects,
+  render,
+  strokes,
+  terminalFixture,
+} from './test-helpers';
 
-describe('CanvasRenderer', () => {
-  describe('Default Theme', () => {
-    test('has all required ANSI colors', () => {
-      expect(DEFAULT_THEME.black).toBe('#000000');
-      expect(DEFAULT_THEME.red).toBe('#cd3131');
-      expect(DEFAULT_THEME.green).toBe('#0dbc79');
-      expect(DEFAULT_THEME.yellow).toBe('#e5e510');
-      expect(DEFAULT_THEME.blue).toBe('#2472c8');
-      expect(DEFAULT_THEME.magenta).toBe('#bc3fbc');
-      expect(DEFAULT_THEME.cyan).toBe('#11a8cd');
-      expect(DEFAULT_THEME.white).toBe('#e5e5e5');
-    });
+const fixture = terminalFixture();
+let term: Terminal;
+let container: HTMLElement;
 
-    test('has all bright ANSI colors', () => {
-      expect(DEFAULT_THEME.brightBlack).toBe('#666666');
-      expect(DEFAULT_THEME.brightRed).toBe('#f14c4c');
-      expect(DEFAULT_THEME.brightGreen).toBe('#23d18b');
-      expect(DEFAULT_THEME.brightYellow).toBe('#f5f543');
-      expect(DEFAULT_THEME.brightBlue).toBe('#3b8eea');
-      expect(DEFAULT_THEME.brightMagenta).toBe('#d670d6');
-      expect(DEFAULT_THEME.brightCyan).toBe('#29b8db');
-      expect(DEFAULT_THEME.brightWhite).toBe('#ffffff');
-    });
+beforeEach(() => {
+  ({ term, container } = fixture.open({ cols: 20, rows: 5 }));
+});
 
-    test('has foreground and background colors', () => {
-      expect(DEFAULT_THEME.foreground).toBe('#d4d4d4');
-      expect(DEFAULT_THEME.background).toBe('#1e1e1e');
-    });
+const cell = () => {
+  const { renderer } = internals(term);
+  return { w: renderer.charWidth, h: renderer.charHeight };
+};
 
-    test('has cursor colors', () => {
-      expect(DEFAULT_THEME.cursor).toBe('#ffffff');
-      expect(DEFAULT_THEME.cursorAccent).toBe('#1e1e1e');
-    });
+/** Viewport rows a frame repainted (each repaint starts by clearing the whole row). */
+function repaintedRows(calls: DrawCall[]): number[] {
+  const { w, h } = cell();
+  return calls
+    .filter((c) => c.op === 'clearRect' && c.args[0] === 0 && c.args[2] === term.cols * w)
+    .map((c) => Number(c.args[1]) / h);
+}
 
-    test('has selection colors', () => {
-      // Selection colors are now solid (not semi-transparent overlay)
-      // Ghostty-style: selection bg = foreground color, selection fg = background color
-      expect(DEFAULT_THEME.selectionBackground).toBe('#d4d4d4');
-      expect(DEFAULT_THEME.selectionForeground).toBe('#1e1e1e');
-    });
+const CURSOR = 'rgb(255, 255, 255)';
+
+/** Rectangles painted in the cursor color, in cells. */
+function cursorRects(calls: DrawCall[], color = CURSOR) {
+  const { w, h } = cell();
+  return paintedRects(calls, color).map((r) => ({ x: r.x / w, y: r.y / h, w: r.w, h: r.h }));
+}
+
+describe('text attributes', () => {
+  test('text is drawn per cell in its foreground color, bold and italic in the font', () => {
+    term.write('a\x1b[31mb\x1b[1mc\x1b[0;3md\x1b[0m\r\n');
+    expect(drawnText(term).map((t) => [t.text, t.col, t.row, t.fillStyle, t.font])).toEqual([
+      ['a', 0, 0, 'rgb(212, 212, 212)', '15px monospace'],
+      ['b', 1, 0, 'rgb(205, 49, 49)', '15px monospace'],
+      ['c', 2, 0, 'rgb(205, 49, 49)', 'bold 15px monospace'],
+      ['d', 3, 0, 'rgb(212, 212, 212)', 'italic 15px monospace'],
+    ]);
   });
 
-  describe('Theme Color Format', () => {
-    test('all colors are valid hex strings', () => {
-      const hexPattern = /^#[0-9a-f]{6}$/i;
+  test('SGR 7 inverse swaps foreground and background', () => {
+    term.write('\x1b[31;42;7mX\x1b[0m\x1b[7mY\x1b[0m\r\n');
+    const calls = render(term);
+    const { w } = cell();
+    const bgs = paintedRects(calls).filter((r) => r.y === 0 && r.w === w);
+    expect(bgs.map((r) => [r.x / w, r.fillStyle])).toEqual([
+      [0, 'rgb(205, 49, 49)'],
+      [1, 'rgb(212, 212, 212)'],
+    ]);
+    expect(drawnText(term, calls).map((t) => t.fillStyle)).toEqual([
+      'rgb(13, 188, 121)',
+      'rgb(30, 30, 30)',
+    ]);
+  });
 
-      expect(DEFAULT_THEME.black).toMatch(hexPattern);
-      expect(DEFAULT_THEME.foreground).toMatch(hexPattern);
-      expect(DEFAULT_THEME.background).toMatch(hexPattern);
-      expect(DEFAULT_THEME.cursor).toMatch(hexPattern);
+  test('SGR 2 faint text is drawn at half alpha, and only that text', () => {
+    term.write('\x1b[2mf\x1b[0mn\r\n');
+    expect(drawnText(term).map((t) => [t.text, t.globalAlpha])).toEqual([
+      ['f', 0.5],
+      ['n', 1],
+    ]);
+  });
+
+  test('SGR 8 invisible text is not drawn', () => {
+    term.write('\x1b[8mhidden\x1b[0mv\r\n');
+    expect(drawnText(term).map((t) => t.text)).toEqual(['v']);
+  });
+
+  test('wide characters and grapheme clusters are drawn whole, once', () => {
+    term.write('漢👍🏽x\r\n');
+    expect(drawnText(term).map((t) => [t.text, t.col])).toEqual([
+      ['漢', 0],
+      ['👍🏽', 2],
+      ['x', 4],
+    ]);
+  });
+});
+
+describe('decorations', () => {
+  test('SGR 9 strikethrough and SGR 53 overline are stroked across the cell', () => {
+    const { w, h } = cell();
+    term.write('\x1b[31;9ms\x1b[0m\x1b[53mo\x1b[0m\r\n');
+    expect(strokes(term)).toEqual([
+      {
+        strokeStyle: 'rgb(205, 49, 49)',
+        lineDash: [],
+        path: [
+          ['moveTo', 0, h / 2],
+          ['lineTo', w, h / 2],
+        ],
+      },
+      {
+        strokeStyle: 'rgb(212, 212, 212)',
+        lineDash: [],
+        path: [
+          ['moveTo', w, 0.5],
+          ['lineTo', 2 * w, 0.5],
+        ],
+      },
+    ]);
+  });
+
+  describe('underlines', () => {
+    const y = () => internals(term).renderer.getMetrics().baseline + 2;
+
+    test('single underline in the text color', () => {
+      term.write('\x1b[4mu\x1b[0m\r\n');
+      expect(strokes(term)).toEqual([
+        {
+          strokeStyle: 'rgb(212, 212, 212)',
+          lineDash: [],
+          path: [
+            ['moveTo', 0, y()],
+            ['lineTo', cell().w, y()],
+          ],
+        },
+      ]);
+    });
+
+    test('double underline is two lines, in the SGR 58 color', () => {
+      const { w } = cell();
+      term.write('\x1b[4:2;58:2::0:128:255mu\x1b[0m\r\n');
+      expect(strokes(term)).toEqual([
+        {
+          strokeStyle: '#0080ff',
+          lineDash: [],
+          path: [
+            ['moveTo', 0, y() - 1],
+            ['lineTo', w, y() - 1],
+            ['moveTo', 0, y() + 1],
+            ['lineTo', w, y() + 1],
+          ],
+        },
+      ]);
+    });
+
+    test('curly underline is one wave per cell, so neighbors join up', () => {
+      const { w } = cell();
+      term.write('\x1b[4:3;58;2;0;128;255mcu\x1b[0m\r\n');
+      const drawn = strokes(term);
+      expect(drawn.map((s) => s.strokeStyle)).toEqual(['#0080ff', '#0080ff']);
+      expect(drawn[1].path).toEqual([
+        ['moveTo', w, y()],
+        ['quadraticCurveTo', w + w / 4, y() - 1, w + w / 2, y()],
+        ['quadraticCurveTo', w + (3 * w) / 4, y() + 1, 2 * w, y()],
+      ]);
+    });
+
+    test.each([
+      ['dotted', 4, [1, 2]],
+      ['dashed', 5, [3, 2]],
+    ])('%s underline is stroked with its dash pattern', (_name, style, dash) => {
+      term.write(`\x1b[4:${style}mab\x1b[0m\r\n`);
+      const calls = render(term);
+      const drawn = strokes(calls);
+      expect(drawn.map((s) => s.lineDash)).toEqual([dash, dash]);
+      expect(drawn[1].path).toEqual([
+        ['moveTo', cell().w, y()],
+        ['lineTo', 2 * cell().w, y()],
+      ]);
     });
   });
 });
 
-describe('CanvasRenderer drawing', () => {
-  let term: Terminal;
-  let container: HTMLElement;
+describe('link hover underlines', () => {
+  const LINK = '#4A90E2';
 
-  beforeEach(async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    term = await createIsolatedTerminal({ cols: 20, rows: 5 });
-    term.open(container);
-  });
-
-  afterEach(() => {
-    term.dispose();
-    container.remove();
-  });
-
-  /** Render one frame, recording which rows were repainted and what was filled. */
-  function frame(force = false) {
-    const renderer = (term as any).renderer;
-    const ctx = renderer.ctx;
-    const rows = new Set<number>();
-    const fills: Array<{ style: string; x: number; y: number; w: number; h: number }> = [];
-    const orig = { clearRect: ctx.clearRect, fillRect: ctx.fillRect };
-    ctx.clearRect = (x: number, y: number, w: number, _h: number) => {
-      if (x === 0 && w === term.cols * renderer.charWidth) rows.add(y / renderer.charHeight);
-    };
-    ctx.fillRect = (x: number, y: number, w: number, h: number) => {
-      fills.push({ style: String(ctx.fillStyle), x, y, w, h });
-    };
-    try {
-      renderer.render(term.wasmTerm, force, term.viewportY, 0);
-    } finally {
-      Object.assign(ctx, orig);
-    }
-    return { rows, fills, cursorColor: renderer.cursorColor as string };
+  /** Move the pointer over a cell of the terminal. */
+  function hover(col: number, row: number): void {
+    const { w, h } = cell();
+    container.dispatchEvent(mouseEvent('mousemove', (col + 0.5) * w, (row + 0.5) * h));
   }
 
-  test('a fractional device pixel ratio does not resize the canvas every frame', () => {
-    const renderer = (term as any).renderer;
-    renderer.setDevicePixelRatio(1.25);
-    const canvas: HTMLCanvasElement = renderer.getCanvas();
-    const cssWidth = Number.parseFloat(canvas.style.width);
-    expect(canvas.width).toBe(Math.round(cssWidth * 1.25));
-    frame(true);
-    let resizes = 0;
-    const resize = renderer.resize;
-    renderer.resize = (...args: unknown[]) => {
-      resizes++;
-      return resize.apply(renderer, args);
-    };
-    try {
-      for (let i = 0; i < 3; i++) expect(frame().rows.size).toBe(0);
-    } finally {
-      renderer.resize = resize;
-    }
-    expect(resizes).toBe(0);
+  /** Let the asynchronous link lookup a hover starts finish. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  }
+
+  /** Columns of row 0 underlined in the link color. */
+  function underlined(): number[] {
+    const cols = strokes(term)
+      .filter((s) => s.strokeStyle === LINK)
+      .map((s) => s.path[0][1] / cell().w);
+    return [...new Set(cols)];
+  }
+
+  test('an OSC 8 hyperlink is underlined while hovered, and not after the pointer leaves', async () => {
+    term.write('go \x1b]8;;https://example.com\x07here\x1b]8;;\x07 now\r\n');
+    expect(underlined()).toEqual([]);
+    hover(4, 0);
+    await settle();
+    expect(underlined()).toEqual([3, 4, 5, 6]);
+    container.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(underlined()).toEqual([]);
   });
 
-  test('hiding the cursor repaints its row', () => {
+  test('a plain-text URL is underlined while hovered', async () => {
+    term.write('see https://a.io ok\r\n');
+    expect(underlined()).toEqual([]);
+    hover(6, 0);
+    await settle();
+    expect(underlined()).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(container.style.cursor).toBe('pointer');
+  });
+});
+
+describe('cursor', () => {
+  test.each([
+    ['block', 'cursor fills the cell'],
+    ['underline', 'cursor is a bar along the bottom'],
+    ['bar', 'cursor is a bar at the left'],
+  ] as const)('a %s %s, in the cursor color', (shape) => {
+    term.options.cursorStyle = shape;
+    term.write('ab');
+    const { w, h } = cell();
+    const [rect] = cursorRects(render(term));
+    const expected = {
+      block: { x: 2, y: 0, w, h },
+      underline: { x: 2, y: (h - Math.max(2, Math.floor(h * 0.15))) / h, w, h: 2 },
+      bar: { x: 2, y: 0, w: 2, h },
+    }[shape];
+    expect(rect).toEqual(expected);
+  });
+
+  test('the block cursor redraws the character under it in the accent color', () => {
+    term.write('ab\x1b[D');
+    const text = drawnText(term).filter((t) => t.col === 1);
+    expect(text.map((t) => [t.text, t.fillStyle])).toEqual([
+      ['b', 'rgb(212, 212, 212)'],
+      ['b', '#1e1e1e'],
+    ]);
+  });
+
+  test('programs can change the shape (DECSCUSR) and color (OSC 12)', () => {
+    term.write('ab\x1b[5 q');
+    expect(cursorRects(render(term))[0].w).toBe(2);
+    term.write('\x1b]12;#ff0000\x07\x1b[0 q');
+    const calls = render(term);
+    expect(cursorRects(calls)).toEqual([]);
+    expect(cursorRects(calls, 'rgb(255, 0, 0)')).toEqual([{ x: 2, y: 0, ...cell() }]);
+  });
+
+  test('moving to another row repaints the old row without it and draws it on the new', () => {
     term.write('abc');
-    const first = frame(true);
-    expect(first.fills.some((f) => f.style === first.cursorColor)).toBe(true);
+    expect(cursorRects(render(term))).toEqual([{ x: 3, y: 0, ...cell() }]);
+    term.write('\r\nx');
+    const calls = render(term, false);
+    expect(repaintedRows(calls)).toContain(0);
+    expect(repaintedRows(calls)).toContain(1);
+    expect(cursorRects(calls)).toEqual([{ x: 1, y: 1, ...cell() }]);
+    expect(
+      drawnText(term, calls)
+        .filter((t) => t.row === 0)
+        .map((t) => t.text)
+    ).toEqual(['a', 'b', 'c']);
+  });
+
+  test('hiding the cursor repaints its row, and an unchanged frame repaints nothing', () => {
+    term.write('abc');
+    expect(cursorRects(render(term))).toHaveLength(1);
     term.write('\x1b[?25l');
-    const next = frame();
-    expect(next.rows.has(0)).toBe(true);
-    expect(next.fills.some((f) => f.style === next.cursorColor)).toBe(false);
-    // Nothing changed since: the row is left alone.
-    expect(frame().rows.size).toBe(0);
+    const next = render(term, false);
+    expect(repaintedRows(next)).toContain(0);
+    expect(cursorRects(next)).toEqual([]);
+    expect(repaintedRows(render(term, false))).toEqual([]);
   });
 
   test('changing the cursor shape or color without moving repaints its row', () => {
     term.write('abc');
-    frame(true);
+    render(term);
     term.write('\x1b[6 q');
-    expect(frame().rows.has(0)).toBe(true);
+    expect(repaintedRows(render(term, false))).toContain(0);
     term.write('\x1b]12;#ff0000\x07');
-    const recolored = frame();
-    expect(recolored.rows.has(0)).toBe(true);
-    expect(recolored.cursorColor).toBe('rgb(255, 0, 0)');
+    const recolored = render(term, false);
+    expect(repaintedRows(recolored)).toContain(0);
+    expect(cursorRects(recolored, 'rgb(255, 0, 0)')).toHaveLength(1);
   });
 
   test('a block cursor on a wide character covers both cells', () => {
     term.write('漢\x1b[1G');
-    const { fills, cursorColor } = frame(true);
-    const renderer = (term as any).renderer;
-    const cursor = fills.find((f) => f.style === cursorColor);
-    expect(cursor?.w).toBe(2 * renderer.charWidth);
+    expect(cursorRects(render(term))).toEqual([{ x: 0, y: 0, w: 2 * cell().w, h: cell().h }]);
   });
 
-  test('a theme change after the first frames repaints with the new colors', () => {
-    term.write('x');
-    frame(true);
-    frame();
-    term.options.theme = { background: '#ffffff', foreground: '#000000', cursor: '#ff0000' };
-    // The option change redraws at once; check that frame's colors held.
-    expect((term as any).renderer.background).toBe('#ffffff');
-    const changed = frame(true);
-    expect(changed.fills.some((f) => f.style === '#ffffff' && f.x === 0 && f.y === 0)).toBe(true);
-    expect(changed.cursorColor).toBe('rgb(255, 0, 0)');
+  test('the cursor is not drawn while scrolled up', () => {
+    for (let i = 0; i < 10; i++) term.write(`${i}\r\n`);
+    term.scrollLines(-2);
+    expect(cursorRects(render(term))).toEqual([]);
+  });
+});
 
-    term.options.theme = {};
-    expect((term as any).renderer.background).toBe('#1e1e1e');
-    const back = frame(true);
-    expect(back.fills.some((f) => f.style === '#1e1e1e' && f.x === 0 && f.y === 0)).toBe(true);
-    expect(back.cursorColor).toBe('rgb(255, 255, 255)');
+describe('colors', () => {
+  /** Fill color of row 0's background (the full-width fill). */
+  const rowBackground = (calls: DrawCall[]) =>
+    paintedRects(calls).find((r) => r.x === 0 && r.y === 0 && r.w === term.cols * cell().w)
+      ?.fillStyle;
+
+  test('a theme change after the first frames redraws at once with the new colors', () => {
+    term.write('x');
+    render(term);
+    render(term, false);
+    const { ctx } = internals(term);
+    /** The calls made while setting the theme. */
+    const redraw = (theme: typeof term.options.theme) => {
+      ctx.calls = [];
+      term.options.theme = theme;
+      return ctx.calls;
+    };
+    const changed = redraw({ background: '#ffffff', foreground: '#000000', cursor: '#ff0000' });
+    expect(rowBackground(changed)).toBe('#ffffff');
+    expect(cursorRects(changed, 'rgb(255, 0, 0)')).toHaveLength(1);
+    expect(drawnText(term, changed)[0].fillStyle).toBe('rgb(0, 0, 0)');
+
+    const back = redraw({});
+    expect(rowBackground(back)).toBe('#1e1e1e');
+    expect(cursorRects(back)).toHaveLength(1);
   });
 
   test('cells with the default background use the color a program set (OSC 11)', () => {
     term.write('x');
+    render(term);
     term.write('\x1b]11;#102030\x07');
-    const { fills } = frame();
-    expect(fills.some((f) => f.style === 'rgb(16, 32, 48)' && f.x === 0 && f.y === 0)).toBe(true);
+    expect(rowBackground(render(term, false))).toBe('rgb(16, 32, 48)');
+  });
+});
+
+describe('canvas size', () => {
+  test('a fractional device pixel ratio does not resize the canvas every frame', () => {
+    const { renderer, canvas } = internals(term);
+    renderer.setDevicePixelRatio(1.25);
+    const cssWidth = Number.parseFloat(canvas.style.width);
+    expect(canvas.width).toBe(Math.round(cssWidth * 1.25));
+    render(term);
+    const resize = spyOn(renderer, 'resize');
+    try {
+      for (let i = 0; i < 3; i++) expect(repaintedRows(render(term, false))).toEqual([]);
+      expect(resize).not.toHaveBeenCalled();
+    } finally {
+      resize.mockRestore();
+    }
   });
 });
