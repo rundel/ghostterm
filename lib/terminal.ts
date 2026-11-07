@@ -640,7 +640,7 @@ export class Terminal implements ITerminalCore {
       // Clean up on error
       this.cleanupComponents();
       this.isOpen = false;
-      throw new Error(`Failed to open terminal: ${error}`);
+      throw new Error(`Failed to open terminal: ${error}`, { cause: error });
     }
 
     // Writes made before open() (xterm.js buffers them too)

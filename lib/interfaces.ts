@@ -36,8 +36,10 @@ export interface ITerminalOptions {
    */
   allowClipboardWrite?: boolean;
 
-  // Internal: Ghostty WASM instance (optional, for test isolation)
-  // If not provided, uses the module-level instance from init()
+  /**
+   * The libghostty-vt module to use, from `Ghostty.load()`, instead of the one `init()` loaded.
+   * Terminals given their own module don't need `init()` at all.
+   */
   ghostty?: Ghostty;
 }
 
