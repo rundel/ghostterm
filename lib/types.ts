@@ -614,6 +614,8 @@ export interface GhosttyCell {
   underline_color?: number;
   /** Overline (SGR 53). */
   overline?: boolean;
+  /** True when the cell has no background color of its own (the theme's shows). */
+  bg_default?: boolean;
   /** Inside the terminal's selection (viewport rows only). */
   selected?: boolean;
   /** The full grapheme cluster, for cells with grapheme_len > 0 (screen lines). */

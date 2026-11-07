@@ -601,9 +601,12 @@ export class CanvasRenderer {
       bg_b = cell.fg_b;
     }
 
-    // Only draw cell background if it's different from the default (black)
-    // This lets the theme background (drawn earlier) show through for default cells
-    const isDefaultBg = bg_r === 0 && bg_g === 0 && bg_b === 0;
+    // Cells without a background of their own show the theme background (drawn
+    // with the row), which keeps transparent themes transparent. Any explicit
+    // background is painted, black included; inverse always paints.
+    const isDefaultBg =
+      !(cell.flags & CellFlags.INVERSE) &&
+      (cell.bg_default ?? (bg_r === 0 && bg_g === 0 && bg_b === 0));
     if (!isDefaultBg) {
       this.ctx.fillStyle = this.rgbToCSS(bg_r, bg_g, bg_b);
       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);

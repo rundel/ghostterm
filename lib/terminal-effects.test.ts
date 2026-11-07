@@ -320,3 +320,49 @@ describe('keyboard selection', () => {
     expect(sent).toEqual(['\x1b[1;2C']);
   });
 });
+
+describe('cell backgrounds', () => {
+  /** Colors painted for row 0's cell backgrounds, by column. */
+  function paintedBackgrounds(t: Terminal): Map<number, string> {
+    const renderer = (t as any).renderer;
+    const ctx = renderer.ctx;
+    const painted = new Map<number, string>();
+    const fillRect = ctx.fillRect;
+    const w = renderer.charWidth;
+    ctx.fillRect = (x: number, y: number, width: number, h: number) => {
+      // Cell-sized fills on row 0 (skip the full-row clear)
+      if (y === 0 && Math.abs(width - w) < 0.5)
+        painted.set(Math.round(x / w), String(ctx.fillStyle));
+      return fillRect.call(ctx, x, y, width, h);
+    };
+    try {
+      renderer.render(t.wasmTerm, true, 0, t);
+    } finally {
+      ctx.fillRect = fillRect;
+    }
+    return painted;
+  }
+
+  test('an explicit black background is painted (on a light theme)', () => {
+    term.options.theme = { background: '#fdf6e3', foreground: '#586e75', black: '#000000' };
+    term.write('\x1b[40mX\x1b[0mY\x1b[48;2;0;0;0mZ\x1b[0m');
+    const line = term.wasmTerm!.getLine(0)!;
+    expect([line[0].bg_default, line[1].bg_default, line[2].bg_default]).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    const painted = paintedBackgrounds(term);
+    expect(painted.get(0)).toBe('rgb(0, 0, 0)');
+    expect(painted.has(1)).toBe(false); // default: the theme background shows
+    expect(painted.get(2)).toBe('rgb(0, 0, 0)');
+  });
+
+  test('default cells stay unpainted on a black theme too', () => {
+    term.options.theme = { background: '#000000' };
+    term.write('ab');
+    const painted = paintedBackgrounds(term);
+    // (column 2 holds the cursor block)
+    expect([painted.has(0), painted.has(1)]).toEqual([false, false]);
+  });
+});

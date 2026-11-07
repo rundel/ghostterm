@@ -1940,6 +1940,7 @@ export class GhosttyTerminal {
     cell.underline_color = undefined;
     cell.overline = false;
     cell.selected = false;
+    cell.bg_default = true;
   }
 
   /**
@@ -1961,6 +1962,7 @@ export class GhosttyTerminal {
 
     let fg = this.fgDefault;
     let bg = this.bgDefault;
+    let bgDefault = true;
     let flags = 0;
     let underlineStyle = UnderlineStyle.NONE;
     let underlineColor: number | undefined;
@@ -1971,7 +1973,11 @@ export class GhosttyTerminal {
       const ul = this.resolveStyleColor(style, L.style.underline);
       if (ul) underlineColor = (ul.r << 16) | (ul.g << 8) | ul.b;
       fg = this.resolveStyleColor(style, L.style.fg) ?? fg;
-      bg = this.resolveStyleColor(style, L.style.bg) ?? bg;
+      const styleBg = this.resolveStyleColor(style, L.style.bg);
+      if (styleBg) {
+        bg = styleBg;
+        bgDefault = false;
+      }
       const f = style.getUint16(L.style.flags, true);
       const sf = L.styleFlags;
       if (readBits(f, 0, sf.bold)) flags |= CellFlags.BOLD;
@@ -1985,12 +1991,14 @@ export class GhosttyTerminal {
     }
     if (tag === CellContent.BG_COLOR_PALETTE) {
       bg = this.paletteColor(readBits(lo, hi, L.cell.bgPalette));
+      bgDefault = false;
     } else if (tag === CellContent.BG_COLOR_RGB) {
       bg = {
         r: readBits(lo, hi, L.cell.bgR),
         g: readBits(lo, hi, L.cell.bgG),
         b: readBits(lo, hi, L.cell.bgB),
       };
+      bgDefault = false;
     }
 
     cell.fg_r = fg.r;
@@ -1999,6 +2007,7 @@ export class GhosttyTerminal {
     cell.bg_r = bg.r;
     cell.bg_g = bg.g;
     cell.bg_b = bg.b;
+    cell.bg_default = bgDefault;
     cell.flags = flags;
     const wide = readBits(lo, hi, L.cell.wide);
     cell.width = wide === CellWide.NARROW ? 1 : wide === CellWide.WIDE ? 2 : 0;
