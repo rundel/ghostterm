@@ -161,7 +161,7 @@ describe('Mouse reporting', () => {
 
   test('wheel in a full-screen app sends arrows that follow cursor key mode', () => {
     term.write('\x1b[?1049h\x1b[?1h'); // alternate screen + application cursor keys
-    mouse('wheel', 1, 1, { deltaY: -66 });
+    mouse('wheel', 1, 1, { deltaY: -2 * (term as any).renderer.charHeight }); // two lines
     expect(sent).toEqual(['\x1bOA', '\x1bOA']);
   });
 

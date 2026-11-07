@@ -181,10 +181,46 @@ describe('Terminal Scrolling', () => {
       });
       container.dispatchEvent(wheelEvent);
 
-      // Should send arrow up sequences (ESC[A)
-      expect(dataSent.length).toBeGreaterThan(0);
+      // One arrow up (ESC[A) per line the wheel moved, as the normal screen scrolls
+      const lineHeight = (terminal as any).renderer.charHeight;
       expect(dataSent.every((data) => data === '\x1B[A')).toBe(true);
-      expect(dataSent.length).toBeCloseTo(3, 1); // ~3 arrows per click
+      expect(dataSent.length).toBe(Math.trunc(100 / lineHeight));
+    });
+
+    test('line-mode wheels (Firefox) send one arrow per line', async () => {
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: 3, deltaMode: 1, bubbles: true, cancelable: true })
+      );
+      expect(dataSent).toEqual(['\x1B[B', '\x1B[B', '\x1B[B']);
+    });
+
+    test('small trackpad deltas add up to arrows', async () => {
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+      const lineHeight = (terminal as any).renderer.charHeight;
+      const step = lineHeight / 4;
+      for (let i = 0; i < 3; i++) {
+        container.dispatchEvent(
+          new WheelEvent('wheel', { deltaY: -step, bubbles: true, cancelable: true })
+        );
+      }
+      expect(dataSent).toEqual([]);
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -step, bubbles: true, cancelable: true })
+      );
+      expect(dataSent).toEqual(['\x1B[A']);
+    });
+
+    test('no arrows when the program turned alternate scroll (mode 1007) off', async () => {
+      terminal.write('\x1b[?1007l');
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+      const wheel = new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true });
+      container.dispatchEvent(wheel);
+      expect(dataSent).toEqual([]);
+      expect(wheel.defaultPrevented).toBe(true);
     });
 
     test('should send arrow down sequences on wheel down in alternate screen', async () => {
@@ -200,9 +236,9 @@ describe('Terminal Scrolling', () => {
       container.dispatchEvent(wheelEvent);
 
       // Should send arrow down sequences (ESC[B)
-      expect(dataSent.length).toBeGreaterThan(0);
+      const lineHeight = (terminal as any).renderer.charHeight;
       expect(dataSent.every((data) => data === '\x1B[B')).toBe(true);
-      expect(dataSent.length).toBeCloseTo(3, 1); // ~3 arrows per click
+      expect(dataSent.length).toBe(Math.trunc(100 / lineHeight));
     });
 
     test('should not scroll viewport in alternate screen', async () => {
@@ -220,20 +256,19 @@ describe('Terminal Scrolling', () => {
       expect(terminal.viewportY).toBe(initialViewportY);
     });
 
-    test('should cap arrow count at 5 per wheel event', async () => {
+    test('should cap arrow count at a screenful per wheel event', async () => {
       const dataSent: string[] = [];
       terminal.onData((data) => dataSent.push(data));
 
       // Simulate very large wheel delta
       const wheelEvent = new WheelEvent('wheel', {
-        deltaY: -1000, // Very large delta
+        deltaY: -10000, // Very large delta
         bubbles: true,
         cancelable: true,
       });
       container.dispatchEvent(wheelEvent);
 
-      // Should cap at 5 arrows
-      expect(dataSent.length).toBeLessThanOrEqual(5);
+      expect(dataSent.length).toBe(terminal.rows);
     });
   });
 
@@ -326,9 +361,20 @@ describe('Terminal Scrolling', () => {
       expect(customHandlerCalled).toBe(true);
     });
 
+    test('custom handler returning false stops the terminal handling the wheel', async () => {
+      terminal.attachCustomWheelEventHandler(() => false);
+      terminal.write('\x1B[?1049h');
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+      const wheelEvent = new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true });
+      container.dispatchEvent(wheelEvent);
+      expect(dataSent).toEqual([]);
+      expect(wheelEvent.defaultPrevented).toBe(false);
+    });
+
     test('custom handler can delegate to default behavior', async () => {
       terminal.attachCustomWheelEventHandler(() => {
-        return false; // Don't override, use default
+        return true; // xterm.js semantics: true lets the terminal handle it
       });
 
       // Enter alternate screen
@@ -730,48 +776,77 @@ describe('Custom Wheel Event Handler', () => {
     expect((term as any).customWheelEventHandler).toBeUndefined();
   });
 
-  test('custom wheel handler should block default scrolling when returning true', async () => {
+  test('custom wheel handler should block default scrolling when returning false', async () => {
     let handlerCalled = false;
 
     term.attachCustomWheelEventHandler(() => {
       handlerCalled = true;
-      return true; // Block default
+      return false; // xterm.js semantics: stop processing
     });
 
-    // Write content
     for (let i = 0; i < 50; i++) {
       term.write(`Line ${i}\r\n`);
     }
 
-    // Simulate wheel event
-    const wheelEvent = new WheelEvent('wheel', { deltaY: 100 });
+    const wheelEvent = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
     container.dispatchEvent(wheelEvent);
 
     expect(handlerCalled).toBe(true);
-    // Viewport should not have changed (blocked)
-    expect((term as any).viewportY).toBe(0);
+    expect(term.viewportY).toBe(0);
+    expect(wheelEvent.defaultPrevented).toBe(false);
   });
 
-  test('custom wheel handler should allow default scrolling when returning false', async () => {
+  test('custom wheel handler should allow default scrolling when returning true', async () => {
     let handlerCalled = false;
 
     term.attachCustomWheelEventHandler(() => {
       handlerCalled = true;
-      return false; // Allow default
+      return true;
     });
 
-    // Write content
     for (let i = 0; i < 50; i++) {
       term.write(`Line ${i}\r\n`);
     }
 
-    // Simulate wheel event (scroll down)
-    const wheelEvent = new WheelEvent('wheel', { deltaY: 100 });
+    const wheelEvent = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
     container.dispatchEvent(wheelEvent);
 
     expect(handlerCalled).toBe(true);
-    // Viewport should have changed (default behavior)
-    // Note: Due to scrolling at bottom, it won't change. Let's scroll up first.
+    expect(term.viewportY).toBeGreaterThan(0);
+    expect(wheelEvent.defaultPrevented).toBe(true);
+  });
+
+  test('wheel deltaMode LINE and PAGE scroll by lines and pages', async () => {
+    term.options.smoothScrollDuration = 0;
+    for (let i = 0; i < 100; i++) {
+      term.write(`Line ${i}\r\n`);
+    }
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1 }));
+    expect(term.viewportY).toBe(3);
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, deltaMode: 2 }));
+    expect(term.viewportY).toBe(3 + term.rows);
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: 2, deltaMode: 1 }));
+    expect(term.viewportY).toBe(1 + term.rows);
+  });
+
+  test('pixel deltas scroll one line per cell height', async () => {
+    term.options.smoothScrollDuration = 0;
+    for (let i = 0; i < 100; i++) {
+      term.write(`Line ${i}\r\n`);
+    }
+    const lineHeight = (term as any).renderer.charHeight;
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -4 * lineHeight }));
+    expect(term.viewportY).toBe(4);
+  });
+
+  test('wheel scrolls accumulate while a smooth scroll runs', async () => {
+    for (let i = 0; i < 100; i++) {
+      term.write(`Line ${i}\r\n`);
+    }
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -5, deltaMode: 1 }));
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -5, deltaMode: 1 }));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(term.viewportY).toBe(10);
   });
 
   test('wheel events should scroll terminal by default', async () => {

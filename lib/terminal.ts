@@ -167,6 +167,8 @@ export class Terminal implements ITerminalCore {
   /** The top line last reported by onScroll. */
   private lastScrollTop = 0;
   private customWheelEventHandler?: (event: WheelEvent) => boolean;
+  /** Wheel movement on the alternate screen not yet sent as an arrow key. */
+  private wheelLineRemainder = 0;
   /** Cursor position last reported by onCursorMove. */
   private lastCursor = { x: 0, y: 0 };
   /** Whether the alternate screen was active, for buffer.onBufferChange. */
@@ -1008,8 +1010,10 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Attach a custom wheel event handler (Phase 2)
-   * Returns true to prevent default handling
+   * Attach a custom wheel event handler, called before the terminal scrolls.
+   * As in xterm.js, return false to stop the terminal handling the event,
+   * true to let it continue. Not called for wheel events reported to a
+   * program that tracks the mouse.
    */
   public attachCustomWheelEventHandler(
     customWheelEventHandler?: (event: WheelEvent) => boolean
@@ -1572,8 +1576,22 @@ export class Terminal implements ITerminalCore {
     found.activate(e);
   };
 
+  /** A wheel event's vertical movement in lines (fractional for trackpads). */
+  private wheelDeltaLines(e: WheelEvent): number {
+    switch (e.deltaMode) {
+      case WheelEvent.DOM_DELTA_LINE:
+        return e.deltaY;
+      case WheelEvent.DOM_DELTA_PAGE:
+        return e.deltaY * this.rows;
+      default:
+        // Pixels: one line per cell height
+        return e.deltaY / (this.renderer?.getMetrics().height || 20);
+    }
+  }
+
   /**
-   * Handle wheel events for scrolling (Phase 2)
+   * Handle wheel events: scroll the history, or on the alternate screen send
+   * arrow keys (alternate scroll, mode 1007).
    */
   private handleWheel = (e: WheelEvent): void => {
     // A program tracking the mouse gets the wheel as mouse reports. This
@@ -1583,59 +1601,38 @@ export class Terminal implements ITerminalCore {
       return;
     }
 
+    // As in xterm.js, a custom handler returning false stops all processing
+    // (and the page may scroll).
+    if (this.customWheelEventHandler && this.customWheelEventHandler(e) === false) {
+      return;
+    }
+
     // Always prevent default browser scrolling
     e.preventDefault();
     e.stopPropagation();
 
-    // Allow custom handler to override
-    if (this.customWheelEventHandler && this.customWheelEventHandler(e)) {
-      return;
-    }
+    const deltaLines = this.wheelDeltaLines(e);
+    if (deltaLines === 0) return;
 
-    // Check if in alternate screen mode (vim, less, htop, etc.)
-    const isAltScreen = this.wasmTerm?.isAlternateScreen() ?? false;
-
-    if (isAltScreen) {
-      // Alternate screen: send arrow keys to the application
-      // Applications like vim handle scrolling internally
-      // Standard: ~3 arrow presses per wheel "click"
-      const direction = e.deltaY > 0 ? 'down' : 'up';
-      const count = Math.min(Math.abs(Math.round(e.deltaY / 33)), 5); // Cap at 5
-
+    if (this.wasmTerm?.isAlternateScreen()) {
+      // Full-screen programs (less, vim, htop) have no history to scroll;
+      // with alternate scroll (mode 1007, on by default) they get arrow keys.
+      if (!this.wasmTerm.getMode(1007, false)) return;
+      // Fractions add up, so trackpads and small deltas still move.
+      this.wheelLineRemainder += deltaLines;
+      const count = Math.trunc(this.wheelLineRemainder);
+      if (count === 0) return;
+      this.wheelLineRemainder -= count;
       // Encoded by libghostty, so application cursor mode (ESC O A) is honored.
-      const key = direction === 'up' ? Key.UP : Key.DOWN;
-      for (let i = 0; i < count; i++) {
+      const key = count < 0 ? Key.UP : Key.DOWN;
+      for (let i = 0; i < Math.min(Math.abs(count), this.rows); i++) {
         this.inputHandler?.sendKey(key);
       }
     } else {
-      // Normal screen: scroll viewport through history with smooth scrolling
-      // Handle different deltaMode values for better trackpad/mouse support
-      let deltaLines: number;
-
-      if (e.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
-        // Pixel mode (trackpads): convert pixels to lines
-        // Use actual line height from renderer for accurate conversion
-        const lineHeight = this.renderer?.getMetrics()?.height ?? 20;
-        deltaLines = e.deltaY / lineHeight;
-      } else if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        // Line mode (some mice): use directly
-        deltaLines = e.deltaY;
-      } else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        // Page mode (rare): convert pages to lines
-        deltaLines = e.deltaY * this.rows;
-      } else {
-        // Fallback: assume pixel mode with legacy divisor
-        deltaLines = e.deltaY / 33;
-      }
-
-      // Use smooth scrolling for any amount (no rounding needed)
-      if (deltaLines !== 0) {
-        // Calculate target position
-        // deltaY > 0 = scroll down (decrease viewportY)
-        // deltaY < 0 = scroll up (increase viewportY)
-        const targetY = this.viewportY - deltaLines;
-        this.smoothScrollTo(targetY);
-      }
+      // Smooth scroll toward a target that accumulates while it runs.
+      // deltaY > 0 scrolls down (toward the bottom, a smaller offset).
+      this.wheelLineRemainder = 0;
+      this.smoothScrollTo(this.targetViewportY - deltaLines);
     }
   };
 
