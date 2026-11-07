@@ -4,73 +4,11 @@
  * Main entry point following xterm.js conventions
  */
 
-import { Ghostty } from './ghostty';
-
-// Module-level Ghostty instance (initialized by init())
-let ghosttyInstance: Ghostty | null = null;
-
-/**
- * Initialize the ghostterm library by loading the WASM module.
- * Must be called before creating any Terminal instances.
- *
- * This creates a shared WASM instance that all Terminal instances will use.
- * For test isolation, pass a Ghostty instance directly to Terminal constructor.
- *
- * @example
- * ```typescript
- * import { init, Terminal } from 'ghostterm';
- *
- * await init();
- * const term = new Terminal();
- * term.open(document.getElementById('terminal'));
- * ```
- *
- * To use the speed-optimized module instead of the default size-optimized one, pass its URL.
- * With Vite, for example:
- *
- * ```typescript
- * import fastWasm from 'ghostterm/ghostty-vt-fast.wasm?url';
- *
- * await init({ wasmPath: fastWasm });
- * ```
- */
-export async function init(options: InitOptions = {}): Promise<void> {
-  if (ghosttyInstance) {
-    return; // Already initialized
-  }
-  ghosttyInstance = await Ghostty.load(options.wasmPath);
-}
-
-export interface InitOptions {
-  /**
-   * Where to load the libghostty-vt module from. Defaults to the size-optimized `ghostty-vt.wasm`
-   * bundled into the library. `ghostterm/ghostty-vt-fast.wasm` is the speed-optimized build:
-   * the same features, 10-20% faster on output heavy in escape sequences, and about 1.5x larger.
-   */
-  wasmPath?: string | URL;
-}
-
-/**
- * Get the initialized Ghostty instance.
- * Throws if init() hasn't been called.
- * @internal
- */
-export function getGhostty(): Ghostty {
-  if (!ghosttyInstance) {
-    throw new Error(
-      'ghostterm not initialized. Call init() before creating Terminal instances.\n' +
-        'Example:\n' +
-        '  import { init, Terminal } from "ghostterm";\n' +
-        '  await init();\n' +
-        '  const term = new Terminal();\n\n' +
-        'For tests, pass a Ghostty instance directly:\n' +
-        '  import { Ghostty, Terminal } from "ghostterm";\n' +
-        '  const ghostty = await Ghostty.load();\n' +
-        '  const term = new Terminal({ ghostty });'
-    );
-  }
-  return ghosttyInstance;
-}
+export { init } from './init';
+export type { InitOptions } from './init';
+// Not public: terminal.ts still imports getGhostty from here. Once it imports from './init',
+// drop this line.
+export { getGhostty } from './init';
 
 // Main Terminal class
 export { Terminal } from './terminal';
@@ -86,6 +24,10 @@ export type {
   IBufferRange,
   IKeyEvent,
   IUnicodeVersionProvider,
+  IBufferNamespace,
+  IBuffer,
+  IBufferLine,
+  IBufferCell,
 } from './interfaces';
 
 // Ghostty WASM components (for advanced usage)
@@ -97,8 +39,19 @@ export {
   DirtyState,
   KeyEncoderOption,
   FormatterExtras,
+  MouseAction,
+  MouseButton,
+  SelectionAutoscroll,
 } from './ghostty';
 export type {
+  MouseEncoder,
+  MouseGeometry,
+  SelectionAdjust,
+  SelectionGeometry,
+  SelectionGesture,
+  SelectionRange,
+  TerminalColors,
+  TerminalSearch,
   ClipboardLocation,
   ClipboardWriteRequest,
   GhosttyOptimizeMode,
@@ -108,12 +61,12 @@ export type {
   TerminalEffects,
   TerminalNotification,
 } from './ghostty';
-export { Key, KeyAction, Mods } from './types';
+export { Key, KeyAction, Mods, UnderlineStyle } from './types';
 export type { KeyEvent, GhosttyCell, RGB, Cursor, TerminalHandle } from './types';
 
 // Low-level components (for custom integrations)
 export { CanvasRenderer } from './renderer';
-export type { RendererOptions, FontMetrics, IRenderable } from './renderer';
+export type { RendererOptions, FontMetrics, IRenderable, HighlightRange } from './renderer';
 export { InputHandler } from './input-handler';
 export { EventEmitter } from './event-emitter';
 export { SelectionManager } from './selection-manager';
