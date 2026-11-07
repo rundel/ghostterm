@@ -1381,17 +1381,17 @@ describe('Buffer Access API', () => {
     expect(String.fromCodePoint(firstCell.codepoint)).toBe('M');
   });
 
-  test('isRowWrapped() returns false for normal line breaks', async () => {
+  test('buffer lines: isWrapped returns false for normal line breaks', async () => {
     if (!container) throw new Error('DOM environment not available - check happydom setup');
 
     term.open(container!);
     term.write('Line 1\r\nLine 2\r\n');
 
-    expect(term.wasmTerm?.isRowWrapped(0)).toBe(false);
-    expect(term.wasmTerm?.isRowWrapped(1)).toBe(false);
+    expect(term.buffer.active.getLine(0)!.isWrapped).toBe(false);
+    expect(term.buffer.active.getLine(1)!.isWrapped).toBe(false);
   });
 
-  test('isRowWrapped() detects wrapped lines', async () => {
+  test('buffer lines: isWrapped detects wrapped lines', async () => {
     if (typeof document === 'undefined')
       throw new Error('DOM environment not available - check happydom setup');
 
@@ -1405,26 +1405,26 @@ describe('Buffer Access API', () => {
       narrowTerm.write('This is a very long line that will definitely wrap');
 
       // First line should not be wrapped (start of line)
-      expect(narrowTerm.wasmTerm?.isRowWrapped(0)).toBe(false);
+      expect(narrowTerm.buffer.active.getLine(0)!.isWrapped).toBe(false);
 
       // Second line should be wrapped (continuation)
-      expect(narrowTerm.wasmTerm?.isRowWrapped(1)).toBe(true);
+      expect(narrowTerm.buffer.active.getLine(1)!.isWrapped).toBe(true);
     } finally {
       narrowTerm.dispose();
     }
   });
 
-  test('isRowWrapped() handles edge cases', async () => {
+  test('buffer lines: isWrapped handles edge cases', async () => {
     if (!container) throw new Error('DOM environment not available - check happydom setup');
 
     term.open(container!);
 
     // Row 0 can never be wrapped (nothing to wrap from)
-    expect(term.wasmTerm?.isRowWrapped(0)).toBe(false);
+    expect(term.buffer.active.getLine(0)!.isWrapped).toBe(false);
 
-    // Out of bounds returns false
-    expect(term.wasmTerm?.isRowWrapped(-1)).toBe(false);
-    expect(term.wasmTerm?.isRowWrapped(999)).toBe(false);
+    // Out of bounds there is no line
+    expect(term.buffer.active.getLine(-1)).toBeUndefined();
+    expect(term.buffer.active.getLine(999)).toBeUndefined();
   });
 });
 
@@ -2849,39 +2849,34 @@ describe('Grapheme Cluster Support', () => {
     term.dispose();
   });
 
-  test('getGraphemeString returns simple characters correctly', async () => {
+  test('buffer cells return simple characters', async () => {
     const term = await createIsolatedTerminal();
     term.open(container!);
     term.write('Test');
 
-    // Test basic ASCII
-    const grapheme = term.wasmTerm!.getGraphemeString(0, 0);
-    expect(grapheme).toBe('T');
+    expect(term.buffer.active.getLine(0)!.getCell(0)!.getChars()).toBe('T');
 
     term.dispose();
   });
 
-  test('getGrapheme returns null for invalid coordinates', async () => {
+  test('screen lines past the end are null', async () => {
     const term = await createIsolatedTerminal();
     term.open(container!);
     term.write('Test');
 
-    // Test out of bounds
-    const result = term.wasmTerm!.getGrapheme(100, 100);
-    expect(result).toBeNull();
+    expect(term.wasmTerm!.getScreenLine(100)).toBeNull();
 
     term.dispose();
   });
 
-  test('getGrapheme returns array of codepoints', async () => {
+  test('buffer cells return a base character with its combining marks', async () => {
     const term = await createIsolatedTerminal();
     term.open(container!);
-    term.write('A');
+    term.write('éx');
 
-    const codepoints = term.wasmTerm!.getGrapheme(0, 0);
-    expect(codepoints).not.toBeNull();
-    expect(codepoints!.length).toBeGreaterThanOrEqual(1);
-    expect(codepoints![0]).toBe(0x41); // 'A'
+    const line = term.buffer.active.getLine(0)!;
+    expect(line.getCell(0)!.getChars()).toBe('é');
+    expect(line.getCell(1)!.getChars()).toBe('x');
 
     term.dispose();
   });

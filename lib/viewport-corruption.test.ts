@@ -159,7 +159,9 @@ describe('viewport scroll-growth corruption', () => {
           expect(viewportText).toBe(lineText);
 
           if (viewportText.length === 0) {
-            expect(term.wasmTerm!.isRowWrapped(row)).toBe(false);
+            expect(
+              term.wasmTerm!.isScreenRowWrapped(term.wasmTerm!.getScrollbackLength() + row)
+            ).toBe(false);
           }
 
           const markers = viewportText.match(MARKER_PATTERN) ?? [];

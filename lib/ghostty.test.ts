@@ -103,7 +103,6 @@ describe('terminal replies (write_pty)', () => {
     const term = ghostty.createTerminal(80, 24);
     try {
       term.write('abc\x1b[6n');
-      expect(term.hasResponse()).toBe(true);
       expect(term.readResponse()).toBe('\x1b[1;4R');
       expect(term.readResponse()).toBeNull();
     } finally {
@@ -187,7 +186,7 @@ describe('viewport cells', () => {
       term.write(family);
       const row = term.getLine(0)!;
       expect(row[0].grapheme_len).toBeGreaterThan(0);
-      expect(term.getGraphemeString(0, 0)).toBe(family);
+      expect(row[0].chars).toBe(family);
     } finally {
       term.free();
     }
@@ -273,20 +272,45 @@ describe('viewport cells', () => {
 });
 
 describe('theme configuration', () => {
+  const fg = (c: { fg_r: number; fg_g: number; fg_b: number }) => [c.fg_r, c.fg_g, c.fg_b];
+
   test('applies default colors and palette overrides', () => {
-    const palette = new Array(16).fill(0);
+    const palette: (number | undefined)[] = [];
     palette[1] = 0x112233;
-    const term = ghostty.createTerminal(20, 5, {
-      fgColor: 0xaabbcc,
-      bgColor: 0x010203,
-      palette,
-    });
+    const term = ghostty.createTerminal(20, 5);
     try {
-      term.write('\x1b[31mR\x1b[0mD');
+      term.setColors({ foreground: 0xaabbcc, background: 0x010203, cursor: 0x445566, palette });
+      term.write('\x1b[31mR\x1b[0mD\x1b[32mG');
       const row = term.getLine(0)!;
-      expect([row[0].fg_r, row[0].fg_g, row[0].fg_b]).toEqual([0x11, 0x22, 0x33]);
-      expect([row[1].fg_r, row[1].fg_g, row[1].fg_b]).toEqual([0xaa, 0xbb, 0xcc]);
-      expect(term.getColors().background).toEqual({ r: 1, g: 2, b: 3 });
+      expect(fg(row[0])).toEqual([0x11, 0x22, 0x33]);
+      expect(fg(row[1])).toEqual([0xaa, 0xbb, 0xcc]);
+      expect(term.getColors()).toEqual({
+        background: { r: 1, g: 2, b: 3 },
+        foreground: { r: 0xaa, g: 0xbb, b: 0xcc },
+        cursor: { r: 0x44, g: 0x55, b: 0x66 },
+      });
+
+      // Unset palette entries keep the built-in palette; no palette restores it.
+      const builtinGreen = fg(row[2]);
+      term.setColors({});
+      term.write('\r\n');
+      const reset = term.getLine(0)!;
+      expect(fg(reset[0])).not.toEqual([0x11, 0x22, 0x33]);
+      expect(fg(reset[2])).toEqual(builtinGreen);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('theme changes apply to cells already drawn', () => {
+    const term = ghostty.createTerminal(20, 5);
+    try {
+      term.write('\x1b[34mB');
+      term.getViewport();
+      term.markClean();
+      term.setColors({ palette: [undefined, undefined, undefined, undefined, 0x0000aa] });
+      expect(term.isRowDirty(0)).toBe(true);
+      expect(fg(term.getViewport()[0])).toEqual([0, 0, 0xaa]);
     } finally {
       term.free();
     }
@@ -338,8 +362,8 @@ describe('grid access', () => {
     try {
       term.write('\x1b]8;;https://ghostty.org\x1b\\link\x1b]8;;\x1b\\ plain');
       expect(term.getLine(0)![0].hyperlink_id).toBeGreaterThan(0);
-      expect(term.getHyperlinkUri(0, 0)).toBe('https://ghostty.org');
-      expect(term.getHyperlinkUri(0, 6)).toBeNull();
+      expect(term.getScreenHyperlinkUri(0, 0)).toBe('https://ghostty.org');
+      expect(term.getScreenHyperlinkUri(0, 6)).toBeNull();
 
       term.write('\r\n\r\n\r\n');
       expect(term.getScreenHyperlinkUri(0, 1)).toBe('https://ghostty.org');
@@ -352,9 +376,9 @@ describe('grid access', () => {
     const term = ghostty.createTerminal(10, 5);
     try {
       term.write('0123456789abc\r\nnext');
-      expect(term.isRowWrapped(0)).toBe(false);
-      expect(term.isRowWrapped(1)).toBe(true);
-      expect(term.isRowWrapped(2)).toBe(false);
+      expect(term.isScreenRowWrapped(0)).toBe(false);
+      expect(term.isScreenRowWrapped(1)).toBe(true);
+      expect(term.isScreenRowWrapped(2)).toBe(false);
     } finally {
       term.free();
     }
@@ -456,8 +480,8 @@ describe('library-owned viewport', () => {
       const cursor = term.getCursor();
       expect([cursor.x, cursor.y]).toEqual([6, 2]);
       expect(cursor.viewportY).toBe(-1); // scrolled out of view
-      expect(term.getGraphemeString(2, 0)).toBe('p');
-      expect(term.getViewportGraphemeString(0, 5)).toBe('3');
+      expect(term.getLine(2)![0].codepoint).toBe(0x70);
+      expect(term.getViewportLine(0)![5].codepoint).toBe(0x33);
     } finally {
       term.free();
     }

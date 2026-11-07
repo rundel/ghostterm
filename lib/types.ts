@@ -4,103 +4,8 @@
  */
 
 // ============================================================================
-// SGR (Select Graphic Rendition) Types
-// ============================================================================
-
-/**
- * SGR attribute tags - identifies the type of attribute
- * From include/ghostty/vt/sgr.h
- */
-export enum SgrAttributeTag {
-  UNSET = 0,
-  UNKNOWN = 1,
-  BOLD = 2,
-  RESET_BOLD = 3,
-  ITALIC = 4,
-  RESET_ITALIC = 5,
-  FAINT = 6,
-  RESET_FAINT = 7,
-  UNDERLINE = 8,
-  RESET_UNDERLINE = 9,
-  BLINK = 10,
-  RESET_BLINK = 11,
-  INVERSE = 12,
-  RESET_INVERSE = 13,
-  INVISIBLE = 14,
-  RESET_INVISIBLE = 15,
-  STRIKETHROUGH = 16,
-  RESET_STRIKETHROUGH = 17,
-  FG_8 = 18, // 8-color (0-7)
-  FG_16 = 19, // 16-color (0-15)
-  FG_256 = 20, // 256-color palette
-  FG_RGB = 21, // RGB color
-  FG_DEFAULT = 22, // Reset to default
-  BG_8 = 23, // Background 8-color
-  BG_16 = 24, // Background 16-color
-  BG_256 = 25, // Background 256-color
-  BG_RGB = 26, // Background RGB
-  BG_DEFAULT = 27, // Reset background
-  UNDERLINE_COLOR_8 = 28,
-  UNDERLINE_COLOR_16 = 29,
-  UNDERLINE_COLOR_256 = 30,
-  UNDERLINE_COLOR_RGB = 31,
-  UNDERLINE_COLOR_DEFAULT = 32,
-}
-
-export interface RGBColor {
-  r: number;
-  g: number;
-  b: number;
-}
-
-export type SgrAttribute =
-  | { tag: SgrAttributeTag.BOLD }
-  | { tag: SgrAttributeTag.RESET_BOLD }
-  | { tag: SgrAttributeTag.ITALIC }
-  | { tag: SgrAttributeTag.RESET_ITALIC }
-  | { tag: SgrAttributeTag.FAINT }
-  | { tag: SgrAttributeTag.RESET_FAINT }
-  | { tag: SgrAttributeTag.UNDERLINE }
-  | { tag: SgrAttributeTag.RESET_UNDERLINE }
-  | { tag: SgrAttributeTag.BLINK }
-  | { tag: SgrAttributeTag.RESET_BLINK }
-  | { tag: SgrAttributeTag.INVERSE }
-  | { tag: SgrAttributeTag.RESET_INVERSE }
-  | { tag: SgrAttributeTag.INVISIBLE }
-  | { tag: SgrAttributeTag.RESET_INVISIBLE }
-  | { tag: SgrAttributeTag.STRIKETHROUGH }
-  | { tag: SgrAttributeTag.RESET_STRIKETHROUGH }
-  | { tag: SgrAttributeTag.FG_8; color: number }
-  | { tag: SgrAttributeTag.FG_16; color: number }
-  | { tag: SgrAttributeTag.FG_256; color: number }
-  | { tag: SgrAttributeTag.FG_RGB; color: RGBColor }
-  | { tag: SgrAttributeTag.FG_DEFAULT }
-  | { tag: SgrAttributeTag.BG_8; color: number }
-  | { tag: SgrAttributeTag.BG_16; color: number }
-  | { tag: SgrAttributeTag.BG_256; color: number }
-  | { tag: SgrAttributeTag.BG_RGB; color: RGBColor }
-  | { tag: SgrAttributeTag.BG_DEFAULT }
-  | { tag: SgrAttributeTag.UNDERLINE_COLOR_RGB; color: RGBColor }
-  | { tag: SgrAttributeTag.UNDERLINE_COLOR_DEFAULT }
-  | { tag: SgrAttributeTag.UNKNOWN; params: number[] };
-
-// ============================================================================
 // Key Encoder Types
 // ============================================================================
-
-/**
- * Kitty keyboard protocol flags
- * From include/ghostty/vt/key/encoder.h
- */
-export enum KittyKeyFlags {
-  DISABLED = 0,
-  DISAMBIGUATE = 1 << 0, // Disambiguate escape codes
-  REPORT_EVENTS = 1 << 1, // Report press and release
-  REPORT_ALTERNATES = 1 << 2, // Report alternate key codes
-  REPORT_ALL = 1 << 3, // Report all events
-  REPORT_ASSOCIATED = 1 << 4, // Report associated text
-  ALL = 0x1f, // All flags enabled
-}
 
 /**
  * Key encoder options
@@ -523,7 +428,6 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
     bufLen: number,
     writtenPtr: number
   ): number;
-  ghostty_cell_get(cell: bigint, data: number, out: number): number;
   ghostty_row_get(row: bigint, data: number, out: number): number;
 
   // Render state
@@ -539,7 +443,6 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
   ghostty_render_state_row_get(iterator: number, data: number, out: number): number;
   ghostty_render_state_row_cells_new(allocator: number, slot: number): number;
   ghostty_render_state_row_cells_free(cells: number): void;
-  ghostty_render_state_row_cells_next(cells: number): boolean;
   ghostty_render_state_row_cells_select(cells: number, x: number): number;
   ghostty_render_state_row_cells_get(cells: number, data: number, out: number): number;
 }
@@ -581,14 +484,10 @@ export interface RenderStateColors {
 
 /**
  * Terminal configuration applied with ghostty_terminal_set() after creation.
- * All color values use 0xRRGGBB format. A value of 0 means "use default".
+ * scrollbackLimit counts lines; 0 keeps no scrollback.
  */
 export interface GhosttyTerminalConfig {
   scrollbackLimit?: number;
-  fgColor?: number;
-  bgColor?: number;
-  cursorColor?: number;
-  palette?: number[];
 }
 
 /**
@@ -667,15 +566,6 @@ export interface Cursor {
   visible: boolean;
 }
 
-/**
- * Terminal configuration (passed to ghostty_terminal_new_with_config)
- */
-export interface TerminalConfig {
-  scrollback_limit: number; // Number of scrollback lines (default: 10,000)
-  fg_color: RGB; // Default foreground color
-  bg_color: RGB; // Default background color
-}
-
 // ============================================================================
 // Link Detection System
 // ============================================================================
@@ -731,134 +621,4 @@ export interface ILinkProvider {
 
   /** Optional: called when terminal is disposed */
   dispose?(): void;
-}
-
-/**
- * Simplified buffer line interface for link providers
- */
-export interface IBufferLine {
-  /** Number of cells in this line */
-  length: number;
-
-  /** Get cell at position */
-  getCell(x: number): IBufferCell;
-
-  /** Get text content of the line */
-  translateToString(trimRight?: boolean, startColumn?: number, endColumn?: number): string;
-}
-
-/**
- * Simplified buffer cell interface for link providers
- */
-export interface IBufferCell {
-  /** Get the character codepoint */
-  getCodepoint(): number;
-
-  /** Get the hyperlink ID (0 = no link) */
-  getHyperlinkId(): number;
-
-  /** Get the width of the character (1 or 2 for wide chars) */
-  getWidth(): number;
-
-  /** Check if cell has specific flags */
-  isBold(): boolean;
-  isItalic(): boolean;
-  isDim(): boolean;
-}
-
-/**
- * Simplified terminal buffer interface for link providers
- */
-export interface IBuffer {
-  /** Number of rows in the buffer (viewport + scrollback) */
-  length: number;
-
-  /** Get line at absolute buffer position */
-  getLine(y: number): IBufferLine;
-}
-
-/**
- * Terminal buffer manager (active vs alternate screen)
- */
-export interface IBufferManager {
-  /** Currently active buffer */
-  active: IBuffer;
-
-  /** Normal screen buffer */
-  normal: IBuffer;
-
-  /** Alternate screen buffer (for fullscreen apps) */
-  alternate: IBuffer;
-}
-
-/**
- * Event system interface (xterm.js compatible)
- */
-export type IEvent<T> = (listener: (data: T) => void) => IDisposable;
-
-export interface IDisposable {
-  dispose(): void;
-}
-
-/**
- * Event emitter for custom events
- */
-export class EventEmitter<T> {
-  private listeners: Array<(data: T) => void> = [];
-
-  /** Subscribe to events */
-  public readonly event: IEvent<T> = (listener: (data: T) => void): IDisposable => {
-    this.listeners.push(listener);
-    return {
-      dispose: () => {
-        const index = this.listeners.indexOf(listener);
-        if (index !== -1) {
-          this.listeners.splice(index, 1);
-        }
-      },
-    };
-  };
-
-  /** Emit an event to all listeners */
-  public fire(data: T): void {
-    for (const listener of this.listeners) {
-      listener(data);
-    }
-  }
-
-  /** Remove all listeners */
-  public dispose(): void {
-    this.listeners = [];
-  }
-}
-
-/**
- * Terminal mode identifiers
- *
- * ANSI modes (use with is_ansi = true):
- * - INSERT = 4
- *
- * DEC modes (use with is_ansi = false):
- * - CURSOR_VISIBLE = 25
- * - MOUSE_TRACKING_NORMAL = 1000
- * - MOUSE_TRACKING_BUTTON = 1002
- * - MOUSE_TRACKING_ANY = 1003
- * - FOCUS_EVENTS = 1004
- * - ALT_SCREEN = 1047
- * - ALT_SCREEN_WITH_CURSOR = 1049
- * - BRACKETED_PASTE = 2004
- */
-export enum TerminalMode {
-  // ANSI modes
-  INSERT = 4,
-
-  // DEC modes
-  CURSOR_VISIBLE = 25,
-  MOUSE_TRACKING_NORMAL = 1000,
-  MOUSE_TRACKING_BUTTON = 1002,
-  MOUSE_TRACKING_ANY = 1003,
-  FOCUS_EVENTS = 1004,
-  ALT_SCREEN = 1047,
-  ALT_SCREEN_WITH_CURSOR = 1049,
-  BRACKETED_PASTE = 2004,
 }
