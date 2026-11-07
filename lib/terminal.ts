@@ -96,6 +96,8 @@ export class Terminal implements IAddonTerminal {
   private currentHoveredLink?: ILink;
   private mouseMoveThrottleTimeout?: number;
   private pendingMouseMove?: MouseEvent;
+  /** Where the pointer last moved over the canvas, to re-check the hovered link when content moves. */
+  private lastPointer?: { clientX: number; clientY: number };
 
   // Event emitters
   private dataEmitter = new EventEmitter<string>();
@@ -693,6 +695,7 @@ export class Terminal implements IAddonTerminal {
 
     // Invalidate link cache (content changed)
     this.linkDetector?.invalidateCache();
+    this.refreshHover();
 
     // The program may have asked for another pointer shape (OSC 22); a hovered
     // link keeps its pointer.
@@ -1169,6 +1172,18 @@ export class Terminal implements IAddonTerminal {
     if (top === this.lastScrollTop) return;
     this.lastScrollTop = top;
     this.scrollEmitter.fire(top);
+    this.refreshHover();
+  }
+
+  /**
+   * Re-check the link under a pointer that hasn't moved, after output or scrolling moved the
+   * content under it. Only needed while a link is hovered: otherwise its underline would stay
+   * on screen over whatever replaced it until the next mousemove.
+   */
+  private refreshHover(): void {
+    if (!this.lastPointer || !this.renderer) return;
+    if (!this.currentHoveredLink && this.renderer.getHoveredHyperlinkId() === 0) return;
+    this.processMouseMove(this.lastPointer);
   }
 
   private cancelScrollAnimation(): void {
@@ -1473,8 +1488,9 @@ export class Terminal implements IAddonTerminal {
   /**
    * Process mouse move for link detection (internal, called by throttled handler)
    */
-  private processMouseMove(e: MouseEvent): void {
+  private processMouseMove(e: { clientX: number; clientY: number }): void {
     if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
+    this.lastPointer = { clientX: e.clientX, clientY: e.clientY };
 
     // Convert mouse coordinates to terminal cell position
     const rect = this.canvas.getBoundingClientRect();
@@ -1528,28 +1544,22 @@ export class Terminal implements IAddonTerminal {
           if (this.canvas) {
             this.canvas.style.cursor = cursorStyle;
           }
+        }
 
-          // Update renderer for underline (for regex URLs without hyperlink_id)
-          if (this.renderer) {
-            if (link) {
-              const startViewportY = this.bufferRowToViewportRow(link.range.start.y);
-              const endViewportY = this.bufferRowToViewportRow(link.range.end.y);
-
-              // Only show underline if link is visible in viewport
-              if (startViewportY < this.rows && endViewportY >= 0) {
-                this.renderer.setHoveredLinkRange({
-                  startX: link.range.start.x,
-                  startY: Math.max(0, startViewportY),
-                  endX: link.range.end.x,
-                  endY: Math.min(this.rows - 1, endViewportY),
-                });
-              } else {
-                this.renderer.setHoveredLinkRange(null);
-              }
-            } else {
-              this.renderer.setHoveredLinkRange(null);
-            }
-          }
+        // The underline is kept in viewport rows, so recompute it even for the same link: the
+        // view may have scrolled under a pointer that stayed put.
+        if (!this.renderer) return;
+        const startViewportY = link ? this.bufferRowToViewportRow(link.range.start.y) : -1;
+        const endViewportY = link ? this.bufferRowToViewportRow(link.range.end.y) : -1;
+        if (link && startViewportY < this.rows && endViewportY >= 0) {
+          this.renderer.setHoveredLinkRange({
+            startX: link.range.start.x,
+            startY: Math.max(0, startViewportY),
+            endX: link.range.end.x,
+            endY: Math.min(this.rows - 1, endViewportY),
+          });
+        } else {
+          this.renderer.setHoveredLinkRange(null);
         }
       })
       .catch((err) => {
@@ -1561,6 +1571,7 @@ export class Terminal implements IAddonTerminal {
    * Handle mouse leave to clear link hover
    */
   private handleMouseLeave = (): void => {
+    this.lastPointer = undefined;
     // Clear hyperlink underline
     if (this.renderer && this.wasmTerm) {
       const previousHyperlinkId = this.renderer.getHoveredHyperlinkId();

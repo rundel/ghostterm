@@ -20,6 +20,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - Fixed the canvas redrawing every frame at fractional device pixel ratios, a stale cursor after hiding it or changing its shape or color, smooth scrolling pulling the view back after a jump, and `allowClipboardWrite: false` being ignored.
 - The canvas follows device pixel ratio changes and web fonts finishing loading; a block cursor covers the whole of a wide character. Emoji and other multi-codepoint characters draw faster.
 - `translateToString()` keeps spaces between words, the inactive buffer no longer shows the other screen, and buffer cells report their color modes (`isFgDefault`, `isBgRGB`, `isAttributeDefault`, ...).
+- A hovered link's underline no longer lingers when output or scrolling moves it out from under a pointer that stays still.
 - Programs that ask for the `default` pointer (OSC 22) get the arrow instead of the text cursor.
 - FitAddon no longer ignores `fit()` shortly after a resize or after the terminal was resized another way.
 - SerializeAddon keeps the normal screen and its scrollback while a full-screen program runs (honoring `scrollback`), and has new `excludeAltBuffer` and `range` options.

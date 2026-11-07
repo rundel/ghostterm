@@ -220,6 +220,30 @@ describe('link hover underlines', () => {
     expect(underlined()).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     expect(container.style.cursor).toBe('pointer');
   });
+
+  test('the underline goes when output replaces the link under a pointer that stays put', async () => {
+    term.write('see https://a.io ok\r\n');
+    hover(6, 0);
+    await settle();
+    expect(underlined()).toHaveLength(12);
+
+    // A full-screen program takes over; the pointer never moves.
+    term.write('\x1b[?1049h\x1b[Hplain text here');
+    await settle();
+    expect(underlined()).toEqual([]);
+    expect(container.style.cursor).not.toBe('pointer');
+  });
+
+  test('the underline follows a hovered OSC 8 link when the pointer stays put and it moves away', async () => {
+    term.write('\x1b]8;;https://example.com\x07here\x1b]8;;\x07\r\n');
+    hover(1, 0);
+    await settle();
+    expect(underlined()).toEqual([0, 1, 2, 3]);
+
+    term.write('\x1b[H\x1b[2Jnothing');
+    await settle();
+    expect(underlined()).toEqual([]);
+  });
 });
 
 describe('cursor', () => {
