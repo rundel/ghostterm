@@ -337,6 +337,24 @@ describe('Terminal', () => {
       term.dispose();
     });
 
+    test('options.scrollback applies after open()', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5, scrollback: 0 });
+      term.open(container!);
+      for (let i = 0; i < 20; i++) term.write(`${i}\r\n`);
+      expect(term.buffer.active.baseY).toBe(0);
+
+      term.options.scrollback = 1000;
+      for (let i = 0; i < 20; i++) term.write(`${i}\r\n`);
+      expect(term.buffer.active.baseY).toBe(20);
+      term.scrollToTop();
+
+      term.options.scrollback = 0;
+      term.write('more\r\n');
+      expect(term.buffer.active.baseY).toBe(0);
+      expect(term.viewportY).toBe(0);
+      term.dispose();
+    });
+
     test('resize() keeps options.cols/rows in step', async () => {
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container!);

@@ -1889,17 +1889,24 @@ export class GhosttyTerminal {
 
   /** Apply ghostterm's config: the scrollback limit. */
   private applyConfig(config?: GhosttyTerminalConfig): void {
+    this.setScrollbackLimit(config?.scrollbackLimit ?? 10000);
+  }
+
+  /**
+   * Lines of history to keep, at any time; 0 means no scrollback, as in
+   * xterm.js. Lowering it prunes existing history.
+   */
+  setScrollbackLimit(lines: number): void {
     const ex = this.exports;
-    // ghostterm's scrollback option counts lines; 0 means no scrollback, as in
-    // xterm.js. The library also caps history by bytes, 10,000 by default,
-    // which would otherwise win, so that cap is lifted. A line limit alone
-    // can't turn history off (a page of rows is always kept), but a byte
-    // limit of 0 does.
-    const scrollback = Math.max(0, Math.floor(config?.scrollbackLimit ?? 10000));
+    // The library also caps history by bytes, 10,000 by default, which would
+    // otherwise win, so that cap is lifted. A line limit alone can't turn
+    // history off (a page of rows is always kept), but a byte limit of 0 does.
+    const scrollback = Math.max(0, Math.floor(lines));
     this.mem.view().setUint32(this.scratch, scrollback === 0 ? 0 : SIZE_MAX, true);
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_BYTES, this.scratch);
     this.mem.view().setUint32(this.scratch, Math.min(scrollback, SIZE_MAX), true);
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, this.scratch);
+    this.pendingUpdate = true;
   }
 
   /**

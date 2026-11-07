@@ -282,6 +282,15 @@ export class Terminal implements ITerminalCore {
         }
         break;
 
+      case 'scrollback': {
+        this.wasmTerm?.setScrollbackLimit(this.options.scrollback);
+        // Lowering the limit can prune history under a scrolled view.
+        const scrollback = this.getScrollbackLength();
+        if (this.viewportY > scrollback) this.scrollToViewportOffset(scrollback);
+        this.fireScrollIfMoved();
+        break;
+      }
+
       case 'cols':
       case 'rows':
         // Redirect to resize method

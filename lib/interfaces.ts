@@ -10,7 +10,7 @@ export interface ITerminalOptions {
   cursorBlink?: boolean; // Default: false
   cursorStyle?: 'block' | 'underline' | 'bar';
   theme?: ITheme;
-  /** Lines of history to keep (default 10000, 0 = unlimited). Read when open() runs. */
+  /** Lines of history to keep (default 10000, 0 = none). Can be changed after open(). */
   scrollback?: number;
   fontSize?: number; // Default: 15
   fontFamily?: string; // Default: 'monospace'
