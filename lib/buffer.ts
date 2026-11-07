@@ -135,16 +135,17 @@ export class Buffer implements IBuffer {
     return wasmTerm.getCursor().y;
   }
 
+  /** Line index of the top of the viewport (xterm.js semantics). */
   get viewportY(): number {
-    // Get viewport offset from Terminal
-    // For now, return 0 (no scrollback navigation implemented yet)
-    return 0;
+    const offset = Math.max(0, Math.floor((this.terminal as any).viewportY ?? 0));
+    return Math.max(0, this.baseY - offset);
   }
 
+  /** Line index of the top of the active area: the scrollback length. */
   get baseY(): number {
-    // For normal buffer: 0
-    // For alternate buffer: 0 (alternate has no scrollback)
-    return 0;
+    const wasmTerm = this.getWasmTerm();
+    if (!wasmTerm || this.bufferType === 'alternate') return 0;
+    return wasmTerm.getScrollbackLength();
   }
 
   get length(): number {
@@ -171,27 +172,10 @@ export class Buffer implements IBuffer {
     }
 
     // Determine if accessing scrollback or visible screen
-    const scrollbackLength = wasmTerm.getScrollbackLength();
-    let cells: GhosttyCell[] | null;
-    let lineNumber: number;
-    let isWrapped: boolean;
-
-    if (this.bufferType === 'normal' && y < scrollbackLength) {
-      // Accessing scrollback
-      // WASM getScrollbackLine: offset 0 = oldest, offset (length-1) = newest
-      // Buffer coords: y=0 = oldest, y=(length-1) = newest
-      // So scrollbackOffset = y directly!
-      const scrollbackOffset = y;
-      cells = wasmTerm.getScrollbackLine(scrollbackOffset);
-      // TODO: We'd need WASM API to check if scrollback line is wrapped
-      // For now, assume not wrapped
-      isWrapped = false;
-    } else {
-      // Accessing visible screen
-      lineNumber = this.bufferType === 'normal' ? y - scrollbackLength : y;
-      cells = wasmTerm.getLine(lineNumber);
-      isWrapped = wasmTerm.isRowWrapped(lineNumber);
-    }
+    // libghostty addresses the whole buffer (scrollback, then the active
+    // area) by one absolute row, the same numbering as y here.
+    const cells = wasmTerm.getScreenLine(y);
+    const isWrapped = wasmTerm.isScreenRowWrapped(y);
 
     if (!cells) {
       return undefined;
@@ -302,6 +286,8 @@ export class BufferCell implements IBufferCell {
   }
 
   getChars(): string {
+    // Grapheme clusters (emoji sequences, combining marks) carry their text.
+    if (this.cell.chars) return this.cell.chars;
     const codepoint = this.cell.codepoint;
 
     // Return empty string for null character or invalid codepoints

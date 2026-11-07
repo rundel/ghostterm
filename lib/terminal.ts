@@ -1392,29 +1392,8 @@ export class Terminal implements ITerminalCore {
     const viewportRow = y; // Row in the viewport (0 to rows-1)
     let hyperlinkId = 0;
 
-    // When scrolled, fetch from scrollback or screen based on position
-    // NOTE: viewportY may be fractional during smooth scrolling. The renderer
-    // uses Math.floor(viewportY) when mapping viewport rows to scrollback vs
-    // screen; we mirror that logic here so link hit-testing matches what the
-    // user sees on screen.
-    let line: GhosttyCell[] | null = null;
-    const rawViewportY = this.getViewportY();
-    const viewportY = Math.max(0, Math.floor(rawViewportY));
-    if (viewportY > 0) {
-      const scrollbackLength = this.wasmTerm.getScrollbackLength();
-      if (viewportRow < viewportY) {
-        // Mouse is over scrollback content
-        const scrollbackOffset = scrollbackLength - viewportY + viewportRow;
-        line = this.wasmTerm.getScrollbackLine(scrollbackOffset);
-      } else {
-        // Mouse is over screen content (bottom part of viewport)
-        const screenRow = viewportRow - viewportY;
-        line = this.wasmTerm.getLine(screenRow);
-      }
-    } else {
-      // At bottom - just use screen buffer
-      line = this.wasmTerm.getLine(viewportRow);
-    }
+    // The viewport row as displayed (libghostty's viewport follows the scroll).
+    const line = this.wasmTerm.getViewportLine(viewportRow);
 
     if (line && x >= 0 && x < line.length) {
       hyperlinkId = line[x].hyperlink_id;
@@ -1430,29 +1409,7 @@ export class Terminal implements ITerminalCore {
     }
 
     // Check if there's a link at this position (for click handling and cursor)
-    // Buffer API expects absolute buffer coordinates (including scrollback)
-    // When scrolled, we need to adjust the buffer row based on viewportY
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    let bufferRow: number;
-
-    // Use floored viewportY for buffer mapping (must match renderer & selection)
-    const rawViewportYForBuffer = this.getViewportY();
-    const viewportYForBuffer = Math.max(0, Math.floor(rawViewportYForBuffer));
-
-    if (viewportYForBuffer > 0) {
-      // When scrolled, the buffer row depends on where in the viewport we are
-      if (viewportRow < viewportYForBuffer) {
-        // Mouse is over scrollback content
-        bufferRow = scrollbackLength - viewportYForBuffer + viewportRow;
-      } else {
-        // Mouse is over screen content (bottom part of viewport)
-        const screenRow = viewportRow - viewportYForBuffer;
-        bufferRow = scrollbackLength + screenRow;
-      }
-    } else {
-      // At bottom - buffer row is scrollback + screen row
-      bufferRow = scrollbackLength + viewportRow;
-    }
+    const bufferRow = this.viewportRowToBufferRow(viewportRow);
 
     // Make async call non-blocking - don't await
     this.linkDetector
@@ -1481,15 +1438,8 @@ export class Terminal implements ITerminalCore {
           // Update renderer for underline (for regex URLs without hyperlink_id)
           if (this.renderer) {
             if (link) {
-              // Convert buffer coordinates to viewport coordinates
-              const scrollbackLength = this.wasmTerm?.getScrollbackLength() || 0;
-
-              // Calculate viewport Y for start and end positions
-              // Use floored viewportY so overlay rows match renderer & selection
-              const rawViewportYForLinks = this.getViewportY();
-              const viewportYForLinks = Math.max(0, Math.floor(rawViewportYForLinks));
-              const startViewportY = link.range.start.y - scrollbackLength + viewportYForLinks;
-              const endViewportY = link.range.end.y - scrollbackLength + viewportYForLinks;
+              const startViewportY = this.bufferRowToViewportRow(link.range.start.y);
+              const endViewportY = this.bufferRowToViewportRow(link.range.end.y);
 
               // Only show underline if link is visible in viewport
               if (startViewportY < this.rows && endViewportY >= 0) {
@@ -1559,25 +1509,7 @@ export class Terminal implements ITerminalCore {
     const x = Math.floor((e.clientX - rect.left) / this.renderer.charWidth);
     const y = Math.floor((e.clientY - rect.top) / this.renderer.charHeight);
 
-    // Calculate buffer row (same logic as processMouseMove)
-    const viewportRow = y;
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    let bufferRow: number;
-
-    // Use floored viewportY for buffer mapping (must match renderer & selection)
-    const rawViewportYForClick = this.getViewportY();
-    const viewportYForClick = Math.max(0, Math.floor(rawViewportYForClick));
-
-    if (viewportYForClick > 0) {
-      if (viewportRow < viewportYForClick) {
-        bufferRow = scrollbackLength - viewportYForClick + viewportRow;
-      } else {
-        const screenRow = viewportRow - viewportYForClick;
-        bufferRow = scrollbackLength + screenRow;
-      }
-    } else {
-      bufferRow = scrollbackLength + viewportRow;
-    }
+    const bufferRow = this.viewportRowToBufferRow(y);
 
     // Get the link at this position
     const link = await this.linkDetector.getLinkAt(x, bufferRow);
@@ -1931,6 +1863,21 @@ export class Terminal implements ITerminalCore {
         return m ? { width: m.width, height: m.height } : null;
       },
     });
+  }
+
+  /**
+   * Viewport row to absolute buffer row (0 = oldest scrollback line), using
+   * the floored scroll offset the renderer draws with.
+   */
+  private viewportRowToBufferRow(viewportRow: number): number {
+    const offset = Math.max(0, Math.floor(this.getViewportY()));
+    return this.wasmTerm!.getScrollbackLength() - offset + viewportRow;
+  }
+
+  /** Absolute buffer row to viewport row (may be outside 0..rows-1). */
+  private bufferRowToViewportRow(bufferRow: number): number {
+    const offset = Math.max(0, Math.floor(this.getViewportY()));
+    return bufferRow - this.wasmTerm!.getScrollbackLength() + offset;
   }
 
   /** The pointer over the text: the program's choice (OSC 22), else a text cursor. */

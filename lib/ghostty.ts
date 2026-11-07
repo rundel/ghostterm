@@ -1869,6 +1869,9 @@ export class GhosttyTerminal {
       }
       this.decodeCell(cell, lo, hi, style, graphemeLen);
       cell.selected = selected !== null && x >= selected[0] && x <= selected[1];
+      if (cell.hyperlink_id) {
+        cell.hyperlink_id = this.linkId(this.hyperlinkAt(PointTag.VIEWPORT, x, y));
+      }
     }
   }
 
@@ -2046,11 +2049,6 @@ export class GhosttyTerminal {
     return Math.max(0, total - len - top);
   }
 
-  /** For compatibility with old API */
-  isDirty(): boolean {
-    return this.update() !== DirtyState.NONE;
-  }
-
   /**
    * Check if a full redraw is needed (screen change, resize, etc.)
    * Note: This calls update() to ensure fresh state. Safe to call multiple times.
@@ -2194,17 +2192,63 @@ export class GhosttyTerminal {
       }
       this.decodeCell(cell, lo, hi, style, graphemeLen);
       cell.selected = false;
+      if (graphemeLen > 0) cell.chars = this.graphemeString(tag, x, row);
+      if (cell.hyperlink_id) cell.hyperlink_id = this.linkId(this.hyperlinkAt(tag, x, row));
       cells.push(cell);
     }
     return cells;
   }
 
+  /** Hyperlink IDs by URI, so cells of the same link share one ID. */
+  private linkIds = new Map<string, number>();
+
+  /** A stable ID for a hyperlink URI (0 for none). */
+  private linkId(uri: string | null): number {
+    if (!uri) return 0;
+    let id = this.linkIds.get(uri);
+    if (id === undefined) {
+      id = this.linkIds.size + 1;
+      this.linkIds.set(uri, id);
+    }
+    return id;
+  }
+
+  private graphemeString(tag: number, x: number, y: number): string | undefined {
+    const cps = this.graphemeAt(tag, x, y);
+    return cps && cps.length > 0 ? String.fromCodePoint(...cps) : undefined;
+  }
+
+  /**
+   * A line of the screen by absolute row: 0 is the oldest scrollback row,
+   * rows after the scrollback are the active area. Cells carry their full
+   * grapheme cluster (`chars`) and a hyperlink ID that is the same for every
+   * cell of one link.
+   */
+  getScreenLine(row: number): GhosttyCell[] | null {
+    if (row < 0) return null;
+    return this.readGridLine(POINT_TAG_SCREEN, row);
+  }
+
+  /** Whether a screen row (absolute, as in getScreenLine) continues the previous one. */
+  isScreenRowWrapped(row: number): boolean {
+    return this.rowWraps(POINT_TAG_SCREEN, row);
+  }
+
+  /** The hyperlink URI at a screen cell (absolute row), or null. */
+  getScreenHyperlinkUri(row: number, col: number): string | null {
+    return this.hyperlinkAt(POINT_TAG_SCREEN, col, row);
+  }
+
   /** Check if a row in the active screen continues a soft-wrapped previous row */
   isRowWrapped(row: number): boolean {
+    return this.rowWraps(PointTag.ACTIVE, row);
+  }
+
+  private rowWraps(tag: number, row: number): boolean {
     const refPtr = this.scratch + 320;
     const rowPtr = this.scratch + 336;
     const outPtr = this.scratch + 352;
-    if (!this.gridRef(PointTag.ACTIVE, 0, row, refPtr)) return false;
+    if (!this.gridRef(tag, 0, row, refPtr)) return false;
     if (this.exports.ghostty_grid_ref_row(refPtr, rowPtr) !== GHOSTTY_SUCCESS) return false;
     const rowValue = this.mem.view().getBigUint64(rowPtr, true);
     if (
@@ -2245,16 +2289,6 @@ export class GhosttyTerminal {
    */
   getHyperlinkUri(row: number, col: number): string | null {
     return this.hyperlinkAt(PointTag.ACTIVE, col, row);
-  }
-
-  /**
-   * Get the hyperlink URI for a cell in the scrollback buffer.
-   * @param offset Scrollback line offset (0 = oldest, scrollback_len-1 = newest)
-   * @param col Column index (0-based)
-   * @returns The URI string, or null if no hyperlink at that position
-   */
-  getScrollbackHyperlinkUri(offset: number, col: number): string | null {
-    return this.hyperlinkAt(PointTag.HISTORY, col, offset);
   }
 
   /**
@@ -2507,25 +2541,6 @@ export class GhosttyTerminal {
    */
   getGraphemeString(row: number, col: number): string {
     const codepoints = this.getGrapheme(row, col);
-    if (!codepoints || codepoints.length === 0) return ' ';
-    return String.fromCodePoint(...codepoints);
-  }
-
-  /**
-   * Get all codepoints for a grapheme cluster in the scrollback buffer.
-   * @param offset Scrollback line offset (0 = oldest)
-   * @param col Column index
-   * @returns Array of codepoints, or null on error
-   */
-  getScrollbackGrapheme(offset: number, col: number): number[] | null {
-    return this.graphemeAt(PointTag.HISTORY, col, offset);
-  }
-
-  /**
-   * Get a string representation of a grapheme in the scrollback buffer.
-   */
-  getScrollbackGraphemeString(offset: number, col: number): string {
-    const codepoints = this.getScrollbackGrapheme(offset, col);
     if (!codepoints || codepoints.length === 0) return ' ';
     return String.fromCodePoint(...codepoints);
   }

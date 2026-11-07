@@ -591,7 +591,7 @@ export interface GhosttyCell {
   bg_b: number; // u8 (background blue)
   flags: number; // u8 (style flags bitfield)
   width: number; // u8 (character width: 1=normal, 2=wide, etc.)
-  hyperlink_id: number; // u16 (0 = no link, >0 = hyperlink ID in set)
+  hyperlink_id: number; // 0 = no link; otherwise the same ID for every cell of one link URI
   grapheme_len: number; // u8 (number of extra codepoints beyond first)
   /** Underline style (UnderlineStyle); NONE when not underlined. */
   underline_style?: UnderlineStyle;
@@ -601,6 +601,8 @@ export interface GhosttyCell {
   overline?: boolean;
   /** Inside the terminal's selection (viewport rows only). */
   selected?: boolean;
+  /** The full grapheme cluster, for cells with grapheme_len > 0 (screen lines). */
+  chars?: string;
 }
 
 /** Underline styles (SGR 4:x), as libghostty reports them. */

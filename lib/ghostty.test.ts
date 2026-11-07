@@ -188,7 +188,7 @@ describe('grid access', () => {
       expect(term.getHyperlinkUri(0, 6)).toBeNull();
 
       term.write('\r\n\r\n\r\n');
-      expect(term.getScrollbackHyperlinkUri(0, 1)).toBe('https://ghostty.org');
+      expect(term.getScreenHyperlinkUri(0, 1)).toBe('https://ghostty.org');
     } finally {
       term.free();
     }
