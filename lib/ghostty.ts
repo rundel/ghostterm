@@ -42,15 +42,22 @@ export {
 // C ABI constants (enum values are part of the libghostty-vt ABI promise)
 // ============================================================================
 
-const GHOSTTY_SUCCESS = 0;
-const GHOSTTY_OUT_OF_SPACE = -3;
+// Every table below is checked against the loaded module's manifest by
+// lib/abi-enums.test.ts; they are exported for it (not from lib/index.ts).
 
-const TerminalOpt = {
+/** @internal GhosttyResult. */
+export const Result = { SUCCESS: 0, OUT_OF_SPACE: -3 } as const;
+const GHOSTTY_SUCCESS = Result.SUCCESS;
+const GHOSTTY_OUT_OF_SPACE = Result.OUT_OF_SPACE;
+
+/** @internal GhosttyTerminalOption. */
+export const TerminalOpt = {
   WRITE_PTY: 2,
   COLOR_FOREGROUND: 12,
   COLOR_BACKGROUND: 13,
   COLOR_CURSOR: 14,
   COLOR_PALETTE: 15,
+  SELECTION: 22,
   DEFAULT_CURSOR_STYLE: 23,
   DEFAULT_CURSOR_BLINK: 24,
   SCROLLBACK_MAX_BYTES: 28,
@@ -59,51 +66,64 @@ const TerminalOpt = {
   MODE: 35,
 } as const;
 
-const TerminalData = {
+/** @internal GhosttyTerminalData. */
+export const TerminalData = {
   CURSOR_X: 3,
   CURSOR_Y: 4,
   ACTIVE_SCREEN: 6,
-  MOUSE_TRACKING: 11,
   SCROLLBAR: 9,
+  MOUSE_TRACKING: 11,
+  TITLE: 12,
+  PWD: 13,
   SCROLLBACK_ROWS: 15,
   COLOR_PALETTE_DEFAULT: 25,
+  SELECTION: 31,
   MODE: 37,
+  MOUSE_SHAPE: 41,
 } as const;
 
-const RenderData = {
+/** @internal GhosttyTerminalScreen. */
+export const TerminalScreen = { PRIMARY: 0, ALTERNATE: 1 } as const;
+
+/** @internal GhosttyRenderStateData. */
+export const RenderData = {
   DIRTY: 3,
   ROW_ITERATOR: 4,
   CURSOR: 18,
   COLORS: 19,
 } as const;
 
-const RowData = {
+/** @internal GhosttyRenderStateRowData. */
+export const RowData = {
   DIRTY: 1,
   CELLS: 3,
   SELECTION: 4,
   CELLS_RAW: 5,
 } as const;
 
-const RowCellsData = {
+/** @internal GhosttyRenderStateRowCellsData. */
+export const RowCellsData = {
   STYLE: 2,
   GRAPHEMES_LEN: 3,
+  GRAPHEMES_BUF: 4,
 } as const;
 
-const PointTag = {
+/** @internal GhosttyRowData (ghostty_row_get). */
+export const GridRowData = { WRAP_CONTINUATION: 2 } as const;
+
+/** @internal GhosttyPointTag. */
+export const PointTag = {
   ACTIVE: 0,
   VIEWPORT: 1,
+  SCREEN: 2,
   HISTORY: 3,
 } as const;
 
-const ROW_DATA_WRAP_CONTINUATION = 2;
+/** @internal GhosttySelectionOrder. */
+export const SelectionOrder = { FORWARD: 0 } as const;
 
-const SELECTION_DATA = 31; // GHOSTTY_TERMINAL_DATA_SELECTION
-const TERMINAL_DATA_TITLE = 12;
-const TERMINAL_DATA_PWD = 13;
-const TERMINAL_DATA_MOUSE_SHAPE = 41;
-
-/** GhosttyMouseShape, in order; Ghostty uses the CSS cursor names. */
-const MOUSE_SHAPES = [
+/** @internal GhosttyMouseShape, in order; Ghostty uses the CSS cursor names. */
+export const MOUSE_SHAPES = [
   'default',
   'context-menu',
   'help',
@@ -138,20 +158,22 @@ const MOUSE_SHAPES = [
   'nwse-resize',
   'zoom-in',
   'zoom-out',
-];
-const SELECTION_OPT = 22; // GHOSTTY_TERMINAL_OPT_SELECTION
-const SELECTION_ORDER_FORWARD = 0;
-const POINT_TAG_SCREEN = 2;
+] as const;
 
-const Formatter = {
-  OPT_EMIT: 1,
-  OPT_UNWRAP: 2,
-  OPT_TRIM: 3,
-  OPT_SELECTION: 4,
-  OPT_EXTRAS: 5,
-  FORMAT_PLAIN: 0,
-  FORMAT_VT: 1,
-  FORMAT_HTML: 2,
+/** @internal GhosttyFormatterOption. */
+export const FormatterOpt = {
+  EMIT: 1,
+  UNWRAP: 2,
+  TRIM: 3,
+  SELECTION: 4,
+  EXTRAS: 5,
+} as const;
+
+/** @internal GhosttyFormatterFormat. */
+export const FormatterFormat = {
+  PLAIN: 0,
+  VT: 1,
+  HTML: 2,
 } as const;
 
 /** Terminal state the VT formatter can restore (GHOSTTY_FORMATTER_EXTRA_*). */
@@ -172,21 +194,28 @@ export enum FormatterExtras {
   ALL = (1 << 12) - 1,
 }
 
-const GestureEvent = {
+/** @internal GhosttySelectionGestureEventType. */
+export const GestureEventType = {
   PRESS: 0,
   RELEASE: 1,
   DRAG: 2,
   AUTOSCROLL_TICK: 3,
-  OPT_REF: 1,
-  OPT_POSITION: 2,
-  OPT_REPEAT_DISTANCE: 3,
-  OPT_TIME_NS: 4,
-  OPT_REPEAT_INTERVAL_NS: 5,
-  OPT_RECTANGLE: 8,
-  OPT_GEOMETRY: 9,
-  OPT_VIEWPORT: 10,
-  DATA_AUTOSCROLL: 3,
 } as const;
+
+/** @internal GhosttySelectionGestureEventOption. */
+export const GestureEventOpt = {
+  REF: 1,
+  POSITION: 2,
+  REPEAT_DISTANCE: 3,
+  TIME_NS: 4,
+  REPEAT_INTERVAL_NS: 5,
+  RECTANGLE: 8,
+  GEOMETRY: 9,
+  VIEWPORT: 10,
+} as const;
+
+/** @internal GhosttySelectionGestureData. */
+export const GestureData = { AUTOSCROLL: 3 } as const;
 
 /** Which clipboard a program wrote to (OSC 52). */
 export type ClipboardLocation = 'standard' | 'selection' | 'primary';
@@ -288,7 +317,8 @@ export interface SelectionGeometry {
   screenHeight: number;
 }
 
-const EffectOpt = {
+/** @internal GhosttyTerminalOption values that install effect callbacks. */
+export const EffectOpt = {
   BELL: 3,
   TITLE_CHANGED: 6,
   SIZE: 7,
@@ -311,6 +341,9 @@ export const ClipboardWriteResult = { SUCCESS: 0, DENIED: 1 } as const;
 
 /** @internal GhosttyPasteSource. */
 export const PasteSource = { CLIPBOARD: 0, TEXT: 1 } as const;
+
+/** @internal GhosttyFocusEvent. */
+export const FocusEvent = { GAINED: 0, LOST: 1 } as const;
 
 /** @internal GhosttyColorScheme. */
 export const ColorScheme = { LIGHT: 0, DARK: 1 } as const;
@@ -346,7 +379,8 @@ export const PROMPT_KINDS = ['primary', 'right', 'continuation', 'secondary'] as
 /** Longest a render hold may freeze the screen before it is ended (ms). */
 const RENDER_HOLD_TIMEOUT_MS = 1000;
 
-const ScrollViewport = {
+/** @internal GhosttyTerminalScrollViewportTag. */
+export const ScrollViewport = {
   BOTTOM: 1,
   DELTA: 2,
   ROW: 3,
@@ -366,7 +400,8 @@ export type SelectionAdjust =
   | 'line-start'
   | 'line-end';
 
-const SELECTION_ADJUST: Record<SelectionAdjust, number> = {
+/** @internal GhosttySelectionAdjust, by ghostterm's name. */
+export const SELECTION_ADJUST: Record<SelectionAdjust, number> = {
   left: 0,
   right: 1,
   up: 2,
@@ -379,27 +414,30 @@ const SELECTION_ADJUST: Record<SelectionAdjust, number> = {
   'line-end': 9,
 };
 const SIZE_MAX = 0xffffffff;
-const SCREEN_ALTERNATE = 1;
 
-const CellContent = {
+/** @internal GhosttyCellContentTag. */
+export const CellContent = {
   CODEPOINT: 0,
   CODEPOINT_GRAPHEME: 1,
   BG_COLOR_PALETTE: 2,
   BG_COLOR_RGB: 3,
 } as const;
 
-const CellWide = {
+/** @internal GhosttyCellWide. */
+export const CellWide = {
   NARROW: 0,
   WIDE: 1,
 } as const;
 
-const StyleColorTag = {
+/** @internal GhosttyStyleColorTag. */
+export const StyleColorTag = {
   NONE: 0,
   PALETTE: 1,
   RGB: 2,
 } as const;
 
-const CursorStyle = {
+/** @internal GhosttyCursorStyle. */
+export const CursorStyle = {
   BAR: 0,
   BLOCK: 1,
   UNDERLINE: 2,
@@ -833,8 +871,10 @@ export type GhosttyOptimizeMode =
   | 'release-fast'
   | 'unknown';
 
-const BUILD_INFO_OPTIMIZE = 4;
-const OPTIMIZE_MODES: Record<number, GhosttyOptimizeMode> = {
+/** @internal GhosttyBuildInfo's OPTIMIZE query. */
+export const BUILD_INFO_OPTIMIZE = 4;
+/** @internal GhosttyOptimizeMode. */
+export const OPTIMIZE_MODES: Record<number, GhosttyOptimizeMode> = {
   0: 'debug',
   1: 'release-safe',
   2: 'release-small',
@@ -1269,7 +1309,8 @@ export interface MouseGeometry {
   cellHeight: number;
 }
 
-const MouseEncoderOpt = {
+/** @internal GhosttyMouseEncoderOption. */
+export const MouseEncoderOpt = {
   SIZE: 3,
   ANY_BUTTON_PRESSED: 4,
   TRACK_LAST_CELL: 5,
@@ -1551,7 +1592,7 @@ export class GhosttyTerminal {
 
   /** The window title the program set (OSC 0/2). */
   getTitle(): string {
-    return this.readDataString(TERMINAL_DATA_TITLE);
+    return this.readDataString(TerminalData.TITLE);
   }
 
   /**
@@ -1561,7 +1602,7 @@ export class GhosttyTerminal {
   getMouseShape(): string | null {
     const out = this.selScratch + 240;
     if (
-      this.exports.ghostty_terminal_get(this.handle, TERMINAL_DATA_MOUSE_SHAPE, out) !==
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.MOUSE_SHAPE, out) !==
       GHOSTTY_SUCCESS
     ) {
       return null;
@@ -1572,7 +1613,7 @@ export class GhosttyTerminal {
 
   /** The working directory the program reported (OSC 7). */
   getPwd(): string {
-    return this.readDataString(TERMINAL_DATA_PWD);
+    return this.readDataString(TerminalData.PWD);
   }
 
   /** @internal */
@@ -1798,7 +1839,11 @@ export class GhosttyTerminal {
     const ex = this.exports;
     const buf = this.selScratch + 192;
     const written = this.selScratch + 224;
-    if (ex.ghostty_focus_encode(focused ? 0 : 1, buf, 16, written) !== GHOSTTY_SUCCESS) return '';
+    if (
+      ex.ghostty_focus_encode(focused ? FocusEvent.GAINED : FocusEvent.LOST, buf, 16, written) !==
+      GHOSTTY_SUCCESS
+    )
+      return '';
     const len = this.mem.view().getUint32(written, true);
     return new TextDecoder().decode(this.mem.bytes().slice(buf, buf + len));
   }
@@ -2465,7 +2510,7 @@ export class GhosttyTerminal {
 
   isAlternateScreen(): boolean {
     this.exports.ghostty_terminal_get(this.handle, TerminalData.ACTIVE_SCREEN, this.scratch);
-    return this.mem.view().getInt32(this.scratch, true) === SCREEN_ALTERNATE;
+    return this.mem.view().getInt32(this.scratch, true) === TerminalScreen.ALTERNATE;
   }
 
   hasBracketedPaste(): boolean {
@@ -2623,17 +2668,17 @@ export class GhosttyTerminal {
    */
   getScreenLine(row: number): GhosttyCell[] | null {
     if (row < 0) return null;
-    return this.readGridLine(POINT_TAG_SCREEN, row);
+    return this.readGridLine(PointTag.SCREEN, row);
   }
 
   /** Whether a screen row (absolute, as in getScreenLine) continues the previous one. */
   isScreenRowWrapped(row: number): boolean {
-    return this.rowWraps(POINT_TAG_SCREEN, row);
+    return this.rowWraps(PointTag.SCREEN, row);
   }
 
   /** The hyperlink URI at a screen cell (absolute row), or null. */
   getScreenHyperlinkUri(row: number, col: number): string | null {
-    return this.hyperlinkAt(POINT_TAG_SCREEN, col, row);
+    return this.hyperlinkAt(PointTag.SCREEN, col, row);
   }
 
   /** Check if a row in the active screen continues a soft-wrapped previous row */
@@ -2649,7 +2694,8 @@ export class GhosttyTerminal {
     if (this.exports.ghostty_grid_ref_row(refPtr, rowPtr) !== GHOSTTY_SUCCESS) return false;
     const rowValue = this.mem.view().getBigUint64(rowPtr, true);
     if (
-      this.exports.ghostty_row_get(rowValue, ROW_DATA_WRAP_CONTINUATION, outPtr) !== GHOSTTY_SUCCESS
+      this.exports.ghostty_row_get(rowValue, GridRowData.WRAP_CONTINUATION, outPtr) !==
+      GHOSTTY_SUCCESS
     ) {
       return false;
     }
@@ -2724,7 +2770,7 @@ export class GhosttyTerminal {
   /** Whether the terminal has an active selection. */
   hasSelection(): boolean {
     return (
-      this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, this.selScratch) ===
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, this.selScratch) ===
       GHOSTTY_SUCCESS
     );
   }
@@ -2732,7 +2778,10 @@ export class GhosttyTerminal {
   /** The active selection in absolute screen rows, start before end. */
   getSelectionRange(): SelectionRange | null {
     const sel = this.selScratch;
-    if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+    if (
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
+      GHOSTTY_SUCCESS
+    ) {
       return null;
     }
     return this.selectionRangeAt(sel);
@@ -2744,7 +2793,7 @@ export class GhosttyTerminal {
     const S = this.L.selection;
     const ordered = this.selScratch + 32;
     if (
-      ex.ghostty_terminal_selection_ordered(this.handle, sel, SELECTION_ORDER_FORWARD, ordered) !==
+      ex.ghostty_terminal_selection_ordered(this.handle, sel, SelectionOrder.FORWARD, ordered) !==
       GHOSTTY_SUCCESS
     ) {
       return null;
@@ -2767,7 +2816,7 @@ export class GhosttyTerminal {
       this.exports.ghostty_terminal_point_from_grid_ref(
         this.handle,
         refPtr,
-        POINT_TAG_SCREEN,
+        PointTag.SCREEN,
         out
       ) !== GHOSTTY_SUCCESS
     ) {
@@ -2795,8 +2844,8 @@ export class GhosttyTerminal {
     const sel = this.selScratch + 128;
     for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
     if (
-      !this.gridRef(POINT_TAG_SCREEN, startCol, startRow, sel + S.start) ||
-      !this.gridRef(POINT_TAG_SCREEN, endCol, endRow, sel + S.end)
+      !this.gridRef(PointTag.SCREEN, startCol, startRow, sel + S.start) ||
+      !this.gridRef(PointTag.SCREEN, endCol, endRow, sel + S.end)
     ) {
       return false;
     }
@@ -2807,7 +2856,8 @@ export class GhosttyTerminal {
   /** @internal Make the selection snapshot at ptr the terminal's selection. */
   installSelection(ptr: number): boolean {
     const ok =
-      this.exports.ghostty_terminal_set(this.handle, SELECTION_OPT, ptr) === GHOSTTY_SUCCESS;
+      this.exports.ghostty_terminal_set(this.handle, TerminalOpt.SELECTION, ptr) ===
+      GHOSTTY_SUCCESS;
     this.pendingUpdate = true;
     return ok;
   }
@@ -2819,7 +2869,8 @@ export class GhosttyTerminal {
   adjustSelection(how: SelectionAdjust): boolean {
     const ex = this.exports;
     const sel = this.selScratch + 128;
-    if (ex.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) return false;
+    if (ex.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !== GHOSTTY_SUCCESS)
+      return false;
     if (
       ex.ghostty_terminal_selection_adjust(this.handle, sel, SELECTION_ADJUST[how]) !==
       GHOSTTY_SUCCESS
@@ -2830,7 +2881,7 @@ export class GhosttyTerminal {
   }
 
   clearSelection(): void {
-    this.exports.ghostty_terminal_set(this.handle, SELECTION_OPT, 0);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.SELECTION, 0);
     this.pendingUpdate = true;
   }
 
@@ -2848,7 +2899,10 @@ export class GhosttyTerminal {
    */
   getSelectionText(): string {
     const sel = this.selScratch;
-    if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+    if (
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
+      GHOSTTY_SUCCESS
+    ) {
       return '';
     }
     return this.format({ format: 'plain', unwrap: true, trim: true, selectionPtr: sel });
@@ -2873,7 +2927,10 @@ export class GhosttyTerminal {
     let selectionPtr: number | undefined;
     if (options.onlySelection) {
       const sel = this.selScratch;
-      if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+      if (
+        this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
+        GHOSTTY_SUCCESS
+      ) {
         return '';
       }
       return this.format({ ...options, selectionPtr: sel });
@@ -2885,8 +2942,8 @@ export class GhosttyTerminal {
       for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
       const lastRow = this.getScrollbackLength() + this._rows - 1;
       if (
-        this.gridRef(POINT_TAG_SCREEN, 0, options.fromRow, sel + S.start) &&
-        this.gridRef(POINT_TAG_SCREEN, this._cols - 1, lastRow, sel + S.end)
+        this.gridRef(PointTag.SCREEN, 0, options.fromRow, sel + S.start) &&
+        this.gridRef(PointTag.SCREEN, this._cols - 1, lastRow, sel + S.end)
       ) {
         selectionPtr = sel;
       }
@@ -2912,22 +2969,22 @@ export class GhosttyTerminal {
     try {
       const emit =
         options.format === 'vt'
-          ? Formatter.FORMAT_VT
+          ? FormatterFormat.VT
           : options.format === 'html'
-            ? Formatter.FORMAT_HTML
-            : Formatter.FORMAT_PLAIN;
+            ? FormatterFormat.HTML
+            : FormatterFormat.PLAIN;
       this.mem.view().setUint32(opt, emit, true);
-      ex.ghostty_formatter_set(formatter, Formatter.OPT_EMIT, opt);
+      ex.ghostty_formatter_set(formatter, FormatterOpt.EMIT, opt);
       this.mem.view().setUint8(opt, options.unwrap ? 1 : 0);
-      ex.ghostty_formatter_set(formatter, Formatter.OPT_UNWRAP, opt);
+      ex.ghostty_formatter_set(formatter, FormatterOpt.UNWRAP, opt);
       this.mem.view().setUint8(opt, options.trim ? 1 : 0);
-      ex.ghostty_formatter_set(formatter, Formatter.OPT_TRIM, opt);
+      ex.ghostty_formatter_set(formatter, FormatterOpt.TRIM, opt);
       if (options.extras !== undefined) {
         this.mem.view().setUint32(opt, options.extras, true);
-        ex.ghostty_formatter_set(formatter, Formatter.OPT_EXTRAS, opt);
+        ex.ghostty_formatter_set(formatter, FormatterOpt.EXTRAS, opt);
       }
       if (options.selectionPtr !== undefined) {
-        ex.ghostty_formatter_set(formatter, Formatter.OPT_SELECTION, options.selectionPtr);
+        ex.ghostty_formatter_set(formatter, FormatterOpt.SELECTION, options.selectionPtr);
       }
 
       const outPtr = opt + 16;
@@ -3067,10 +3124,10 @@ export class SelectionGesture {
       }
       this.gesture = ex.ghostty_wasm_take_opaque(slot);
       for (const type of [
-        GestureEvent.PRESS,
-        GestureEvent.RELEASE,
-        GestureEvent.DRAG,
-        GestureEvent.AUTOSCROLL_TICK,
+        GestureEventType.PRESS,
+        GestureEventType.RELEASE,
+        GestureEventType.DRAG,
+        GestureEventType.AUTOSCROLL_TICK,
       ]) {
         if (ex.ghostty_selection_gesture_event_new(0, slot, type) !== GHOSTTY_SUCCESS) {
           throw new Error('libghostty-vt: failed to create selection gesture event');
@@ -3091,12 +3148,12 @@ export class SelectionGesture {
    */
   setRepeat(intervalMs: number, distancePx: number): void {
     const ex = this.exports;
-    const press = this.events[GestureEvent.PRESS];
+    const press = this.events[GestureEventType.PRESS];
     const p = this.scratch + 112;
     this.mem.view().setBigUint64(p, BigInt(Math.round(intervalMs * 1e6)), true);
-    ex.ghostty_selection_gesture_event_set(press, GestureEvent.OPT_REPEAT_INTERVAL_NS, p);
+    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_INTERVAL_NS, p);
     this.mem.view().setFloat64(p + 8, distancePx, true);
-    ex.ghostty_selection_gesture_event_set(press, GestureEvent.OPT_REPEAT_DISTANCE, p + 8);
+    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_DISTANCE, p + 8);
   }
 
   /** The terminal this gesture was created for. */
@@ -3107,9 +3164,9 @@ export class SelectionGesture {
   private setRef(event: number, col: number, row: number): void {
     const ref = this.scratch;
     if (this.term.viewportRef(col, row, ref)) {
-      this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_REF, ref);
+      this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.REF, ref);
     } else {
-      this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_REF, 0);
+      this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.REF, 0);
     }
   }
 
@@ -3118,13 +3175,13 @@ export class SelectionGesture {
     const view = this.mem.view();
     view.setFloat64(p + this.L.surface.x, x, true);
     view.setFloat64(p + this.L.surface.y, y, true);
-    this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_POSITION, p);
+    this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.POSITION, p);
   }
 
   private setRectangle(event: number, rectangle: boolean): void {
     const p = this.scratch + 104;
     this.mem.view().setUint8(p, rectangle ? 1 : 0);
-    this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_RECTANGLE, p);
+    this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.RECTANGLE, p);
   }
 
   private setGeometry(event: number, g: SelectionGeometry): void {
@@ -3135,7 +3192,7 @@ export class SelectionGesture {
     view.setUint32(p + G.cellWidth, Math.max(1, Math.round(g.cellWidth)), true);
     view.setUint32(p + G.paddingLeft, 0, true);
     view.setUint32(p + G.screenHeight, Math.max(1, Math.round(g.screenHeight)), true);
-    this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_GEOMETRY, p);
+    this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.GEOMETRY, p);
   }
 
   /** Apply an event; install its selection, or clear when it yields none. */
@@ -3161,12 +3218,12 @@ export class SelectionGesture {
    * clicks. Returns true when the press itself selected something.
    */
   press(col: number, row: number, x: number, y: number, timeMs: number): boolean {
-    const event = this.events[GestureEvent.PRESS];
+    const event = this.events[GestureEventType.PRESS];
     this.setRef(event, col, row);
     this.setPosition(event, x, y);
     const t = this.scratch + 48;
     this.mem.view().setBigUint64(t, BigInt(Math.max(0, Math.round(timeMs * 1e6))), true);
-    this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_TIME_NS, t);
+    this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.TIME_NS, t);
     return this.apply(event, true);
   }
 
@@ -3182,7 +3239,7 @@ export class SelectionGesture {
     geometry: SelectionGeometry,
     rectangle = false
   ): boolean {
-    const event = this.events[GestureEvent.DRAG];
+    const event = this.events[GestureEventType.DRAG];
     this.setRef(event, col, row);
     this.setPosition(event, x, y);
     this.setGeometry(event, geometry);
@@ -3192,7 +3249,7 @@ export class SelectionGesture {
 
   /** Pointer released. */
   release(): void {
-    this.apply(this.events[GestureEvent.RELEASE], false);
+    this.apply(this.events[GestureEventType.RELEASE], false);
   }
 
   /**
@@ -3208,14 +3265,14 @@ export class SelectionGesture {
     rectangle = false
   ): boolean {
     const ex = this.exports;
-    const event = this.events[GestureEvent.AUTOSCROLL_TICK];
+    const event = this.events[GestureEventType.AUTOSCROLL_TICK];
     this.setRectangle(event, rectangle);
     const coord = this.scratch + 80;
     const view = this.mem.view();
     this.mem.bytes().fill(0, coord, coord + this.L.coordinate.size);
     view.setUint16(coord + this.L.coordinate.x, col, true);
     view.setUint32(coord + this.L.coordinate.y, row, true);
-    ex.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_VIEWPORT, coord);
+    ex.ghostty_selection_gesture_event_set(event, GestureEventOpt.VIEWPORT, coord);
     this.setPosition(event, x, y);
     this.setGeometry(event, geometry);
     return this.apply(event, false);
@@ -3228,7 +3285,7 @@ export class SelectionGesture {
     this.exports.ghostty_selection_gesture_get(
       this.gesture,
       this.term.handle,
-      GestureEvent.DATA_AUTOSCROLL,
+      GestureData.AUTOSCROLL,
       out
     );
     return this.mem.view().getUint32(out, true) as SelectionAutoscroll;
@@ -3255,8 +3312,10 @@ export class SelectionGesture {
 // Search
 // ============================================================================
 
-const SearchOpt = { NEEDLE: 1, SELECT_SCROLL: 4 } as const;
-const SearchData = {
+/** @internal GhosttySearchOption. */
+export const SearchOpt = { NEEDLE: 1, SELECT_SCROLL: 4 } as const;
+/** @internal GhosttySearchData. */
+export const SearchData = {
   STATUS: 1,
   TOTAL_MATCHES: 3,
   SELECTED_INDEX: 4,
