@@ -28,7 +28,7 @@ import type {
   TerminalColors,
   TerminalNotification,
 } from './ghostty';
-import { getGhostty } from './index';
+import { getGhostty } from './init';
 import { InputHandler, type MouseTrackingConfig } from './input-handler';
 import type {
   IBufferNamespace,
@@ -885,14 +885,15 @@ export class Terminal implements ITerminalCore {
    * Focus terminal input
    */
   focus(): void {
-    if (this.isOpen && this.element) {
-      // Focus immediately for immediate keyboard/wheel event handling
-      this.element.focus();
+    if (this.isOpen && this.textarea) {
+      // The hidden textarea takes keyboard input (and brings up the mobile
+      // keyboard); clicks focus it too.
+      this.textarea.focus();
 
       // Also schedule a delayed focus as backup to ensure it sticks
       // (some browsers may need this if DOM isn't fully settled)
       setTimeout(() => {
-        this.element?.focus();
+        if (this.isOpen) this.textarea?.focus();
       }, 0);
     }
   }
@@ -901,8 +902,9 @@ export class Terminal implements ITerminalCore {
    * Blur terminal (remove focus)
    */
   blur(): void {
-    if (this.isOpen && this.element) {
-      this.element.blur();
+    if (this.isOpen) {
+      this.textarea?.blur();
+      if (document.activeElement === this.element) this.element?.blur();
     }
   }
 

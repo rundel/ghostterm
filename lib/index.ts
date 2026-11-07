@@ -6,9 +6,6 @@
 
 export { init } from './init';
 export type { InitOptions } from './init';
-// Not public: terminal.ts still imports getGhostty from here. Once it imports from './init',
-// drop this line.
-export { getGhostty } from './init';
 
 // Main Terminal class
 export { Terminal } from './terminal';

@@ -826,23 +826,16 @@ describe('blur()', () => {
       term.dispose();
     });
 
-    test('should call blur on element', async () => {
+    test('focus() focuses the input textarea and blur() takes focus away', async () => {
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      // Using shared container from beforeEach
-      if (!container) return;
       term.open(container!);
 
-      const blurSpy = { called: false };
-      if (term.element) {
-        const originalBlur = term.element.blur;
-        term.element.blur = () => {
-          blurSpy.called = true;
-          originalBlur.call(term.element);
-        };
-      }
+      term.focus();
+      expect(document.activeElement).toBe(term.textarea!);
 
       term.blur();
-      expect(blurSpy.called).toBe(true);
+      expect(document.activeElement).not.toBe(term.textarea!);
+      expect(document.activeElement).not.toBe(container);
       term.dispose();
     });
   });
@@ -1306,25 +1299,38 @@ describe('attachCustomKeyEventHandler()', () => {
   });
 
   describe('Basic functionality', () => {
-    test('should accept a custom handler', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      // Using shared container from beforeEach
-      if (!container) return;
-      term.open(container!);
+    const press = (key: string, code: string) =>
+      container!.dispatchEvent(
+        new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true })
+      );
 
-      const handler = (e: KeyboardEvent) => false;
-      expect(() => term.attachCustomKeyEventHandler(handler)).not.toThrow();
+    test('a handler returning false stops the key reaching the program', async () => {
+      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
+      term.open(container!);
+      const sent: string[] = [];
+      term.onData((d) => sent.push(d));
+      const seen: string[] = [];
+      term.attachCustomKeyEventHandler((e) => {
+        seen.push(e.key);
+        return e.key !== 'b';
+      });
+
+      press('a', 'KeyA');
+      press('b', 'KeyB');
+
+      expect(seen).toEqual(['a', 'b']);
+      expect(sent).toEqual(['a']);
       term.dispose();
     });
 
-    test('should accept undefined to clear handler', async () => {
+    test('a handler attached before open() applies once opened', async () => {
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      // Using shared container from beforeEach
-      if (!container) return;
+      term.attachCustomKeyEventHandler(() => false);
       term.open(container!);
-
-      const handler = (e: KeyboardEvent) => false;
-      expect(() => term.attachCustomKeyEventHandler(handler)).not.toThrow();
+      const sent: string[] = [];
+      term.onData((d) => sent.push(d));
+      press('a', 'KeyA');
+      expect(sent).toEqual([]);
       term.dispose();
     });
   });
