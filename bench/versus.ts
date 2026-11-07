@@ -49,31 +49,29 @@ function generateCursorMovement(ops: number): string {
   return output;
 }
 
-const withTerminals = async (fn: (term: GhosttyTerminal | XTerm) => Promise<void>) => {
-  const ghostty = await Ghostty.load();
-  bench('ghostterm', async () => {
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const term = new GhosttyTerminal({ ghostty });
-    await term.open(container);
-    await fn(term);
-    await term.dispose();
-  });
-  bench('xterm.js', async () => {
-    const xterm = new XTerm();
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    await xterm.open(container);
-    await fn(xterm);
-    await xterm.dispose();
-  });
+const ghostty = await Ghostty.load();
+
+function openIn<T extends { open(parent: HTMLElement): void }>(term: T): T {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  term.open(container);
+  return term;
+}
+
+// Each group gets one terminal per library, created and opened here, so the timings measure only
+// what fn does and not terminal setup.
+const withTerminals = (fn: (term: GhosttyTerminal | XTerm) => Promise<void>) => {
+  const ours = openIn(new GhosttyTerminal({ ghostty }));
+  const xterm = openIn(new XTerm());
+  bench('ghostterm', () => fn(ours));
+  bench('xterm.js', () => fn(xterm));
 };
 
 const throughput = async (prefix: string, data: Record<string, Uint8Array | string>) => {
   await Promise.all(
     Object.entries(data).map(async ([name, data]) => {
       await group(`${prefix}: ${name}`, async () => {
-        await withTerminals(async (term) => {
+        withTerminals(async (term) => {
           await new Promise<void>((resolve) => {
             term.write(data, resolve);
           });
@@ -109,7 +107,7 @@ await throughput('cursor movement', {
 });
 
 await group('read full viewport', async () => {
-  await withTerminals(async (term) => {
+  withTerminals(async (term) => {
     const lines = term.rows;
     for (let i = 0; i < lines; i++) {
       const line = term.buffer.active.getLine(i);
