@@ -4,7 +4,9 @@ export class EventEmitter<T> {
   private listeners: Array<(arg: T) => void> = [];
 
   fire(arg: T): void {
-    for (const listener of this.listeners) {
+    // A copy, so a listener that disposes itself (or another) doesn't make
+    // the next one miss this event.
+    for (const listener of [...this.listeners]) {
       listener(arg);
     }
   }
