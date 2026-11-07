@@ -22,6 +22,25 @@ describe('Ghostty module', () => {
   test('reports the libghostty-vt version from the type manifest', () => {
     expect(ghostty.version).toMatch(/^1\./);
   });
+
+
+  test('loads the size-optimized build by default', () => {
+    expect(ghostty.optimizeMode).toBe('release-small');
+  });
+
+  test('loads the speed-optimized build from a URL and runs a terminal on it', async () => {
+    const fast = await Ghostty.load(new URL('../ghostty-vt-fast.wasm', import.meta.url));
+    expect(fast.optimizeMode).toBe('release-fast');
+    expect(fast.version).toBe(ghostty.version);
+
+    const term = fast.createTerminal(20, 2);
+    try {
+      term.write('hello');
+      expect(text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd()).toBe('hello');
+    } finally {
+      term.free();
+    }
+  });
 });
 
 describe('terminal replies (write_pty)', () => {

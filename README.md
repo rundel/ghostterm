@@ -69,6 +69,22 @@ websocket.onmessage = (e) => term.write(e.data);
 
 For a comprehensive client <-> server example, refer to the [demo](./demo/index.html#L141).
 
+### Faster WebAssembly build
+
+`init()` loads the size-optimized libghostty-vt module, which is bundled into the library. The package also
+ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same release. It has the same features, is
+10-20% faster on output heavy in escape sequences, and is about 1.5 times larger (1.2 MB instead of 840 KB). To
+use it, pass its URL to `init()`:
+
+```javascript
+import { init } from 'ghostty-web';
+import fastWasm from 'ghostty-web/ghostty-vt-fast.wasm?url'; // Vite; other bundlers have their own asset imports
+
+await init({ wasmPath: fastWasm });
+```
+
+`Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded.
+
 ### Addons
 
 ```javascript
@@ -135,7 +151,8 @@ These follow Ghostty rather than xterm.js:
 
 ghostty-web runs on the official prebuilt WebAssembly module that Ghostty publishes with each
 [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI.
-`scripts/fetch-wasm.sh` downloads the pinned release and checks its SHA-256.
+`scripts/fetch-wasm.sh` downloads both builds of the pinned release (`ghostty-vt.wasm`, size-optimized, and
+`ghostty-vt-fast.wasm`, speed-optimized) and checks their SHA-256.
 
 > Requires Bun and curl.
 

@@ -12,11 +12,13 @@
       "import": "./dist/ghostty-web.js",
       "require": "./dist/ghostty-web.umd.cjs"
     },
-    "./ghostty-vt.wasm": "./ghostty-vt.wasm"
+    "./ghostty-vt.wasm": "./ghostty-vt.wasm",
+    "./ghostty-vt-fast.wasm": "./ghostty-vt-fast.wasm"
   },
   "files": [
     "dist",
     "ghostty-vt.wasm",
+    "ghostty-vt-fast.wasm",
     "README.md"
   ],
   "keywords": [
@@ -50,7 +52,7 @@
     "build": "bun run clean && bun run build:wasm && bun run build:lib && bun run build:wasm-copy",
     "build:wasm": "./scripts/fetch-wasm.sh",
     "build:lib": "vite build",
-    "build:wasm-copy": "cp ghostty-vt.wasm dist/",
+    "build:wasm-copy": "cp ghostty-vt.wasm ghostty-vt-fast.wasm dist/",
     "clean": "rm -rf dist",
     "preview": "vite preview",
     "test": "bun test",

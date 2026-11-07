@@ -366,6 +366,9 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
   // Type manifest (NUL-terminated JSON describing the C ABI)
   ghostty_type_json(): number;
 
+  // Build info (build_info.h)
+  ghostty_build_info(data: number, outPtr: number): number;
+
   // Memory helpers (wasm.h)
   ghostty_wasm_alloc(len: number): number;
   ghostty_wasm_free(ptr: number, len: number): void;

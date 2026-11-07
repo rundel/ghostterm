@@ -599,6 +599,28 @@ function wasmCallback(
 // Ghostty: module loader and factory
 // ============================================================================
 
+/** The file system path of a `file:` URL, without a leading slash before a Windows drive letter. */
+function fileUrlPath(url: URL): string {
+  const path = decodeURIComponent(url.pathname);
+  return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+}
+
+/** How the loaded libghostty-vt module was optimized (`GhosttyOptimizeMode` in build_info.h). */
+export type GhosttyOptimizeMode =
+  | 'debug'
+  | 'release-safe'
+  | 'release-small'
+  | 'release-fast'
+  | 'unknown';
+
+const BUILD_INFO_OPTIMIZE = 4;
+const OPTIMIZE_MODES: Record<number, GhosttyOptimizeMode> = {
+  0: 'debug',
+  1: 'release-safe',
+  2: 'release-small',
+  3: 'release-fast',
+};
+
 /**
  * Main Ghostty WASM wrapper class
  */
@@ -620,6 +642,22 @@ export class Ghostty {
   /** The libghostty-vt version reported by the loaded module. */
   get version(): string | undefined {
     return this.layout.abi.version;
+  }
+
+  /**
+   * The optimization mode the loaded module was built with: `'release-small'` for the default
+   * `ghostty-vt.wasm`, `'release-fast'` for `ghostty-vt-fast.wasm`.
+   */
+  get optimizeMode(): GhosttyOptimizeMode {
+    const ex = this.exports;
+    const out = ex.ghostty_wasm_alloc(4);
+    try {
+      const result = ex.ghostty_build_info(BUILD_INFO_OPTIMIZE, out);
+      if (result !== 0) throw new Error(`ghostty-vt: failed to read build info (${result})`);
+      return OPTIMIZE_MODES[this.mem.view().getInt32(out, true)] ?? 'unknown';
+    } finally {
+      ex.ghostty_wasm_free(out, 4);
+    }
   }
 
   private readTypeJson(): string {
@@ -770,10 +808,19 @@ export class Ghostty {
     return term;
   }
 
-  static async load(wasmPath?: string): Promise<Ghostty> {
-    // If explicit path provided, use it
+  /**
+   * Load the libghostty-vt module.
+   *
+   * Without an argument this loads the size-optimized `ghostty-vt.wasm` (bundled into the library
+   * build). Pass a path or URL to load another copy, such as the speed-optimized
+   * `ghostty-vt-fast.wasm` shipped alongside it.
+   */
+  static async load(wasmPath?: string | URL): Promise<Ghostty> {
     if (wasmPath) {
-      return Ghostty.loadFromPath(wasmPath);
+      if (typeof wasmPath === 'string') return Ghostty.loadFromPath(wasmPath);
+      return Ghostty.loadFromPath(
+        wasmPath.protocol === 'file:' ? fileUrlPath(wasmPath) : wasmPath.href
+      );
     }
 
     // Resolve path relative to this module
@@ -782,14 +829,9 @@ export class Ghostty {
     // Build paths to try, prioritizing file system paths for Node/Bun
     const defaultPaths: string[] = [];
 
-    // For Node/Bun: try absolute file path first (strip file:// protocol)
+    // For Node/Bun: try absolute file path first
     if (moduleUrl.protocol === 'file:') {
-      let filePath = moduleUrl.pathname;
-      // Remove leading slash on Windows paths (e.g., /C:/ -> C:/)
-      if (filePath.match(/^\/[A-Za-z]:\//)) {
-        filePath = filePath.slice(1);
-      }
-      defaultPaths.push(filePath);
+      defaultPaths.push(fileUrlPath(moduleUrl));
     }
 
     // Also try other common paths

@@ -19,7 +19,7 @@ Bun runs the tests and scripts; curl fetches the WASM module.
 
 ```sh
 bun install
-./scripts/fetch-wasm.sh          # download the pinned ghostty-vt.wasm and verify its SHA-256
+./scripts/fetch-wasm.sh          # download the pinned WASM builds and verify their SHA-256
 bun test                         # all tests (happy-dom, no real browser)
 bun test lib/ghostty.test.ts     # one file
 bun test -t "pattern"            # matching tests
@@ -32,7 +32,10 @@ bun run demo:dev                 # Vite + PTY server: http://127.0.0.1:8000/demo
 
 Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
 
-`ghostty-vt.wasm` is gitignored. Tests load it from the repo root, so run `fetch-wasm.sh` once after cloning.
+`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle) and `ghostty-vt-fast.wasm`
+(ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same
+features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't
+reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too.
 `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
 
 ## Architecture
@@ -137,8 +140,8 @@ Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be 
 
 ## Upgrading libghostty-vt
 
-1. Update `VERSION` and `SHA256` in `scripts/fetch-wasm.sh` (hashes are in the release's `SHA256SUMS` at
-   `https://release.files.ghostty.org/libghostty-vt/<version>/`) and run it.
+1. Update `VERSION`, `SMALL_SHA256` and `FAST_SHA256` in `scripts/fetch-wasm.sh` (hashes are in the release's
+   `SHA256SUMS` at `https://release.files.ghostty.org/libghostty-vt/<version>/`) and run it.
 2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields.
 3. Read the release notes for changed behavior in what the bridge relies on.
 

@@ -24,12 +24,30 @@ let ghosttyInstance: Ghostty | null = null;
  * const term = new Terminal();
  * term.open(document.getElementById('terminal'));
  * ```
+ *
+ * To use the speed-optimized module instead of the default size-optimized one, pass its URL.
+ * With Vite, for example:
+ *
+ * ```typescript
+ * import fastWasm from 'ghostty-web/ghostty-vt-fast.wasm?url';
+ *
+ * await init({ wasmPath: fastWasm });
+ * ```
  */
-export async function init(): Promise<void> {
+export async function init(options: InitOptions = {}): Promise<void> {
   if (ghosttyInstance) {
     return; // Already initialized
   }
-  ghosttyInstance = await Ghostty.load();
+  ghosttyInstance = await Ghostty.load(options.wasmPath);
+}
+
+export interface InitOptions {
+  /**
+   * Where to load the libghostty-vt module from. Defaults to the size-optimized `ghostty-vt.wasm`
+   * bundled into the library. `ghostty-web/ghostty-vt-fast.wasm` is the speed-optimized build:
+   * the same features, 10-20% faster on output heavy in escape sequences, and about 1.5x larger.
+   */
+  wasmPath?: string | URL;
 }
 
 /**
@@ -83,6 +101,7 @@ export {
 export type {
   ClipboardLocation,
   ClipboardWriteRequest,
+  GhosttyOptimizeMode,
   ProgramStatus,
   ProgressReport,
   SemanticPromptEvent,
