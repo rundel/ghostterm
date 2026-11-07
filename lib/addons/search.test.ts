@@ -29,12 +29,31 @@ describe('SearchAddon', () => {
     search.onDidChangeResults((r) => results.push(r));
     expect(search.findNext('needle')).toBe(true);
     expect(term.getSelection()).toBe('Needle');
-    expect(results.at(-1)).toEqual({ resultIndex: 0, resultCount: 10 });
+    // resultIndex counts from the top, as in xterm.js.
+    expect(results.at(-1)).toEqual({ resultIndex: 9, resultCount: 10 });
 
     search.findNext('needle');
-    expect(results.at(-1)).toEqual({ resultIndex: 1, resultCount: 10 });
+    expect(results.at(-1)).toEqual({ resultIndex: 8, resultCount: 10 });
     search.findPrevious('needle');
-    expect(results.at(-1)).toEqual({ resultIndex: 0, resultCount: 10 });
+    expect(results.at(-1)).toEqual({ resultIndex: 9, resultCount: 10 });
+  });
+
+  test('findPrevious starts at the oldest match', () => {
+    const results: { resultIndex: number }[] = [];
+    search.onDidChangeResults((r) => results.push(r));
+    search.findPrevious('needle');
+    expect(results.at(-1)!.resultIndex).toBe(0);
+    expect(term.wasmTerm!.getSelectionRange()!.startRow).toBe(0);
+  });
+
+  test('counts every match, not just those found before the first one is selected', () => {
+    let lines = '';
+    for (let i = 0; i < 5000; i++) lines += `more ${i} needle\r\n`;
+    term.write(lines);
+    const results: { resultIndex: number; resultCount: number }[] = [];
+    search.onDidChangeResults((r) => results.push(r));
+    search.findNext('needle');
+    expect(results.at(-1)).toEqual({ resultIndex: 5009, resultCount: 5010 });
   });
 
   test('scrolls the view to a match in scrollback', () => {
@@ -64,7 +83,55 @@ describe('SearchAddon', () => {
     const results: { resultIndex: number }[] = [];
     search.onDidChangeResults((r) => results.push(r));
     search.findNext('needle', { incremental: true });
-    expect(results.at(-1)!.resultIndex).toBe(0);
+    expect(results.at(-1)!.resultIndex).toBe(9);
+  });
+
+  test('incremental search keeps the selected match while the term grows', () => {
+    search.findNext('item');
+    search.findNext('item');
+    search.findNext('item');
+    const start = term.wasmTerm!.getSelectionRange()!.startRow;
+    expect(term.getSelection()).toBe('item');
+
+    search.findNext('item 7', { incremental: true });
+    expect(term.getSelection()).toBe('item 7');
+    expect(term.wasmTerm!.getSelectionRange()!.startRow).toEqual(start);
+  });
+
+  test('incremental search moves on from a match that no longer matches', () => {
+    const row = () => term.wasmTerm!.getSelectionRange()!.startRow;
+    search.findNext('item 5');
+    const row5 = row();
+
+    // findNext looks for the nearest older match, findPrevious the nearest newer one.
+    search.findNext('item 4', { incremental: true });
+    expect(term.getSelection()).toBe('item 4');
+    expect(row()).toBe(row5 - 1);
+
+    search.findPrevious('item 5');
+    search.findPrevious('item 6', { incremental: true });
+    expect(term.getSelection()).toBe('item 6');
+    expect(row()).toBe(row5 + 1);
+
+    // Without an older match, the nearest newer one.
+    search.findNext('item 0');
+    search.findNext('item 1', { incremental: true });
+    expect(term.getSelection()).toBe('item 1');
+  });
+
+  test('warns once about the unsupported regex, wholeWord and caseSensitive options', () => {
+    const warn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      search.findNext('needle', { regex: true, caseSensitive: true });
+      search.findNext('needle', { wholeWord: true });
+      search.findNext('needle');
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0][0])).toContain('regex, caseSensitive');
   });
 
   test('decorations highlight every match on screen, the active one differently', () => {

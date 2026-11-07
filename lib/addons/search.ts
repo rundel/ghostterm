@@ -8,9 +8,11 @@
  *
  * Differences from xterm.js:
  * - Matching is literal text, case-insensitive for ASCII letters only. The
- *   regex, wholeWord and caseSensitive options are not supported.
+ *   regex, wholeWord and caseSensitive options are not supported (a warning
+ *   is logged the first time one is set).
  * - findNext() moves toward older content (up from the prompt), as Ghostty's
- *   own find does; findPrevious() moves toward newer content.
+ *   own find does; findPrevious() moves toward newer content. resultIndex
+ *   counts from the top as in xterm.js, so findNext() lowers it.
  *
  * @example
  * ```typescript
@@ -40,8 +42,9 @@ export interface ISearchOptions {
    */
   decorations?: ISearchDecorationOptions;
   /**
-   * Search as the user types: repeating the same term keeps the selected
-   * match instead of moving on.
+   * Search as the user types: if the selected match still matches the new
+   * term it stays selected, otherwise the nearest match in the search
+   * direction from it is selected, instead of moving on.
    */
   incremental?: boolean;
   /** Not supported by libghostty's search; ignored. */
@@ -53,7 +56,7 @@ export interface ISearchOptions {
 }
 
 export interface ISearchResultChangeEvent {
-  /** Index of the selected match (0 = newest), or -1 when none. */
+  /** Index of the selected match counted from the top (0 = oldest), or -1 when none. */
   resultIndex: number;
   /** Number of matches. */
   resultCount: number;
@@ -67,6 +70,13 @@ interface SearchableTerminal extends ITerminalCore {
   clearSelection(): void;
 }
 
+const UNSUPPORTED_OPTIONS = ['regex', 'wholeWord', 'caseSensitive'] as const;
+
+/** Whether position a comes before position b in reading order. */
+function before(aRow: number, aCol: number, bRow: number, bCol: number): boolean {
+  return aRow < bRow || (aRow === bRow && aCol < bCol);
+}
+
 export class SearchAddon implements ITerminalAddon {
   private terminal?: SearchableTerminal;
   private search?: TerminalSearch;
@@ -74,6 +84,7 @@ export class SearchAddon implements ITerminalAddon {
   private searchTerm?: GhosttyTerminal;
   private decorations?: ISearchDecorationOptions;
   private resultsEmitter = new EventEmitter<ISearchResultChangeEvent>();
+  private warnedUnsupported = false;
 
   /** Fires after each search with the selected match and the match count. */
   public readonly onDidChangeResults: IEvent<ISearchResultChangeEvent> = this.resultsEmitter.event;
@@ -147,14 +158,19 @@ export class SearchAddon implements ITerminalAddon {
       return false;
     }
 
+    this.warnUnsupported(options);
     const sameNeedle = search.getNeedle().toLowerCase() === text.toLowerCase();
+    const previous = options.incremental && !sameNeedle ? search.selectedMatch() : null;
     search.setNeedle(text);
+    // Counts and positions below need every match, not just those found so far.
+    search.run();
 
-    // Incremental search re-submits the same term while typing: keep the
-    // selected match rather than moving on.
     let found: boolean;
     if (options.incremental && sameNeedle && search.selectedIndex >= 0) {
+      // The same term re-submitted while typing: keep the selected match.
       found = true;
+    } else if (previous) {
+      found = this.selectNear(search, previous.startRow, previous.startCol, direction);
     } else {
       found = direction === 'next' ? search.next() : search.previous();
     }
@@ -171,10 +187,58 @@ export class SearchAddon implements ITerminalAddon {
     return found;
   }
 
+  /** Warn once about options libghostty's search can't honor. */
+  private warnUnsupported(options: ISearchOptions): void {
+    if (this.warnedUnsupported) return;
+    const used = UNSUPPORTED_OPTIONS.filter((name) => options[name]);
+    if (used.length === 0) return;
+    this.warnedUnsupported = true;
+    console.warn(
+      `SearchAddon: ${used.join(', ')} not supported; matching is literal and ASCII case-insensitive.`
+    );
+  }
+
+  /**
+   * Select the match starting at (row, col), or else the nearest one from
+   * there in the search direction (or, without one, in the other direction).
+   * libghostty only steps through matches, newest first, so walk up from the
+   * newest to the first match that does not start after (row, col).
+   */
+  private selectNear(
+    search: TerminalSearch,
+    row: number,
+    col: number,
+    direction: 'next' | 'previous'
+  ): boolean {
+    if (!search.next()) return false;
+    const last = search.totalMatches - 1;
+    let match = search.selectedMatch();
+    while (
+      match &&
+      before(row, col, match.startRow, match.startCol) &&
+      search.selectedIndex < last
+    ) {
+      search.next();
+      match = search.selectedMatch();
+    }
+    if (
+      match &&
+      direction === 'previous' &&
+      before(match.startRow, match.startCol, row, col) &&
+      search.selectedIndex > 0
+    ) {
+      search.previous();
+    }
+    return true;
+  }
+
   private fireResults(search: TerminalSearch, found: boolean): void {
+    // libghostty numbers matches from the newest; xterm.js from the top.
+    const count = search.totalMatches;
+    const index = search.selectedIndex;
     this.resultsEmitter.fire({
-      resultIndex: found ? search.selectedIndex : -1,
-      resultCount: search.totalMatches,
+      resultIndex: found && index >= 0 ? count - 1 - index : -1,
+      resultCount: count,
     });
   }
 
