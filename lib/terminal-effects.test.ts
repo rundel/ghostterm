@@ -99,3 +99,45 @@ describe('Terminal events from libghostty', () => {
     expect(replies).toEqual([`\x1b[6;${Math.round(m.height)};${Math.round(m.width)}t`]);
   });
 });
+
+describe('theme', () => {
+  const firstCell = (t: Terminal) => t.wasmTerm!.getLine(0)![0];
+
+  test('a pure black background is honored (0x000000 is a real color)', async () => {
+    const t = await createIsolatedTerminal({
+      theme: { background: '#000000', foreground: '#ffffff' },
+    });
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    t.open(c);
+    try {
+      t.write('x');
+      expect(t.wasmTerm!.getColors().background).toEqual({ r: 0, g: 0, b: 0 });
+      expect(t.wasmTerm!.getColors().foreground).toEqual({ r: 255, g: 255, b: 255 });
+    } finally {
+      t.dispose();
+      c.remove();
+    }
+  });
+
+  test('changing the theme after open() recolors existing text', () => {
+    term.write('\x1b[31mred\x1b[0m plain');
+    term.options.theme = { background: '#fdf6e3', foreground: '#657b83', red: '#dc322f' };
+    const line = term.wasmTerm!.getLine(0)!;
+    expect([line[0].fg_r, line[0].fg_g, line[0].fg_b]).toEqual([0xdc, 0x32, 0x2f]);
+    expect([line[4].fg_r, line[4].fg_g, line[4].fg_b]).toEqual([0x65, 0x7b, 0x83]);
+    expect([line[4].bg_r, line[4].bg_g, line[4].bg_b]).toEqual([0xfd, 0xf6, 0xe3]);
+
+    // Back to the defaults
+    term.options.theme = {};
+    expect(firstCell(term).fg_r).not.toBe(0xdc);
+  });
+
+  test('the color scheme answer follows a theme change', () => {
+    const replies: string[] = [];
+    term.onData((d) => replies.push(d));
+    term.options.theme = { background: '#ffffff' };
+    term.write('\x1b[?996n');
+    expect(replies).toEqual(['\x1b[?997;2n']);
+  });
+});

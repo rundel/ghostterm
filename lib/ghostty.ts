@@ -192,6 +192,15 @@ export interface TerminalEffects {
   reset?(): void;
 }
 
+/** Default colors for a terminal, as 0xRRGGBB; undefined means the built-in default. */
+export interface TerminalColors {
+  foreground?: number;
+  background?: number;
+  cursor?: number;
+  /** Overrides for the 256-color palette, by index (usually the first 16). */
+  palette?: (number | undefined)[];
+}
+
 /** Autoscroll a selection drag asks for (GhosttySelectionGestureAutoscroll). */
 export enum SelectionAutoscroll {
   NONE = 0,
@@ -1423,25 +1432,56 @@ export class GhosttyTerminal {
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, this.scratch);
 
     if (!config) return;
-    if (config.fgColor) this.setColor(TerminalOpt.COLOR_FOREGROUND, config.fgColor);
-    if (config.bgColor) this.setColor(TerminalOpt.COLOR_BACKGROUND, config.bgColor);
-    if (config.cursorColor) this.setColor(TerminalOpt.COLOR_CURSOR, config.cursorColor);
+    // In GhosttyTerminalConfig a color of 0 means "default".
+    const orDefault = (c?: number) => (c ? c : undefined);
+    this.setColors({
+      foreground: orDefault(config.fgColor),
+      background: orDefault(config.bgColor),
+      cursor: orDefault(config.cursorColor),
+      palette: config.palette?.map(orDefault),
+    });
+  }
 
-    if (config.palette?.some((c) => c)) {
+  /**
+   * Set the terminal's default colors, at any time (a theme change). Colors
+   * are 0xRRGGBB; undefined restores libghostty's built-in default. Palette
+   * entries override the built-in 256-color palette by index. Programs can
+   * still change colors with OSC 4/10/11/12; those overrides are kept.
+   */
+  setColors(colors: TerminalColors): void {
+    const ex = this.exports;
+    const set = (option: number, hex: number | undefined) => {
+      if (hex === undefined) ex.ghostty_terminal_set(this.handle, option, 0);
+      else this.setColor(option, hex);
+    };
+    set(TerminalOpt.COLOR_FOREGROUND, colors.foreground);
+    set(TerminalOpt.COLOR_BACKGROUND, colors.background);
+    set(TerminalOpt.COLOR_CURSOR, colors.cursor);
+
+    // Start from the built-in palette, then apply the overrides.
+    ex.ghostty_terminal_set(this.handle, TerminalOpt.COLOR_PALETTE, 0);
+    if (colors.palette?.some((c) => c !== undefined)) {
       const ptr = this.scratch;
       this.check(
         ex.ghostty_terminal_get(this.handle, TerminalData.COLOR_PALETTE_DEFAULT, ptr),
         'read default palette'
       );
       const view = this.mem.view();
-      config.palette.forEach((hex, i) => {
-        if (!hex || i >= 256) return;
+      colors.palette.forEach((hex, i) => {
+        if (hex === undefined || i >= 256) return;
         view.setUint8(ptr + i * 3, (hex >> 16) & 0xff);
         view.setUint8(ptr + i * 3 + 1, (hex >> 8) & 0xff);
         view.setUint8(ptr + i * 3 + 2, hex & 0xff);
       });
       ex.ghostty_terminal_set(this.handle, TerminalOpt.COLOR_PALETTE, ptr);
     }
+
+    // Every cell's resolved colors may have changed.
+    this.colorsFresh = false;
+    this.pendingUpdate = true;
+    this.dirty = DirtyState.FULL;
+    this.rowDirty?.fill(1);
+    this.rowStale?.fill(1);
   }
 
   // ==========================================================================

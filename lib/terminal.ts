@@ -26,6 +26,7 @@ import type {
   ProgramStatus,
   ProgressReport,
   SemanticPromptEvent,
+  TerminalColors,
   TerminalNotification,
 } from './ghostty';
 import { getGhostty } from './index';
@@ -234,8 +235,12 @@ export class Terminal implements ITerminalCore {
         break;
 
       case 'theme':
-        if (this.renderer) {
-          console.warn('ghostty-web: theme changes after open() are not yet fully supported');
+        // libghostty re-resolves every cell's colors; the renderer picks up
+        // the selection, cursor and background colors.
+        this.wasmTerm?.setColors(this.themeColors());
+        if (this.renderer && this.wasmTerm) {
+          this.renderer.setTheme(this.options.theme);
+          this.renderer.render(this.wasmTerm, true, this.viewportY, this);
         }
         break;
 
@@ -283,75 +288,53 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Parse a CSS color string to 0xRRGGBB format.
-   * Returns 0 if the color is undefined or invalid.
-   */
-  private parseColorToHex(color?: string): number {
-    if (!color) return 0;
-
-    // Handle hex colors (#RGB, #RRGGBB)
-    if (color.startsWith('#')) {
-      let hex = color.slice(1);
-      if (hex.length === 3) {
-        hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-      }
-      const value = Number.parseInt(hex, 16);
-      return Number.isNaN(value) ? 0 : value;
-    }
-
-    // Handle rgb(r, g, b) format
-    const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-    if (match) {
-      const r = Number.parseInt(match[1], 10);
-      const g = Number.parseInt(match[2], 10);
-      const b = Number.parseInt(match[3], 10);
-      return (r << 16) | (g << 8) | b;
-    }
-
-    return 0;
-  }
-
-  /**
-   * Convert terminal options to WASM terminal config.
+   * Convert terminal options to WASM terminal config. Colors are applied
+   * separately (themeColors), so they can change after open().
    */
   private buildWasmConfig(): GhosttyTerminalConfig | undefined {
-    const theme = this.options.theme;
-    const scrollback = this.options.scrollback;
+    return { scrollbackLimit: this.options.scrollback };
+  }
 
-    // If no theme and default scrollback, use defaults
-    if (!theme && scrollback === 10000) {
-      return undefined;
-    }
-
-    // Build palette array from theme colors
-    // Order: black, red, green, yellow, blue, magenta, cyan, white,
-    //        brightBlack, brightRed, brightGreen, brightYellow, brightBlue, brightMagenta, brightCyan, brightWhite
-    const palette: number[] = [
-      this.parseColorToHex(theme?.black),
-      this.parseColorToHex(theme?.red),
-      this.parseColorToHex(theme?.green),
-      this.parseColorToHex(theme?.yellow),
-      this.parseColorToHex(theme?.blue),
-      this.parseColorToHex(theme?.magenta),
-      this.parseColorToHex(theme?.cyan),
-      this.parseColorToHex(theme?.white),
-      this.parseColorToHex(theme?.brightBlack),
-      this.parseColorToHex(theme?.brightRed),
-      this.parseColorToHex(theme?.brightGreen),
-      this.parseColorToHex(theme?.brightYellow),
-      this.parseColorToHex(theme?.brightBlue),
-      this.parseColorToHex(theme?.brightMagenta),
-      this.parseColorToHex(theme?.brightCyan),
-      this.parseColorToHex(theme?.brightWhite),
-    ];
-
+  /** The theme as libghostty default colors; unset entries use the built-in ones. */
+  private themeColors(): TerminalColors {
+    const theme = this.options.theme ?? {};
+    const color = (c?: string) => (c ? this.parseColor(c) : undefined);
     return {
-      scrollbackLimit: scrollback,
-      fgColor: this.parseColorToHex(theme?.foreground),
-      bgColor: this.parseColorToHex(theme?.background),
-      cursorColor: this.parseColorToHex(theme?.cursor),
-      palette,
+      foreground: color(theme.foreground),
+      background: color(theme.background),
+      cursor: color(theme.cursor),
+      // Order: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones
+      palette: [
+        theme.black,
+        theme.red,
+        theme.green,
+        theme.yellow,
+        theme.blue,
+        theme.magenta,
+        theme.cyan,
+        theme.white,
+        theme.brightBlack,
+        theme.brightRed,
+        theme.brightGreen,
+        theme.brightYellow,
+        theme.brightBlue,
+        theme.brightMagenta,
+        theme.brightCyan,
+        theme.brightWhite,
+      ].map(color),
     };
+  }
+
+  /** Parse a CSS hex or rgb() color to 0xRRGGBB, or undefined if unrecognized. */
+  private parseColor(color: string): number | undefined {
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
+    if (hex) {
+      const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
+      return Number.parseInt(full, 16);
+    }
+    const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+    if (rgb) return (+rgb[1] << 16) | (+rgb[2] << 8) | +rgb[3];
+    return undefined;
   }
 
   // ==========================================================================
@@ -1904,6 +1887,7 @@ export class Terminal implements ITerminalCore {
    * clipboard, notifications, ...) from libghostty to this Terminal's events.
    */
   private connectEffects(wasmTerm: GhosttyTerminal): void {
+    wasmTerm.setColors(this.themeColors());
     wasmTerm.setEffects({
       bell: () => this.bellEmitter.fire(),
       titleChanged: (title) => {
