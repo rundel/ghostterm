@@ -63,6 +63,7 @@ What failures usually mean:
 Then go through what passing tests don't prove:
 
 - Every item under "Known libghostty-vt ... quirks" in CLAUDE.md. For each, check whether NEW fixed it (release docs, headers, commits). If it is fixed, remove the workaround and its comment in `lib/`, add or adjust a test, and drop the item. If it still applies, leave it.
+- Every item under "Missing from libghostty-vt ..." in CLAUDE.md (inactive screen access, parser hooks, line feed events, search options, Unicode version, clear to the cursor line, password input, marker disposal on erase). For each, check whether NEW adds the API listed as wanted. If it does, replace the workaround or add the feature (or, if it is a larger change, list it for the user), update tests and the README's "Behavior worth knowing", and drop the item.
 - Any version-specific comments in `lib/` (`grep -rn "libghostty-vt [0-9]" lib CLAUDE.md README.md`).
 - New functions or options that replace TypeScript doing terminal work, per the guiding rule in CLAUDE.md. List them for the user; adopt one in this bump only if the user asks or it is a small direct swap.
 - Behavior changes the README's "Behavior worth knowing" should mention.
@@ -71,7 +72,7 @@ Check `bun run demo` in a browser if the change touches rendering, input or sele
 
 ## 5. Update the docs
 
-- CLAUDE.md: the version in the "Known libghostty-vt X.Y quirks" heading and the quirks list itself.
+- CLAUDE.md: the version in the "Known libghostty-vt X.Y quirks" and "Missing from libghostty-vt X.Y" lines, and both lists.
 - README.md: anything from step 4 that users would notice.
 - CHANGELOG.md: a line under `## Unreleased` naming the new release and what it brings users, e.g. `- Update libghostty-vt to NEW: <one-line summary of what users get>.`
 
