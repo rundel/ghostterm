@@ -557,6 +557,7 @@ interface Layout {
   scrollViewport: { size: number; tag: number; delta: number; row: number };
   rowSelection: { size: number; startX: number; endX: number };
   selectionBuffer: { size: number; ptr: number; cap: number; len: number };
+  codepointBuffer: { ptr: number; cap: number; len: number };
 }
 
 function buildLayout(abi: AbiLayout): Layout {
@@ -775,6 +776,11 @@ function buildLayout(abi: AbiLayout): Layout {
       ptr: abi.offset('GhosttySelectionBuffer', 'ptr'),
       cap: abi.offset('GhosttySelectionBuffer', 'cap'),
       len: abi.offset('GhosttySelectionBuffer', 'len'),
+    },
+    codepointBuffer: {
+      ptr: abi.offset('GhosttyCodepointBuffer', 'ptr'),
+      cap: abi.offset('GhosttyCodepointBuffer', 'cap'),
+      len: abi.offset('GhosttyCodepointBuffer', 'len'),
     },
   };
 }
@@ -1443,6 +1449,10 @@ export class MouseEncoder {
 /** Size of the per-terminal scratch area for out-parameters. */
 const SCRATCH_SIZE = 2048;
 const SELECTION_SCRATCH_SIZE = 256;
+/** Where in the scratch area grapheme codepoints are read, and how much room they have. */
+const GRAPHEME_BUFFER = 1008; // the GhosttyCodepointBuffer describing them
+const GRAPHEME_SCRATCH = 1024;
+const GRAPHEME_SCRATCH_SIZE = SCRATCH_SIZE - GRAPHEME_SCRATCH;
 
 /**
  * GhosttyTerminal - terminal emulator backed by libghostty-vt
@@ -2232,7 +2242,6 @@ export class GhosttyTerminal {
     const len = Math.min(view.getUint32(viewPtr + L.cellsView.len, true), this._cols);
     const base = y * this._cols;
     const stylePtr = this.scratch + 64;
-    const lenPtr = this.scratch + 128;
 
     // Copy the raw row out first: style lookups below may grow memory.
     const cellSize = L.cellSize;
@@ -2251,6 +2260,7 @@ export class GhosttyTerminal {
       const tag = readBits(lo, hi, L.cell.contentTag);
 
       let graphemeLen = 0;
+      let chars: string | undefined;
       let style: DataView | null = null;
       if (styleId !== 0 || tag === CellContent.CODEPOINT_GRAPHEME) {
         const cells = rowCells();
@@ -2260,15 +2270,54 @@ export class GhosttyTerminal {
           style = new DataView(this.mem.bytes().slice(stylePtr, stylePtr + L.style.size).buffer);
         }
         if (tag === CellContent.CODEPOINT_GRAPHEME) {
-          ex.ghostty_render_state_row_cells_get(cells, RowCellsData.GRAPHEMES_LEN, lenPtr);
-          graphemeLen = Math.max(0, this.mem.view().getUint32(lenPtr, true) - 1);
+          const codepoints = this.rowCellGrapheme(cells);
+          if (codepoints.length > 0) {
+            chars = String.fromCodePoint(...codepoints);
+            graphemeLen = codepoints.length - 1;
+          }
         }
       }
       this.decodeCell(cell, lo, hi, style, graphemeLen);
+      cell.chars = chars;
       cell.selected = selected !== null && x >= selected[0] && x <= selected[1];
       if (cell.hyperlink_id) {
         cell.hyperlink_id = this.linkId(this.hyperlinkAt(PointTag.VIEWPORT, x, y));
       }
+    }
+  }
+
+  /**
+   * The codepoints of the selected row cell's grapheme cluster, base codepoint
+   * first, read into a GhosttyCodepointBuffer.
+   */
+  private rowCellGrapheme(cells: number): number[] {
+    const ex = this.exports;
+    const B = this.L.codepointBuffer;
+    const desc = this.scratch + GRAPHEME_BUFFER;
+    /** Read into buf (cap codepoints); the codepoints, or a result code on failure. */
+    const read = (buf: number, cap: number): number[] | number => {
+      const view = this.mem.view();
+      view.setUint32(desc + B.ptr, buf, true);
+      view.setUint32(desc + B.cap, cap, true);
+      view.setUint32(desc + B.len, 0, true);
+      const result = ex.ghostty_render_state_row_cells_get(cells, RowCellsData.GRAPHEMES_BUF, desc);
+      if (result !== GHOSTTY_SUCCESS) return result;
+      const len = this.mem.view().getUint32(desc + B.len, true);
+      return Array.from(new Uint32Array(this.mem.bytes().slice(buf, buf + len * 4).buffer));
+    };
+
+    const first = read(this.scratch + GRAPHEME_SCRATCH, GRAPHEME_SCRATCH_SIZE / 4);
+    if (typeof first !== 'number') return first;
+    if (first !== GHOSTTY_OUT_OF_SPACE) return [];
+    // Too long for the scratch area: size a buffer to fit.
+    if (ex.ghostty_render_state_row_cells_get(cells, RowCellsData.GRAPHEMES_LEN, desc)) return [];
+    const needed = this.mem.view().getUint32(desc, true);
+    const big = ex.ghostty_wasm_alloc(needed * 4);
+    try {
+      const second = read(big, needed);
+      return typeof second === 'number' ? [] : second;
+    } finally {
+      ex.ghostty_wasm_free(big, needed * 4);
     }
   }
 
@@ -2284,6 +2333,7 @@ export class GhosttyTerminal {
     cell.width = 1;
     cell.hyperlink_id = 0;
     cell.grapheme_len = 0;
+    cell.chars = undefined;
     cell.underline_style = UnderlineStyle.NONE;
     cell.underline_color = undefined;
     cell.overline = false;
@@ -2615,7 +2665,7 @@ export class GhosttyTerminal {
         cells.push(cell);
         continue;
       }
-      let view = this.mem.view();
+      const view = this.mem.view();
       const lo = view.getUint32(rawPtr, true);
       const hi = view.getUint32(rawPtr + 4, true);
 
@@ -2625,16 +2675,14 @@ export class GhosttyTerminal {
           style = new DataView(this.mem.bytes().slice(stylePtr, stylePtr + L.style.size).buffer);
         }
       }
-      let graphemeLen = 0;
+      let codepoints: number[] | null = null;
       if (readBits(lo, hi, L.cell.contentTag) === CellContent.CODEPOINT_GRAPHEME) {
-        const writtenPtr = this.scratch + 384;
-        ex.ghostty_grid_ref_graphemes(refPtr, 0, 0, writtenPtr);
-        view = this.mem.view();
-        graphemeLen = Math.max(0, view.getUint32(writtenPtr, true) - 1);
+        codepoints = this.graphemeAt(tag, x, row);
       }
+      const graphemeLen = codepoints ? Math.max(0, codepoints.length - 1) : 0;
       this.decodeCell(cell, lo, hi, style, graphemeLen);
       cell.selected = false;
-      if (graphemeLen > 0) cell.chars = this.graphemeString(tag, x, row);
+      if (graphemeLen > 0) cell.chars = String.fromCodePoint(...codepoints!);
       if (cell.hyperlink_id) cell.hyperlink_id = this.linkId(this.hyperlinkAt(tag, x, row));
       cells.push(cell);
     }
@@ -2653,11 +2701,6 @@ export class GhosttyTerminal {
       this.linkIds.set(uri, id);
     }
     return id;
-  }
-
-  private graphemeString(tag: number, x: number, y: number): string | undefined {
-    const cps = this.graphemeAt(tag, x, y);
-    return cps && cps.length > 0 ? String.fromCodePoint(...cps) : undefined;
   }
 
   /**
@@ -3044,8 +3087,8 @@ export class GhosttyTerminal {
     const refPtr = this.scratch + 320;
     const countPtr = this.scratch + 336;
     if (!this.gridRef(tag, x, y, refPtr)) return null;
-    const cap = 16;
-    const buf = this.scratch + 1024;
+    const cap = GRAPHEME_SCRATCH_SIZE / 4;
+    const buf = this.scratch + GRAPHEME_SCRATCH;
     let result = ex.ghostty_grid_ref_graphemes(refPtr, buf, cap, countPtr);
     if (result === GHOSTTY_SUCCESS) {
       const count = this.mem.view().getUint32(countPtr, true);

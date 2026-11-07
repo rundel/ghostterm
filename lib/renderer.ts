@@ -25,8 +25,6 @@ export interface IRenderable {
   getViewportLine?(y: number): GhosttyCell[] | null;
   /** Scroll the buffer's own viewport to this many rows above the bottom. */
   setViewportOffset?(offset: number): void;
-  /** Grapheme string at a row of the displayed viewport. */
-  getViewportGraphemeString?(row: number, col: number): string;
   getCursor(): {
     x: number;
     y: number;
@@ -674,8 +672,8 @@ export class CanvasRenderer {
 
     // Get the character to render - use grapheme lookup for complex scripts
     let char: string;
-    if (cell.grapheme_len > 0 && this.currentBuffer?.getViewportGraphemeString) {
-      char = this.currentBuffer.getViewportGraphemeString(y, x);
+    if (cell.chars) {
+      char = cell.chars;
     } else if (cell.grapheme_len > 0 && this.currentBuffer?.getGraphemeString) {
       // Cell has additional codepoints - get full grapheme cluster
       char = this.currentBuffer.getGraphemeString(y, x);

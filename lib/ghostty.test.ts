@@ -8,6 +8,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { Ghostty, KeyEncoderOption, SelectionAutoscroll } from './ghostty';
+import { createIsolatedTerminal } from './test-helpers';
 import { Key, KeyAction, Mods } from './types';
 
 let ghostty: Ghostty;
@@ -189,6 +190,64 @@ describe('viewport cells', () => {
       expect(term.getGraphemeString(0, 0)).toBe(family);
     } finally {
       term.free();
+    }
+  });
+
+  test('viewport cells carry their full grapheme cluster', () => {
+    const term = ghostty.createTerminal(20, 3);
+    const family = '👨‍👩‍👧';
+    try {
+      term.write(`a${family}b`);
+      const cells = term.getViewport();
+      expect(cells[0].chars).toBeUndefined();
+      expect(cells[1].chars).toBe(family);
+      expect(cells[1].grapheme_len).toBe([...family].length - 1);
+      expect(cells[3].chars).toBeUndefined();
+      expect(cells[3].codepoint).toBe(0x62);
+
+      // A pooled cell that no longer holds a cluster drops its chars.
+      term.write('\x1b[H  ');
+      expect(term.getViewport()[1].chars).toBeUndefined();
+    } finally {
+      term.free();
+    }
+  });
+
+  test('reads grapheme clusters longer than 16 codepoints', () => {
+    const term = ghostty.createTerminal(20, 3);
+    // e followed by 30 combining marks: one cluster of 31 codepoints.
+    const cluster = `e${'́'.repeat(30)}`;
+    try {
+      term.write(`${cluster}x`);
+      expect(term.getViewport()[0].chars).toBe(cluster);
+      expect(term.getViewport()[0].grapheme_len).toBe(30);
+      expect(term.getScreenLine(0)![0].chars).toBe(cluster);
+      expect(term.getLine(0)![0].chars).toBe(cluster);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('the renderer draws whole clusters, scrolled or not', async () => {
+    const term = await createIsolatedTerminal({ cols: 20, rows: 3 });
+    term.open(document.createElement('div'));
+    const family = '👨‍👩‍👧';
+    try {
+      term.write(`${family}\r\n\r\n\r\n\r\nend`);
+      const renderer = (term as any).renderer;
+      const drawn: string[] = [];
+      const fillText = renderer.ctx.fillText;
+      renderer.ctx.fillText = (s: string) => drawn.push(s);
+      try {
+        renderer.render(term.wasmTerm, true, 0, term);
+        expect(drawn).not.toContain(family);
+        renderer.render(term.wasmTerm, true, 2, term); // the cluster's row scrolled into view
+        expect(drawn).toContain(family);
+      } finally {
+        renderer.ctx.fillText = fillText;
+      }
+    } finally {
+      term.dispose();
     }
   });
 

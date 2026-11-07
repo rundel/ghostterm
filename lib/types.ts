@@ -621,7 +621,7 @@ export interface GhosttyCell {
   bg_default?: boolean;
   /** Inside the terminal's selection (viewport rows only). */
   selected?: boolean;
-  /** The full grapheme cluster, for cells with grapheme_len > 0 (screen lines). */
+  /** The full grapheme cluster, for cells with grapheme_len > 0; undefined otherwise. */
   chars?: string;
 }
 
