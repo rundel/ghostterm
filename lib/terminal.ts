@@ -61,7 +61,7 @@ export class Terminal implements ITerminalCore {
   public textarea?: HTMLTextAreaElement;
 
   // Buffer API (xterm.js compatibility)
-  public readonly buffer: IBufferNamespace;
+  public readonly buffer: BufferNamespace;
 
   // Unicode API (xterm.js compatibility)
   public readonly unicode: IUnicodeVersionProvider = {
@@ -167,7 +167,12 @@ export class Terminal implements ITerminalCore {
   /** The top line last reported by onScroll. */
   private lastScrollTop = 0;
   private customWheelEventHandler?: (event: WheelEvent) => boolean;
-  private lastCursorY: number = 0; // Track cursor position for onCursorMove
+  /** Cursor position last reported by onCursorMove. */
+  private lastCursor = { x: 0, y: 0 };
+  /** Whether the alternate screen was active, for buffer.onBufferChange. */
+  private lastAltScreen = false;
+  /** A program reset the terminal (RIS) during the write in progress. */
+  private resetPending = false;
 
   // Scrollbar interaction state
   private isDraggingScrollbar: boolean = false;
@@ -257,7 +262,7 @@ export class Terminal implements ITerminalCore {
         this.wasmTerm?.setColors(this.themeColors());
         if (this.renderer && this.wasmTerm) {
           this.renderer.setTheme(this.options.theme);
-          this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
+          this.renderFrame(true);
         }
         break;
 
@@ -301,7 +306,7 @@ export class Terminal implements ITerminalCore {
     this.syncCellPixelSize();
 
     // Force full re-render with new font
-    this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
+    this.renderFrame(true);
   }
 
   /**
@@ -553,7 +558,7 @@ export class Terminal implements ITerminalCore {
       this.watchDevicePixelRatio();
 
       // Render initial blank screen (force full redraw)
-      this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
+      this.renderFrame(true);
 
       // Start render loop
       this.startRenderLoop();
@@ -650,6 +655,11 @@ export class Terminal implements ITerminalCore {
     // Write directly to WASM terminal (handles VT parsing internally)
     this.wasmTerm!.write(data);
     if (scrolledOffset > 0) this.followScrolledContent(scrolledOffset);
+    if (this.resetPending) {
+      this.resetPending = false;
+      this.afterReset();
+    }
+    this.checkBufferChange();
     // New lines move the top line when following output (as in xterm.js).
     this.fireScrollIfMoved();
 
@@ -679,7 +689,7 @@ export class Terminal implements ITerminalCore {
     if (this.awaitingEcho) {
       this.awaitingEcho = false;
       if (this.renderer && this.wasmTerm) {
-        this.renderer.render(this.wasmTerm, false, this.viewportY, this.scrollbarOpacity);
+        this.renderFrame(false);
       }
     }
 
@@ -794,7 +804,7 @@ export class Terminal implements ITerminalCore {
       this.resizeEmitter.fire({ cols, rows });
 
       // Force full render
-      this.renderer!.render(this.wasmTerm!, true, this.viewportY, this.scrollbarOpacity);
+      this.renderFrame(true);
     } catch (e) {
       console.error('Terminal resize failed:', e);
     }
@@ -805,32 +815,71 @@ export class Terminal implements ITerminalCore {
   /**
    * Clear terminal screen
    */
+  /**
+   * Clear the buffer as xterm.js does: the cursor's line becomes the top
+   * line, everything else (scrollback included) is dropped, and the cursor
+   * keeps its column. Nothing is sent to the program.
+   */
   clear(): void {
     this.assertOpen();
-    // Send ANSI clear screen and cursor home sequences
-    this.wasmTerm!.write('\x1b[2J\x1b[H');
+    const wasmTerm = this.wasmTerm!;
+    const { x, y } = wasmTerm.getCursor();
+    // Scroll the cursor's line up to the top (SU), erase below it, put the
+    // cursor back on it and drop the history (ED 3).
+    let seq = y > 0 ? `\x1b[${y}S` : '';
+    if (this.rows > 1) seq += '\x1b[2;1H\x1b[J';
+    seq += `\x1b[1;${x + 1}H\x1b[3J`;
+    wasmTerm.write(seq);
+    this.selectionManager?.clearSelection();
+    this.linkDetector?.invalidateCache();
+    this.scrollToViewportOffset(0);
+    this.fireScrollIfMoved();
   }
 
   /**
-   * Reset terminal state
+   * Reset the terminal to its initial state, as a program's RIS (ESC c)
+   * does: screen, scrollback, modes and title. The terminal object, options
+   * and addons stay as they are.
    */
   reset(): void {
     this.assertOpen();
+    this.wasmTerm!.reset();
+    this.afterReset();
+  }
 
-    // Free old WASM terminal and create new one
-    if (this.wasmTerm) {
-      this.wasmTerm.free();
+  /** Fire buffer.onBufferChange when the program switched screens. */
+  private checkBufferChange(): void {
+    const alt = this.wasmTerm?.isAlternateScreen() ?? false;
+    if (alt === this.lastAltScreen) return;
+    this.lastAltScreen = alt;
+    this.buffer._fireBufferChange(this.buffer.active);
+  }
+
+  /** Drop what ghostterm kept about the screen libghostty just reset. */
+  private afterReset(): void {
+    this.selectionManager?.clearSelection();
+    this.linkDetector?.invalidateCache();
+    this.cancelScrollAnimation();
+    this.viewportY = 0;
+    this.targetViewportY = 0;
+    this.fireScrollIfMoved();
+
+    // Hover state
+    this.currentHoveredLink?.hover?.(false);
+    this.currentHoveredLink = undefined;
+    this.renderer?.setHoveredHyperlinkId(0);
+    this.renderer?.setHoveredLinkRange(null);
+    if (this.canvas) {
+      this.canvas.style.cursor = this.pointerShape();
+      if (this.element) this.element.style.cursor = this.canvas.style.cursor;
     }
-    const config = this.buildWasmConfig();
-    this.wasmTerm = this.ghostty!.createTerminal(this.cols, this.rows, config);
-    this.connectEffects(this.wasmTerm);
-    this.syncCellPixelSize();
 
-    // Clear renderer
-    this.renderer!.clear();
-
-    // Reset title
-    this.currentTitle = '';
+    this.renderer?.clear();
+    this.checkBufferChange();
+    if (this.currentTitle !== '') {
+      this.currentTitle = '';
+      this.titleChangeEmitter.fire('');
+    }
   }
 
   /**
@@ -1217,6 +1266,13 @@ export class Terminal implements ITerminalCore {
     }
   }
 
+  /** Draw what changed (everything with `force`) and fire onRender for the rows drawn. */
+  private renderFrame(force: boolean): void {
+    if (!this.renderer || !this.wasmTerm) return;
+    const rows = this.renderer.render(this.wasmTerm, force, this.viewportY, this.scrollbarOpacity);
+    if (rows) this.renderEmitter.fire(rows);
+  }
+
   /**
    * Start the render loop
    */
@@ -1229,19 +1285,14 @@ export class Terminal implements ITerminalCore {
         // 1. Calls update() once to sync state and check dirty flags
         // 2. Only redraws dirty rows when forceAll=false
         // 3. Always calls clearDirty() at the end
-        this.renderer!.render(this.wasmTerm!, false, this.viewportY, this.scrollbarOpacity);
+        this.renderFrame(false);
 
-        // Check for cursor movement (Phase 2: onCursorMove event)
-        // Note: getCursor() reads from already-updated render state (from render() above)
+        // onCursorMove; getCursor() reads the render state render() updated
         const cursor = this.wasmTerm!.getCursor();
-        if (cursor.y !== this.lastCursorY) {
-          this.lastCursorY = cursor.y;
+        if (cursor.x !== this.lastCursor.x || cursor.y !== this.lastCursor.y) {
+          this.lastCursor = { x: cursor.x, y: cursor.y };
           this.cursorMoveEmitter.fire();
         }
-
-        // Note: onRender event is intentionally not fired in the render loop
-        // to avoid performance issues. For now, consumers can use requestAnimationFrame
-        // if they need frame-by-frame updates.
 
         this.animationFrameId = requestAnimationFrame(loop);
       }
@@ -1749,6 +1800,10 @@ export class Terminal implements ITerminalCore {
     wasmTerm.setDefaultCursor(this.options.cursorStyle, this.options.cursorBlink);
     wasmTerm.setEffects({
       bell: () => this.bellEmitter.fire(),
+      reset: () => {
+        // Handled after the write: libghostty is still processing it.
+        this.resetPending = true;
+      },
       titleChanged: (title) => {
         if (title !== this.currentTitle) {
           this.currentTitle = title;

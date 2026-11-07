@@ -373,21 +373,86 @@ describe('Terminal', () => {
   });
 
   describe('Control Methods', () => {
-    test('clear() does not throw', async () => {
-      const term = await createIsolatedTerminal();
+    test('clear() keeps only the cursor line, at the top, and drops the scrollback', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
       term.open(container!);
+      const sent: string[] = [];
+      term.onData((d) => sent.push(d));
+      for (let i = 0; i < 12; i++) term.write(`line ${i}\r\n`);
+      term.write('$ cmd');
+      term.scrollLines(-3);
 
-      expect(() => term.clear()).not.toThrow();
+      term.clear();
 
+      const buf = term.buffer.active;
+      expect(buf.baseY).toBe(0);
+      expect(buf.length).toBe(5);
+      expect(buf.getLine(0)!.translateToString(true)).toBe('$ cmd');
+      for (let y = 1; y < 5; y++) expect(buf.getLine(y)!.translateToString(true)).toBe('');
+      expect([buf.cursorX, buf.cursorY]).toEqual([5, 0]);
+      expect(term.viewportY).toBe(0);
+      expect(sent).toEqual([]);
+
+      // Output continues on the kept line
+      term.write('\r\nnext');
+      expect(buf.getLine(1)!.translateToString(true)).toBe('next');
       term.dispose();
     });
 
-    test('reset() does not throw', async () => {
-      const term = await createIsolatedTerminal();
+    test('clear() with the cursor on the top line', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
       term.open(container!);
+      term.write('top\r\nbelow\x1b[1;2H');
+      term.clear();
+      expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('top');
+      expect(term.buffer.active.getLine(1)!.translateToString(true)).toBe('');
+      expect(term.buffer.active.cursorX).toBe(1);
+      term.dispose();
+    });
 
-      expect(() => term.reset()).not.toThrow();
+    test('reset() clears screen, scrollback, modes, title and scrolling', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+      term.open(container!);
+      const wasmTerm = term.wasmTerm;
+      const titles: string[] = [];
+      term.onTitleChange((t) => titles.push(t));
+      term.write('\x1b]2;old\x07\x1b[?2004h');
+      for (let i = 0; i < 12; i++) term.write(`line ${i}\r\n`);
+      term.scrollLines(-3);
 
+      term.reset();
+
+      expect(term.wasmTerm).toBe(wasmTerm); // same handle: addons keep working
+      expect(term.viewportY).toBe(0);
+      expect(term.buffer.active.baseY).toBe(0);
+      expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('');
+      expect(term.hasBracketedPaste()).toBe(false);
+      expect(titles).toEqual(['old', '']);
+      // The same title set again is reported again
+      term.write('\x1b]2;old\x07');
+      expect(titles).toEqual(['old', '', 'old']);
+      // Options still apply (the theme's default colors)
+      const replies: string[] = [];
+      term.onData((d) => replies.push(d));
+      term.write('\x1b]11;?\x07');
+      expect(replies).toEqual(['\x1b]11;rgb:1e1e/1e1e/1e1e\x07']);
+      term.dispose();
+    });
+
+    test('a program reset (RIS) resets what Terminal tracks too', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+      term.open(container!);
+      const titles: string[] = [];
+      term.onTitleChange((t) => titles.push(t));
+      for (let i = 0; i < 12; i++) term.write(`line ${i}\r\n`);
+      term.write('\x1b]2;old\x07');
+      term.scrollLines(-2);
+      term.write('\x1bcafter');
+      expect(term.viewportY).toBe(0);
+      expect(titles).toEqual(['old', '']);
+      expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('after');
+      term.write('\x1b]2;old\x07');
+      expect(titles).toEqual(['old', '', 'old']);
       term.dispose();
     });
 

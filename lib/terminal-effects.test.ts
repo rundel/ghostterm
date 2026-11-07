@@ -98,6 +98,41 @@ describe('Terminal events from libghostty', () => {
     const m = (term as any).renderer.getMetrics();
     expect(replies).toEqual([`\x1b[6;${Math.round(m.height)};${Math.round(m.width)}t`]);
   });
+
+  test('buffer.onBufferChange fires when the program switches screens', () => {
+    const types: string[] = [];
+    term.buffer.onBufferChange((b) => types.push(b.type));
+    term.write('\x1b[?1049h');
+    term.write('vim');
+    term.write('\x1b[?1049l');
+    expect(types).toEqual(['alternate', 'normal']);
+  });
+
+  test('onRender reports the rows drawn', async () => {
+    const ranges: Array<{ start: number; end: number }> = [];
+    term.onRender((r) => ranges.push(r));
+    await new Promise((r) => setTimeout(r, 40));
+    ranges.length = 0;
+    term.write('\x1b[5;1Hhi');
+    await new Promise((r) => setTimeout(r, 40));
+    expect(ranges.length).toBeGreaterThan(0);
+    const { start, end } = ranges[0];
+    expect(start).toBeLessThanOrEqual(4);
+    expect(end).toBeGreaterThanOrEqual(4);
+    // Nothing changes: no more renders reported
+    ranges.length = 0;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(ranges).toEqual([]);
+  });
+
+  test('onCursorMove fires for moves along the line too', async () => {
+    await new Promise((r) => setTimeout(r, 40));
+    let moves = 0;
+    term.onCursorMove(() => moves++);
+    term.write('abc');
+    await new Promise((r) => setTimeout(r, 40));
+    expect(moves).toBe(1);
+  });
 });
 
 describe('theme', () => {

@@ -2171,6 +2171,23 @@ export class GhosttyTerminal {
   }
 
   /**
+   * Full reset, as RIS (ESC c) does: screen, scrollback, modes and what the
+   * program set. The handle, callbacks and configured defaults stay, so
+   * objects holding this terminal remain valid.
+   */
+  reset(): void {
+    this.exports.ghostty_terminal_reset(this.handle);
+    this.holdStarted = null;
+    this.responses = [];
+    this.atBottom = true;
+    this.colorsFresh = false;
+    this.pendingUpdate = true;
+    this.dirty = DirtyState.FULL;
+    this.rowDirty.fill(1);
+    this.rowStale.fill(1);
+  }
+
+  /**
    * Get all viewport cells. Returns a reusable cell array (zero allocation
    * after warmup); only rows that changed since they were last read are
    * fetched from WASM.

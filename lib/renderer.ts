@@ -348,14 +348,15 @@ export class CanvasRenderer {
   // ==========================================================================
 
   /**
-   * Render the terminal buffer to canvas
+   * Render the terminal buffer to canvas. Returns the range of viewport rows
+   * redrawn (inclusive), or null when no row was.
    */
   public render(
     buffer: IRenderable,
     forceAll: boolean = false,
     viewportY: number = 0,
     scrollbarOpacity: number = 1
-  ): void {
+  ): { start: number; end: number } | null {
     // Store buffer reference for grapheme lookups in renderCell
     this.currentBuffer = buffer;
 
@@ -490,8 +491,12 @@ export class CanvasRenderer {
     for (const y of cursorRows) if (y < dims.rows) rowsToRender.add(y);
 
     // Render each line
+    let start = -1;
+    let end = -1;
     for (let y = 0; y < dims.rows; y++) {
       if (!rowsToRender.has(y)) continue;
+      if (start < 0) start = y;
+      end = y;
       const line = buffer.getViewportLine(y);
       if (line) {
         this.renderLine(line, y, dims.cols);
@@ -512,6 +517,7 @@ export class CanvasRenderer {
     // This is critical - if we don't clear after a full redraw, the dirty
     // state persists and the next frame might not detect new changes properly.
     buffer.clearDirty();
+    return start < 0 ? null : { start, end };
   }
 
   /**
