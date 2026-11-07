@@ -1,948 +1,634 @@
 /**
- * Selection Manager Tests
- *
- * Tests for text selection functionality including:
- * - Basic selection operations
- * - Absolute coordinate system for scroll persistence
- * - Selection clearing behavior
- * - Auto-scroll during drag selection
- * - Copy functionality with scrollback
- *
- * Test Isolation Pattern:
- * Uses createIsolatedTerminal() to ensure each test gets its own WASM instance.
+ * Selection: the xterm.js selection API in absolute buffer rows, mouse
+ * gestures (libghostty's selection gesture), drawing, copying and the context
+ * menu, driven through dispatched DOM events and the public Terminal API.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, jest, spyOn, test } from 'bun:test';
+import { DEFAULT_THEME } from './renderer';
 import type { Terminal } from './terminal';
-import { createIsolatedTerminal } from './test-helpers';
+import {
+  timers,
+  internals,
+  keyDown,
+  mouseEvent,
+  paintedRects,
+  stub,
+  terminalFixture,
+} from './test-helpers';
 
-/**
- * Helper to set selection using absolute coordinates
- */
-function setSelectionAbsolute(
-  term: Terminal,
-  startCol: number,
-  startAbsRow: number,
-  endCol: number,
-  endAbsRow: number
-): void {
-  const selMgr = (term as any).selectionManager;
-  selMgr?.setSelectionAbsolute(startCol, startAbsRow, endCol, endAbsRow);
+const fixture = terminalFixture();
+let term: Terminal;
+let container: HTMLElement;
+
+function open(cols: number, rows: number, scrollback?: number): void {
+  ({ term, container } = fixture.open({ cols, rows, scrollback }));
+}
+
+interface CellEventInit {
+  /** How far across the cell the pointer is (0..1). */
+  fx?: number;
+  time?: number;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  button?: number;
+  target?: EventTarget;
+}
+
+/** Dispatch a mouse event over a cell (0-based viewport column and row). */
+function cellEvent(type: string, col: number, row: number, init: CellEventInit = {}): MouseEvent {
+  const { renderer, canvas } = internals(term);
+  const { fx = 0.5, time = 1000, target = canvas, ...mods } = init;
+  const e = mouseEvent(type, (col + fx) * renderer.charWidth, (row + 0.5) * renderer.charHeight, {
+    button: 0,
+    ...mods,
+  });
+  Object.defineProperty(e, 'timeStamp', { value: time });
+  target.dispatchEvent(e);
+  return e;
 }
 
 /**
- * Helper to convert viewport row to absolute row
+ * Press near the left edge of one cell and drag past the midpoint of another
+ * (Ghostty anchors and extends selections by cell halves), then release.
  */
-function viewportToAbsolute(term: Terminal, viewportRow: number): number {
-  const scrollbackLength = term.wasmTerm?.getScrollbackLength() ?? 0;
-  const viewportY = term.getViewportY();
-  return scrollbackLength + viewportRow - Math.floor(viewportY);
+function drag(from: [number, number], to: [number, number], init: CellEventInit = {}): void {
+  cellEvent('mousedown', from[0], from[1], { ...init, fx: 0.1 });
+  cellEvent('mousemove', to[0], to[1], { ...init, fx: 0.9, time: (init.time ?? 1000) + 50 });
+  cellEvent('mouseup', to[0], to[1], { ...init, time: (init.time ?? 1000) + 60, target: document });
 }
 
-describe('SelectionManager', () => {
-  let container: HTMLElement;
-
-  beforeEach(() => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-  });
-
-  afterEach(() => {
-    container.remove();
-  });
-
-  describe('Selection with absolute coordinates', () => {
-    test('hasSelection returns false when no selection', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.hasSelection()).toBe(false);
-
-      term.dispose();
-    });
-
-    test('hasSelection returns true when selection exists', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Hello World\r\n');
-
-      // Set selection using absolute coordinates
-      setSelectionAbsolute(term, 0, 0, 5, 0);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.hasSelection()).toBe(true);
-
-      term.dispose();
-    });
-
-    test('hasSelection returns true for single cell programmatic selection', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      // Programmatic single-cell selection should be valid
-      // (e.g., triple-click on single-char line, or select(col, row, 1))
-      setSelectionAbsolute(term, 5, 0, 5, 0);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.hasSelection()).toBe(true);
-
-      term.dispose();
-    });
-
-    test('clearSelection clears selection and marks rows dirty', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      setSelectionAbsolute(term, 0, scrollbackLen, 5, scrollbackLen + 2);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.hasSelection()).toBe(true);
-
-      selMgr.clearSelection();
-
-      expect(selMgr.hasSelection()).toBe(false);
-      // libghostty marks the rows for redraw so the highlight is cleared
-      term.wasmTerm!.update();
-      expect(term.wasmTerm!.isRowDirty(0)).toBe(true);
-
-      term.dispose();
-    });
-  });
-
-  describe('Selection text extraction', () => {
-    test('getSelection returns empty string when no selection', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.getSelection()).toBe('');
-
-      term.dispose();
-    });
-
-    test('getSelection extracts text from screen buffer', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Hello World\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      // Select "Hello" (first 5 characters)
-      setSelectionAbsolute(term, 0, scrollbackLen, 4, scrollbackLen);
-
-      const selMgr = (term as any).selectionManager;
-      expect(selMgr.getSelection()).toBe('Hello');
-
-      term.dispose();
-    });
-
-    test('getSelection extracts multi-line text', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      // Select all three lines
-      setSelectionAbsolute(term, 0, scrollbackLen, 5, scrollbackLen + 2);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      expect(text).toContain('Line 1');
-      expect(text).toContain('Line 2');
-      expect(text).toContain('Line 3');
-
-      term.dispose();
-    });
-
-    test('getSelection extracts text from scrollback', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
-      term.open(container);
-
-      // Write enough lines to create scrollback
-      for (let i = 0; i < 50; i++) {
-        term.write(`Line ${i.toString().padStart(3, '0')}\r\n`);
-      }
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      expect(scrollbackLen).toBeGreaterThan(0);
-
-      // Select from scrollback (first few lines)
-      setSelectionAbsolute(term, 0, 0, 10, 2);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      expect(text).toContain('Line 000');
-      expect(text).toContain('Line 001');
-      expect(text).toContain('Line 002');
-
-      term.dispose();
-    });
-
-    test('getSelection extracts text spanning scrollback and screen', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
-      term.open(container);
-
-      // Write enough lines to fill scrollback and screen
-      for (let i = 0; i < 50; i++) {
-        term.write(`Line ${i.toString().padStart(3, '0')}\r\n`);
-      }
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-
-      // Select spanning scrollback and screen
-      // End of scrollback through beginning of screen
-      setSelectionAbsolute(term, 0, scrollbackLen - 2, 10, scrollbackLen + 2);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      // Should contain lines from both regions
-      expect(text.split('\n').length).toBeGreaterThanOrEqual(4);
-
-      term.dispose();
-    });
-  });
-
-  describe('Selection persistence during scroll', () => {
-    test('selection coordinates are preserved when scrolling', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
-      term.open(container);
-
-      // Write content
-      for (let i = 0; i < 50; i++) {
-        term.write(`Line ${i.toString().padStart(3, '0')}\r\n`);
-      }
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-
-      // Set selection at specific absolute position
-      const startAbsRow = scrollbackLen + 5;
-      const endAbsRow = scrollbackLen + 10;
-      setSelectionAbsolute(term, 0, startAbsRow, 10, endAbsRow);
-
-      const selMgr = (term as any).selectionManager;
-      const textBefore = selMgr.getSelection();
-
-      // Scroll up
-      term.scrollLines(-10);
-
-      // Selection should still return the same text
-      const textAfter = selMgr.getSelection();
-      expect(textAfter).toBe(textBefore);
-
-      term.dispose();
-    });
-
-    test('selection coords convert correctly after scrolling', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
-      term.open(container);
-
-      // Write content
-      for (let i = 0; i < 50; i++) {
-        term.write(`Line ${i.toString().padStart(3, '0')}\r\n`);
-      }
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-
-      // Set selection in screen buffer area
-      setSelectionAbsolute(term, 0, scrollbackLen, 10, scrollbackLen + 5);
-
-      const selMgr = (term as any).selectionManager;
-
-      // Get viewport coords before scroll
-      const coordsBefore = selMgr.getSelectionCoords();
-      expect(coordsBefore).not.toBeNull();
-
-      // Scroll up 10 lines
-      term.scrollLines(-10);
-
-      // Get viewport coords after scroll - they should have shifted
-      const coordsAfter = selMgr.getSelectionCoords();
-      expect(coordsAfter).not.toBeNull();
-
-      // Viewport row should have increased by the scroll amount
-      expect(coordsAfter!.startRow).toBe(coordsBefore!.startRow + 10);
-      expect(coordsAfter!.endRow).toBe(coordsBefore!.endRow + 10);
-
-      term.dispose();
-    });
-
-    test('selection outside viewport returns null coords but preserves text', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
-      term.open(container);
-
-      // Write content
-      for (let i = 0; i < 100; i++) {
-        term.write(`Line ${i.toString().padStart(3, '0')}\r\n`);
-      }
-
-      // Select near the bottom of the buffer
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      setSelectionAbsolute(term, 0, scrollbackLen + 10, 10, scrollbackLen + 15);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      // Scroll to top - selection should be way off screen
-      term.scrollToTop();
-
-      // Coords should be null (off screen) but text should still work
-      const coords = selMgr.getSelectionCoords();
-      expect(coords).toBeNull();
-
-      // Text extraction should still work
-      expect(selMgr.getSelection()).toBe(text);
-
-      term.dispose();
-    });
-  });
-
-  describe('Selection highlight', () => {
-    test('selected cells are flagged in the viewport, and cleared with the selection', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.select(2, 0, 4);
-      const row = term.wasmTerm!.getViewportLine(0)!;
-      expect(row.map((c) => (c.selected ? 1 : 0)).slice(0, 8)).toEqual([0, 0, 1, 1, 1, 1, 0, 0]);
-      expect(term.wasmTerm!.getViewportLine(1)!.some((c) => c.selected)).toBe(false);
-
-      selMgr.clearSelection();
-      expect(term.wasmTerm!.getViewportLine(0)!.some((c) => c.selected)).toBe(false);
-
-      term.dispose();
-    });
-  });
-
-  describe('Backward selection', () => {
-    test('handles selection from right to left', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Hello World\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      // Select backwards (end before start)
-      setSelectionAbsolute(term, 10, scrollbackLen, 0, scrollbackLen);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      expect(text).toBe('Hello World');
-
-      term.dispose();
-    });
-
-    test('handles selection from bottom to top', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      // Select backwards (end row before start row)
-      setSelectionAbsolute(term, 5, scrollbackLen + 2, 0, scrollbackLen);
-
-      const selMgr = (term as any).selectionManager;
-      const text = selMgr.getSelection();
-
-      expect(text).toContain('Line 1');
-      expect(text).toContain('Line 2');
-      expect(text).toContain('Line 3');
-
-      term.dispose();
-    });
-  });
-
-  describe('selectAll', () => {
-    test('selectAll selects all content, scrollback included (as in xterm.js)', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 5 });
-      term.open(container);
-
-      for (let i = 0; i < 8; i++) term.write(`Row ${i}\r\n`);
-      term.write('Last');
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.selectAll();
-
-      expect(selMgr.hasSelection()).toBe(true);
-      const text = selMgr.getSelection();
-      expect(text.startsWith('Row 0\nRow 1')).toBe(true);
-      expect(text.endsWith('Row 7\nLast')).toBe(true);
-
-      const coords = selMgr.getSelectionCoords();
-      expect(coords).not.toBeNull();
-      expect(coords!.startRow).toBe(0);
-      expect(coords!.startCol).toBe(0);
-
-      term.dispose();
-    });
-  });
-
-  describe('select() API', () => {
-    test('select() creates selection at specified position', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Hello World\r\n');
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.select(0, 0, 5);
-
-      expect(selMgr.hasSelection()).toBe(true);
-      expect(selMgr.getSelection()).toBe('Hello');
-
-      term.dispose();
-    });
-  });
-
-  describe('xterm.js selection API in buffer coordinates', () => {
-    async function withScrollback(): Promise<Terminal> {
-      const term = await createIsolatedTerminal({ cols: 10, rows: 3 });
-      term.open(container);
-      for (let i = 0; i < 6; i++) term.write(`line ${i}\r\n`);
-      term.write('last');
-      return term;
+function click(col: number, row: number, time: number): void {
+  cellEvent('mousedown', col, row, { time });
+  cellEvent('mouseup', col, row, { time: time + 10, target: document });
+}
+
+/** Columns painted with the selection background, by viewport row. */
+function drawnSelection(): Record<number, number[]> {
+  const { renderer } = internals(term);
+  const rows: Record<number, number[]> = {};
+  for (const r of paintedRects(term, DEFAULT_THEME.selectionBackground)) {
+    const row = r.y / renderer.charHeight;
+    for (let x = r.x; x < r.x + r.w; x += renderer.charWidth) {
+      rows[row] = [...(rows[row] ?? []), x / renderer.charWidth];
     }
+  }
+  return rows;
+}
 
-    test('select() takes absolute buffer rows, scrollback included', async () => {
-      const term = await withScrollback();
-      expect(term.buffer.active.baseY).toBe(4);
+function writeLines(count: number, label = (i: number) => `Line ${i}`): void {
+  for (let i = 0; i < count; i++) term.write(`${label(i)}\r\n`);
+}
 
-      term.select(0, 1, 6);
-      expect(term.getSelection()).toBe('line 1');
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 1 }, end: { x: 6, y: 1 } });
-
-      // Continues onto the next rows like xterm.js; a selection to the end of
-      // a row ends at x = cols.
-      term.select(5, 1, 15);
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 10, y: 2 } });
-      term.select(5, 1, 20);
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 5, y: 3 } });
-      term.dispose();
-    });
-
-    test('selectLines() takes absolute buffer rows', async () => {
-      const term = await withScrollback();
-      term.selectLines(2, 3);
-      expect(term.getSelection()).toBe('line 2\nline 3');
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 2 }, end: { x: 10, y: 3 } });
-      term.dispose();
-    });
-
-    test('getSelectionPosition() reports a selection scrolled off screen', async () => {
-      const term = await withScrollback();
-      term.select(0, 6, 4);
-      term.scrollToTop();
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 6 }, end: { x: 4, y: 6 } });
-      expect(term.getSelection()).toBe('last');
-      term.dispose();
-    });
-
-    test('positions past the end of the buffer are clamped', async () => {
-      const term = await withScrollback();
-      term.select(0, 100, 5);
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 9, y: 6 }, end: { x: 10, y: 6 } });
-      term.selectLines(5, 100);
-      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 5 }, end: { x: 10, y: 6 } });
-      term.dispose();
-    });
+describe('selection API (absolute buffer rows, as in xterm.js)', () => {
+  beforeEach(() => {
+    open(10, 3);
+    writeLines(6, (i) => `line ${i}`);
+    term.write('last');
   });
 
-  describe('onSelectionChange when the selection is cleared', () => {
-    test('fires for clearSelection() and typing, only when there was a selection', async () => {
-      const term = await createIsolatedTerminal({ cols: 20, rows: 3 });
-      term.open(container);
-      term.write('hello');
-      let changes = 0;
-      term.onSelectionChange(() => changes++);
-
-      term.clearSelection();
-      expect(changes).toBe(0);
-
-      term.select(0, 0, 5);
-      expect(changes).toBe(1);
-      term.clearSelection();
-      expect(changes).toBe(2);
-      expect(term.getSelectionPosition()).toBeUndefined();
-
-      term.select(0, 0, 5);
-      const textarea = (term as any).textarea as HTMLTextAreaElement;
-      textarea.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true })
-      );
-      expect(term.hasSelection()).toBe(false);
-      expect(changes).toBe(4);
-      term.dispose();
-    });
+  test('nothing is selected at first', () => {
+    expect(term.hasSelection()).toBe(false);
+    expect(term.getSelection()).toBe('');
+    expect(term.getSelectionPosition()).toBeUndefined();
   });
 
-  describe('selectLines() API', () => {
-    test('selectLines() selects entire lines', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.selectLines(0, 1);
-
-      expect(selMgr.hasSelection()).toBe(true);
-
-      const text = selMgr.getSelection();
-      expect(text).toContain('Line 1');
-      expect(text).toContain('Line 2');
-
-      term.dispose();
-    });
+  test('select() takes absolute rows, scrollback included, and continues onto later rows', () => {
+    expect(term.buffer.active.baseY).toBe(4);
+    term.select(0, 1, 6);
+    expect(term.getSelection()).toBe('line 1');
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 1 }, end: { x: 6, y: 1 } });
+    // A selection to the end of a row ends at x = cols.
+    term.select(5, 1, 15);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 10, y: 2 } });
+    term.select(5, 1, 20);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 5, y: 3 } });
+    expect(term.getSelection()).toBe('1\nline 2\nline');
   });
 
-  describe('scrollback content accuracy', () => {
-    test('getScrollbackLine returns correct content after lines scroll off', async () => {
-      const container = document.createElement('div');
-      Object.defineProperty(container, 'clientWidth', { value: 800 });
-      Object.defineProperty(container, 'clientHeight', { value: 480 });
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
+  test('a one-cell selection is a selection', () => {
+    term.select(5, 6, 1);
+    expect(term.hasSelection()).toBe(true);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 6 }, end: { x: 6, y: 6 } });
+  });
 
-      // Write 50 lines to push content into scrollback (terminal has 24 rows)
-      for (let i = 0; i < 50; i++) {
-        term.write(`Line ${i}\r\n`);
-      }
+  test('selectLines() selects whole lines in either order', () => {
+    term.selectLines(2, 3);
+    expect(term.getSelection()).toBe('line 2\nline 3');
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 2 }, end: { x: 10, y: 3 } });
+    term.selectLines(3, 2);
+    expect(term.getSelection()).toBe('line 2\nline 3');
+  });
 
-      const wasmTerm = (term as any).wasmTerm;
-      const scrollbackLen = wasmTerm.getScrollbackLength();
-      expect(scrollbackLen).toBeGreaterThan(0);
+  test('positions past the end of the buffer are clamped', () => {
+    term.select(0, 100, 5);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 9, y: 6 }, end: { x: 10, y: 6 } });
+    term.selectLines(5, 100);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 5 }, end: { x: 10, y: 6 } });
+  });
 
-      // First scrollback line (oldest) should contain "Line 0"
-      const firstLine = wasmTerm.getScrollbackLine(0);
-      expect(firstLine).not.toBeNull();
-      const firstText = firstLine!
-        .map((c: any) => (c.codepoint ? String.fromCodePoint(c.codepoint) : ''))
-        .join('')
-        .trim();
-      expect(firstText).toContain('Line 0');
+  test('selectAll() selects everything, scrollback included', () => {
+    term.selectAll();
+    expect(term.getSelection()).toBe('line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nlast');
+  });
 
-      // Last scrollback line should contain content near the boundary
-      const lastLine = wasmTerm.getScrollbackLine(scrollbackLen - 1);
-      expect(lastLine).not.toBeNull();
-      const lastText = lastLine!
-        .map((c: any) => (c.codepoint ? String.fromCodePoint(c.codepoint) : ''))
-        .join('')
-        .trim();
-      // The last scrollback line is the one just above the visible viewport
-      expect(lastText).toMatch(/Line \d+/);
+  test('a selection keeps its text and position while scrolled away', () => {
+    term.select(0, 6, 4);
+    term.scrollToTop();
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 6 }, end: { x: 4, y: 6 } });
+    expect(term.getSelection()).toBe('last');
+  });
 
-      term.dispose();
-    });
+  test('a selection follows its content into scrollback', () => {
+    term.select(0, 6, 4);
+    term.write('\r\nmore\r\nand more');
+    expect(term.getSelection()).toBe('last');
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 6 }, end: { x: 4, y: 6 } });
+  });
 
-    test('selection clears when user types', async () => {
-      const container = document.createElement('div');
-      Object.defineProperty(container, 'clientWidth', { value: 800 });
-      Object.defineProperty(container, 'clientHeight', { value: 480 });
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
+  test('onSelectionChange fires for select and for clearing an existing selection', () => {
+    let changes = 0;
+    term.onSelectionChange(() => changes++);
+    term.clearSelection();
+    expect(changes).toBe(0);
+    term.select(0, 0, 5);
+    term.selectLines(1, 2);
+    term.selectAll();
+    expect(changes).toBe(3);
+    term.clearSelection();
+    expect(changes).toBe(4);
+    expect(term.getSelectionPosition()).toBeUndefined();
+  });
 
-      term.write('Hello World\r\n');
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.selectLines(0, 0);
-      expect(selMgr.hasSelection()).toBe(true);
-
-      // Simulate the input callback clearing selection
-      // The actual input handler calls clearSelection before firing data
-      selMgr.clearSelection();
-      expect(selMgr.hasSelection()).toBe(false);
-
-      term.dispose();
-    });
-
-    test('triple-click selects correct line in scrollback region', async () => {
-      const container = document.createElement('div');
-      Object.defineProperty(container, 'clientWidth', { value: 800 });
-      Object.defineProperty(container, 'clientHeight', { value: 480 });
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      // Write enough lines to create scrollback
-      for (let i = 0; i < 50; i++) {
-        term.write(`TestLine${i}\r\n`);
-      }
-
-      const wasmTerm = (term as any).wasmTerm;
-      const scrollbackLen = wasmTerm.getScrollbackLength();
-      expect(scrollbackLen).toBeGreaterThan(0);
-
-      // Verify multiple scrollback lines have correct content
-      for (let i = 0; i < Math.min(5, scrollbackLen); i++) {
-        const line = wasmTerm.getScrollbackLine(i);
-        expect(line).not.toBeNull();
-        const text = line!
-          .map((c: any) => (c.codepoint ? String.fromCodePoint(c.codepoint) : ''))
-          .join('')
-          .trim();
-        expect(text).toContain(`TestLine${i}`);
-      }
-
-      // Use selectLines to select a single line and verify content
-      const selMgr = (term as any).selectionManager;
-      selMgr.selectLines(0, 0);
-      expect(selMgr.hasSelection()).toBe(true);
-      const selectedText = selMgr.getSelection();
-      expect(selectedText.length).toBeGreaterThan(0);
-
-      term.dispose();
-    });
+  test('typing clears the selection and fires onSelectionChange', () => {
+    let changes = 0;
+    term.onSelectionChange(() => changes++);
+    term.select(0, 0, 5);
+    keyDown(internals(term).textarea, 'KeyA', 'a');
+    expect(term.hasSelection()).toBe(false);
+    expect(changes).toBe(2);
   });
 });
 
-describe('SelectionManager mouse gestures (libghostty)', () => {
-  let container: HTMLElement;
-  let term: Terminal;
-
-  beforeEach(async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
-    term.open(container);
+describe('selection coordinates for the viewport', () => {
+  beforeEach(() => {
+    open(80, 24, 1000);
+    writeLines(50, (i) => `Line ${String(i).padStart(3, '0')}`);
   });
 
-  afterEach(() => {
-    term.dispose();
-    container.remove();
+  const coords = () => internals(term).selectionManager.getSelectionCoords();
+
+  test('move with scrolling, are clamped at the edges and null when off screen', () => {
+    const base = term.buffer.active.baseY;
+    term.select(0, base, 80 * 5 + 10);
+    expect(coords()).toEqual({ startCol: 0, startRow: 0, endCol: 9, endRow: 5, rectangle: false });
+    term.scrollToLine(base - 10);
+    expect(coords()).toMatchObject({ startRow: 10, endRow: 15 });
+
+    // Partly above the top: the visible part starts at the top-left.
+    term.scrollToBottom();
+    term.select(5, base - 2, 80 * 4);
+    expect(coords()).toMatchObject({ startCol: 0, startRow: 0, endCol: 4, endRow: 2 });
+
+    term.scrollToTop();
+    term.select(0, base + 10, 8);
+    expect(coords()).toBeNull();
+    expect(term.getSelection()).toBe('Line 037');
+  });
+});
+
+describe('drawing', () => {
+  beforeEach(() => {
+    open(20, 3);
+    term.write('Line 1\r\nLine 2\r\nLine 3');
   });
 
-  /**
-   * Dispatch a mouse event in a cell. `fx` is how far across the cell the
-   * pointer is; like Ghostty, a drag only includes its end cell once the
-   * pointer passes the cell's midpoint.
-   */
-  function mouse(
-    type: string,
-    col: number,
-    row: number,
-    timeStamp: number,
-    target?: EventTarget,
-    fx = 0.5
-  ) {
-    const renderer = (term as any).renderer;
-    const metrics = renderer.getMetrics();
-    const canvas: HTMLCanvasElement = renderer.getCanvas();
-    const x = (col + fx) * metrics.width;
-    const y = (row + 0.5) * metrics.height;
-    const e = new MouseEvent(type, { button: 0, bubbles: true });
-    Object.defineProperty(e, 'offsetX', { value: x });
-    Object.defineProperty(e, 'offsetY', { value: y });
-    Object.defineProperty(e, 'timeStamp', { value: timeStamp });
-    (target ?? canvas).dispatchEvent(e);
-  }
+  test('selected cells are painted with the selection background until cleared', () => {
+    term.select(2, 0, 4);
+    expect(drawnSelection()).toEqual({ 0: [2, 3, 4, 5] });
+    term.clearSelection();
+    expect(drawnSelection()).toEqual({});
+  });
 
-  const selMgr = () => (term as any).selectionManager;
+  test('a selection spanning rows paints to the end of the first and from the start of the last', () => {
+    term.select(18, 0, 4);
+    expect(drawnSelection()).toEqual({ 0: [18, 19], 1: [0, 1] });
+  });
+});
 
-  test('dragging selects text', () => {
+describe('mouse gestures', () => {
+  beforeEach(() => open(40, 5));
+
+  test('dragging selects text and copies it on release', () => {
+    const written: string[] = [];
+    fixture.defer(stub(globalThis as { ClipboardItem?: unknown }, 'ClipboardItem', undefined));
+    fixture.defer(
+      stub(navigator, 'clipboard', {
+        writeText: async (t: string) => void written.push(t),
+      } as unknown as Clipboard)
+    );
+    let changes = 0;
+    term.onSelectionChange(() => changes++);
     term.write('hello world');
-    mouse('mousedown', 0, 0, 1000);
-    mouse('mousemove', 4, 0, 1050, undefined, 0.9);
-    mouse('mouseup', 4, 0, 1060, document);
-    expect(selMgr().getSelection()).toBe('hello');
+    drag([0, 0], [4, 0]);
+    expect(term.getSelection()).toBe('hello');
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 0 }, end: { x: 5, y: 0 } });
+    expect(written).toEqual(['hello']);
+    expect(changes).toBe(1);
+  });
+
+  test('a drag ends only once the pointer passes the end cell midpoint', () => {
+    term.write('hello world');
+    cellEvent('mousedown', 0, 0, { fx: 0.1 });
+    cellEvent('mousemove', 4, 0, { fx: 0.2, time: 1050 });
+    cellEvent('mouseup', 4, 0, { time: 1060, target: document });
+    expect(term.getSelection()).toBe('hell');
   });
 
   test('a plain click clears an existing selection', () => {
     term.write('hello world');
-    selMgr().select(0, 0, 5);
-    expect(selMgr().hasSelection()).toBe(true);
+    term.select(0, 0, 5);
     let changes = 0;
     term.onSelectionChange(() => changes++);
-    mouse('mousedown', 8, 0, 1000);
-    mouse('mouseup', 8, 0, 1010, document);
-    expect(selMgr().hasSelection()).toBe(false);
+    click(8, 0, 1000);
+    expect(term.hasSelection()).toBe(false);
     expect(changes).toBe(1);
   });
 
-  describe('copy shortcuts', () => {
-    const g = globalThis as any;
-    let savedClipboard: PropertyDescriptor | undefined;
-    let savedClipboardItem: unknown;
-    let savedExecCommand: unknown;
+  test('a click outside the terminal clears the selection; a drag ending outside does not', () => {
+    term.write('hello world');
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+    fixture.defer(() => outside.remove());
 
-    beforeEach(() => {
-      savedClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
-      savedClipboardItem = g.ClipboardItem;
-      savedExecCommand = document.execCommand;
-      g.ClipboardItem = undefined;
-    });
+    drag([0, 0], [4, 0]);
+    outside.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(term.getSelection()).toBe('hello');
 
-    afterEach(() => {
-      if (savedClipboard) Object.defineProperty(navigator, 'clipboard', savedClipboard);
-      else Reflect.deleteProperty(navigator, 'clipboard');
-      g.ClipboardItem = savedClipboardItem;
-      (document as any).execCommand = savedExecCommand;
-    });
+    outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    outside.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(term.hasSelection()).toBe(false);
+  });
 
-    function setClipboard(value: unknown) {
-      Object.defineProperty(navigator, 'clipboard', { value, configurable: true });
-    }
+  test('double-click selects a word by Ghostty rules, triple-click the line', () => {
+    term.write('ls ~/projects/ghostterm now');
+    click(10, 0, 1000);
+    click(10, 0, 1100);
+    expect(term.getSelection()).toBe('~/projects/ghostterm');
+    click(10, 0, 1200);
+    expect(term.getSelection()).toBe('ls ~/projects/ghostterm now');
+  });
 
-    function key(init: KeyboardEventInit) {
-      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
-      ((term as any).textarea as HTMLTextAreaElement).dispatchEvent(e);
-      return e;
-    }
+  test('clicks far apart in time are not a double-click', () => {
+    term.write('ls ~/projects/ghostterm');
+    click(10, 0, 1000);
+    click(10, 0, 3000);
+    expect(term.hasSelection()).toBe(false);
+  });
 
-    test('Cmd+C and Ctrl+Shift+C copy the selection with the clipboard API', () => {
-      const written: string[] = [];
-      setClipboard({ writeText: async (text: string) => void written.push(text) });
-      const sent: string[] = [];
-      term.onData((d) => sent.push(d));
-      term.write('copy me');
-      term.select(0, 0, 4);
+  test('triple-click while scrolled selects the scrollback line shown', () => {
+    writeLines(20, (i) => `TestLine${i}`);
+    term.scrollToTop();
+    for (const t of [1000, 1100, 1200]) click(3, 1, t);
+    expect(term.getSelection()).toBe('TestLine1');
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 1 }, end: { x: 9, y: 1 } });
+  });
 
-      const cmd = key({ key: 'c', code: 'KeyC', metaKey: true });
-      const ctrlShift = key({ key: 'C', code: 'KeyC', ctrlKey: true, shiftKey: true });
-      expect(written).toEqual(['copy', 'copy']);
-      expect(cmd.defaultPrevented).toBe(true);
-      expect(ctrlShift.defaultPrevented).toBe(true);
-      expect(sent).toEqual([]);
-    });
-
-    test('without the clipboard API, execCommand copies and the textarea is restored', () => {
-      setClipboard(undefined);
-      const textarea = (term as any).textarea as HTMLTextAreaElement;
-      const style = textarea.style.cssText;
-      let valueDuringCopy = '';
-      (document as any).execCommand = (command: string) => {
-        valueDuringCopy = command === 'copy' ? textarea.value : '';
-        return true;
-      };
-      term.write('copy me');
-      term.select(0, 0, 4);
-
-      key({ key: 'c', code: 'KeyC', metaKey: true });
-      expect(valueDuringCopy).toBe('copy');
-      expect(textarea.value).toBe('');
-      expect(textarea.style.cssText).toBe(style);
-    });
+  test('a program tracking the mouse gets clicks; Shift+drag still selects', () => {
+    term.write('hello world\x1b[?1000h');
+    drag([0, 0], [4, 0]);
+    expect(term.hasSelection()).toBe(false);
+    drag([0, 0], [4, 0], { shiftKey: true });
+    expect(term.getSelection()).toBe('hello');
   });
 
   test('a click focuses the input textarea, so IME composes there', () => {
-    const textarea = (term as any).textarea as HTMLTextAreaElement;
-    (document.activeElement as HTMLElement | null)?.blur?.();
-    mouse('mousedown', 1, 1, 1000);
-    mouse('mouseup', 1, 1, 1010, document);
+    const { textarea } = internals(term);
+    textarea.blur();
+    click(1, 1, 1000);
     expect(document.activeElement).toBe(textarea);
   });
 
   test('focusing the terminal element passes focus on to the textarea', () => {
-    const textarea = (term as any).textarea as HTMLTextAreaElement;
+    const { textarea } = internals(term);
     textarea.blur();
     container.focus();
     expect(document.activeElement).toBe(textarea);
   });
 
-  test('double-click selects a word using Ghostty word rules', () => {
-    term.write('ls ~/projects/ghostterm');
-    for (const t of [1000, 1100]) {
-      mouse('mousedown', 10, 0, t);
-      mouse('mouseup', 10, 0, t + 10, document);
-    }
-    expect(selMgr().getSelection()).toBe('~/projects/ghostterm');
-  });
-
-  test('selection fires onSelectionChange and copies on release', () => {
-    term.write('copy me');
-    let changes = 0;
-    selMgr().onSelectionChange(() => changes++);
-    const copied: string[] = [];
-    (selMgr() as any).copyToClipboard = (text: string) => copied.push(text);
-    mouse('mousedown', 0, 0, 1000);
-    mouse('mousemove', 3, 0, 1050, undefined, 0.9);
-    mouse('mouseup', 3, 0, 1060, document);
-    expect(copied).toEqual(['copy']);
-    expect(changes).toBe(1);
-  });
-
-  test('dragging above the top autoscrolls into scrollback', async () => {
-    for (let i = 0; i < 20; i++) term.write(`row ${i}\r\n`);
+  test('dragging above the top autoscrolls into scrollback, one row per tick', () => {
+    writeLines(20, (i) => `row ${i}`);
     term.write('last');
-    mouse('mousedown', 2, 4, 1000);
-
-    const canvas: HTMLCanvasElement = (term as any).renderer.getCanvas();
+    jest.useFakeTimers();
+    fixture.defer(() => jest.useRealTimers());
+    cellEvent('mousedown', 2, 4);
+    const { canvas } = internals(term);
     const rect = canvas.getBoundingClientRect();
-    const out = new MouseEvent('mousemove', {
-      clientX: rect.left + 5,
-      clientY: rect.top - 20,
-      bubbles: true,
-    });
-    document.dispatchEvent(out);
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { clientX: rect.left + 5, clientY: rect.top - 20, bubbles: true })
+    );
+    timers.advanceTimersByTime(30 * 6);
+    cellEvent('mouseup', 0, 0, { time: 1500, target: document });
+    timers.advanceTimersByTime(30 * 6);
 
-    await new Promise((r) => setTimeout(r, 200));
-    mouse('mouseup', 0, 0, 1500, document);
-
-    expect(term.getViewportY()).toBeGreaterThan(0);
-    const text: string = selMgr().getSelection();
-    expect(text.endsWith('la')).toBe(true);
-    expect(text.split('\n').length).toBeGreaterThan(5);
+    // Six ticks scroll six rows (then the release stops them). The pointer, 5 px
+    // into the row, is past the first cell's midpoint.
+    expect(term.getViewportY()).toBe(6);
+    expect(term.getSelectionPosition()).toEqual({ start: { x: 1, y: 10 }, end: { x: 2, y: 20 } });
+    expect(term.getSelection()).toStartWith('ow 10\nrow 11\n');
   });
 
   test('selection keeps working after reset()', () => {
     term.write('before');
-    selMgr().select(0, 0, 3);
+    term.select(0, 0, 3);
     term.reset();
-    expect(selMgr().hasSelection()).toBe(false);
+    expect(term.hasSelection()).toBe(false);
     term.write('after');
-    mouse('mousedown', 0, 0, 1000);
-    mouse('mousemove', 4, 0, 1050, undefined, 0.9);
-    mouse('mouseup', 4, 0, 1060, document);
-    expect(selMgr().getSelection()).toBe('after');
+    drag([0, 0], [4, 0]);
+    expect(term.getSelection()).toBe('after');
   });
 });
 
-describe('SelectionManager block selection (Alt-drag)', () => {
-  let container: HTMLElement;
-  let term: Terminal;
+describe('selecting scrollback', () => {
+  /** A terminal with 100 numbered lines (77 in history, 23 on screen and an empty last row). */
+  function withHistory(prefix = 'Line ') {
+    fixture.defer(
+      stub(navigator, 'clipboard', { writeText: async () => {} } as unknown as Clipboard)
+    );
+    const opened = fixture.open({ cols: 80, rows: 24, scrollback: 1000 });
+    for (let i = 0; i < 100; i++) opened.term.write(`${prefix}${String(i).padStart(3, '0')}\r\n`);
+    return opened.term;
+  }
 
-  beforeEach(async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
-    term.open(container);
+  /** Drag from the middle of cell (c0, r0) past the middle of cell (c1, r1), which includes it. */
+  function dragCells(term: Terminal, c0: number, r0: number, c1: number, r1: number) {
+    const { canvas, renderer } = internals(term);
+    const at = (c: number, r: number) =>
+      [(c + 0.5) * renderer.charWidth, (r + 0.5) * renderer.charHeight] as const;
+    canvas.dispatchEvent(mouseEvent('mousedown', ...at(c0, r0), { button: 0 }));
+    canvas.dispatchEvent(mouseEvent('mousemove', ...at(c1 + 0.4, r1), { buttons: 1 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  }
+
+  test('a drag in a view scrolled into history selects the displayed lines', () => {
+    const term = withHistory();
+    term.scrollLines(-50);
+    expect(term.getViewportY()).toBe(50);
+    // Viewport row 0 is absolute row 77 - 50 = 27.
+    dragCells(term, 0, 5, 7, 7);
+    expect(term.getSelection()).toBe('Line 032\nLine 033\nLine 034');
+    expect(term.getSelectionPosition()?.start).toEqual({ x: 0, y: 32 });
+  });
+
+  test('a drag spanning history and the screen', () => {
+    const term = withHistory();
+    term.scrollLines(-10);
+    dragCells(term, 0, 8, 7, 12);
+    expect(term.getSelection()).toBe('Line 075\nLine 076\nLine 077\nLine 078\nLine 079');
+  });
+
+  test('a drag at the bottom selects screen lines', () => {
+    const term = withHistory();
+    expect(term.getViewportY()).toBe(0);
+    dragCells(term, 0, 0, 7, 2);
+    expect(term.getSelection()).toBe('Line 077\nLine 078\nLine 079');
+  });
+
+  test('a fractional (smooth scrolling) viewport maps rows like the renderer, floored', () => {
+    const term = withHistory();
+    term.viewportY = 10.7;
+    dragCells(term, 0, 0, 7, 1);
+    expect(term.getSelection()).toBe('Line 067\nLine 068');
+  });
+
+  test('the oldest history lines, scrolled to the top', () => {
+    const term = withHistory('Scrollback line ');
+    term.scrollToTop();
+    expect(term.getViewportY()).toBe(77);
+    dragCells(term, 0, 0, 18, 2);
+    expect(term.getSelection()).toBe(
+      'Scrollback line 000\nScrollback line 001\nScrollback line 002'
+    );
+  });
+
+  test('dragging past the top or bottom edge at the first column autoscrolls both ways', () => {
+    const term = withHistory();
+    jest.useFakeTimers();
+    fixture.defer(() => jest.useRealTimers());
+    term.scrollLines(-10);
+    const { canvas, renderer } = internals(term);
+    canvas.dispatchEvent(mouseEvent('mousedown', 4, 5 * renderer.charHeight + 4, { button: 0 }));
+    const rect = canvas.getBoundingClientRect();
+    const move = (clientY: number) =>
+      document.dispatchEvent(
+        new MouseEvent('mousemove', { clientX: rect.left, clientY, bubbles: true })
+      );
+    move(rect.top - 20);
+    timers.advanceTimersByTime(30 * 3);
+    expect(term.getViewportY()).toBe(13);
+    move(rect.top + 24 * renderer.charHeight + 20);
+    timers.advanceTimersByTime(30 * 5);
+    expect(term.getViewportY()).toBe(8);
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  });
+});
+
+describe('block selection (Alt-drag)', () => {
+  beforeEach(() => {
+    open(40, 5);
     term.write('abcdef\r\nghijkl\r\nmnopqr');
   });
 
-  afterEach(() => {
-    term.dispose();
-    container.remove();
-  });
-
-  /**
-   * Presses land near a cell's left edge and drags past its midpoint, since
-   * Ghostty anchors and extends selections by cell halves.
-   */
-  function mouse(type: string, col: number, row: number, altKey: boolean, target?: EventTarget) {
-    const fx = type === 'mousedown' ? 0.1 : 0.9;
-    const renderer = (term as any).renderer;
-    const metrics = renderer.getMetrics();
-    const e = new MouseEvent(type, { button: 0, bubbles: true, altKey });
-    Object.defineProperty(e, 'offsetX', { value: (col + fx) * metrics.width });
-    Object.defineProperty(e, 'offsetY', { value: (row + 0.5) * metrics.height });
-    Object.defineProperty(e, 'timeStamp', { value: 1000 });
-    (target ?? renderer.getCanvas()).dispatchEvent(e);
-  }
-
-  const selMgr = () => (term as any).selectionManager;
-
-  test('Alt-drag selects a block of columns', () => {
-    mouse('mousedown', 1, 0, true);
-    mouse('mousemove', 3, 2, true);
-    mouse('mouseup', 3, 2, true, document);
-    expect(selMgr().getSelection()).toBe('bcd\nhij\nnop');
-    const coords = selMgr().getSelectionCoords();
-    expect(coords).toMatchObject({
-      startCol: 1,
-      endCol: 3,
-      startRow: 0,
-      endRow: 2,
+  test('Alt-drag selects and paints a block of columns', () => {
+    drag([1, 0], [3, 2], { altKey: true });
+    expect(term.getSelection()).toBe('bcd\nhij\nnop');
+    expect(drawnSelection()).toEqual({ 0: [1, 2, 3], 1: [1, 2, 3], 2: [1, 2, 3] });
+    expect(internals(term).selectionManager.getSelectionCoords()).toMatchObject({
       rectangle: true,
     });
   });
 
-  test('a block dragged up and to the left is normalized', () => {
-    mouse('mousedown', 4, 2, true);
-    mouse('mousemove', 1, 0, true);
-    mouse('mouseup', 1, 0, true, document);
-    const coords = selMgr().getSelectionCoords();
-    expect(coords.startCol).toBeLessThanOrEqual(coords.endCol);
-    expect(coords.startRow).toBe(0);
-    expect(selMgr().getSelection().split('\n')).toHaveLength(3);
+  test('a block dragged up and to the left is the same block', () => {
+    cellEvent('mousedown', 3, 2, { fx: 0.9, altKey: true });
+    cellEvent('mousemove', 1, 0, { fx: 0.1, altKey: true, time: 1050 });
+    cellEvent('mouseup', 1, 0, { altKey: true, target: document });
+    expect(term.getSelection()).toBe('bcd\nhij\nnop');
   });
 
   test('the same drag without Alt is a linear selection', () => {
-    mouse('mousedown', 1, 0, false);
-    mouse('mousemove', 3, 2, false);
-    mouse('mouseup', 3, 2, false, document);
-    expect(selMgr().getSelection()).toBe('bcdef\nghijkl\nmnop');
-    expect(selMgr().getSelectionCoords().rectangle).toBe(false);
-  });
-
-  test('only the block columns are highlighted', () => {
-    mouse('mousedown', 1, 0, true);
-    mouse('mousemove', 3, 2, true);
-    mouse('mouseup', 3, 2, true, document);
-    const inSel = (x: number, y: number) => term.wasmTerm!.getViewportLine(y)![x].selected;
-    expect([inSel(0, 1), inSel(1, 1), inSel(3, 1), inSel(4, 1)]).toEqual([
-      false,
-      true,
-      true,
-      false,
-    ]);
-    expect([inSel(5, 0), inSel(0, 2)]).toEqual([false, false]);
+    drag([1, 0], [3, 2]);
+    expect(term.getSelection()).toBe('bcdef\nghijkl\nmnop');
+    expect(drawnSelection()).toEqual({
+      0: [1, 2, 3, 4, 5, ...Array.from({ length: 34 }, (_, i) => i + 6)],
+      1: Array.from({ length: 40 }, (_, i) => i),
+      2: [0, 1, 2, 3],
+    });
   });
 });
 
-describe('SelectionManager context menu', () => {
-  let container: HTMLElement;
-  let term: Terminal;
+describe('copying', () => {
+  beforeEach(() => {
+    open(40, 5);
+    term.write('copy me');
+    term.select(0, 0, 4);
+  });
 
-  beforeEach(async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
-    term.open(container);
+  const copyKeys = () => [
+    keyDown(internals(term).textarea, 'KeyC', 'c', { metaKey: true }),
+    keyDown(internals(term).textarea, 'KeyC', 'C', { ctrlKey: true, shiftKey: true }),
+  ];
+
+  test('Cmd+C and Ctrl+Shift+C write the selection as a ClipboardItem', async () => {
+    const items: ClipboardItem[] = [];
+    fixture.defer(
+      stub(navigator, 'clipboard', {
+        write: async (data: ClipboardItem[]) => void items.push(...data),
+      } as unknown as Clipboard)
+    );
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+    const events = copyKeys();
+    expect(events.map((e) => e.defaultPrevented)).toEqual([true, true]);
+    expect(sent).toEqual([]);
+    expect(items).toHaveLength(2);
+    expect(await (await items[0].getType('text/plain')).text()).toBe('copy');
+  });
+
+  test('without ClipboardItem, writeText is used', () => {
+    const written: string[] = [];
+    fixture.defer(stub(globalThis as { ClipboardItem?: unknown }, 'ClipboardItem', undefined));
+    fixture.defer(
+      stub(navigator, 'clipboard', {
+        writeText: async (t: string) => void written.push(t),
+      } as unknown as Clipboard)
+    );
+    copyKeys();
+    expect(written).toEqual(['copy', 'copy']);
+  });
+
+  test('a failed ClipboardItem write falls back to writeText, then to execCommand', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    fixture.defer(() => warn.mockRestore());
+    const copied: string[] = [];
+    const { textarea } = internals(term);
+    fixture.defer(
+      stub(document, 'execCommand', (command: string) => {
+        if (command === 'copy') copied.push(textarea.value);
+        return true;
+      })
+    );
+    fixture.defer(
+      stub(navigator, 'clipboard', {
+        write: () => Promise.reject(new Error('denied')),
+        writeText: () => Promise.reject(new Error('denied')),
+      } as unknown as Clipboard)
+    );
+    expect(term.copySelection()).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(copied).toEqual(['copy']);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      'ClipboardItem write failed, trying writeText:',
+      'Clipboard writeText failed, trying execCommand:',
+    ]);
+  });
+
+  test('without the clipboard API, execCommand copies and the textarea is restored', () => {
+    fixture.defer(stub(navigator, 'clipboard', undefined as unknown as Clipboard));
+    const { textarea } = internals(term);
+    const style = textarea.style.cssText;
+    let valueDuringCopy = '';
+    fixture.defer(
+      stub(document, 'execCommand', (command: string) => {
+        valueDuringCopy = command === 'copy' ? textarea.value : '';
+        return true;
+      })
+    );
+    copyKeys();
+    expect(valueDuringCopy).toBe('copy');
+    expect(textarea.value).toBe('');
+    expect(textarea.style.cssText).toBe(style);
+  });
+
+  test('an execCommand copy that fails or throws is reported', () => {
+    fixture.defer(stub(navigator, 'clipboard', undefined as unknown as Clipboard));
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    fixture.defer(() => warn.mockRestore());
+    const results: Array<() => boolean> = [
+      () => false,
+      () => {
+        throw new Error('blocked');
+      },
+    ];
+    for (const result of results) {
+      fixture.defer(stub(document, 'execCommand', result));
+      term.copySelection();
+    }
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      'execCommand copy failed',
+      'execCommand copy threw:',
+    ]);
+  });
+
+  test('copySelection() is false without a selection', () => {
+    term.clearSelection();
+    expect(term.copySelection()).toBe(false);
+  });
+});
+
+describe('context menu', () => {
+  beforeEach(() => {
+    open(40, 5);
     term.write('copy this text');
   });
 
-  afterEach(() => {
-    term.dispose();
-    container.remove();
-  });
-
-  function rightDown(init: MouseEventInit = { button: 2 }) {
-    const canvas: HTMLCanvasElement = (term as any).renderer.getCanvas();
-    const e = new MouseEvent('mousedown', { bubbles: true, clientX: 50, clientY: 20, ...init });
-    canvas.dispatchEvent(e);
+  function rightDown(): void {
+    internals(term).canvas.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 2, clientX: 50, clientY: 20 })
+    );
   }
 
-  test('right mousedown puts the selected text under the pointer, unclipped', () => {
-    const selMgr = (term as any).selectionManager;
-    selMgr.select(0, 0, 9);
-    const ta = (term as any).textarea as HTMLTextAreaElement;
-    const original = ta.style.cssText;
+  /** prepareContextMenu() starts listening for the end of the menu in a 0 ms timeout. */
+  const listening = () => new Promise((r) => setTimeout(r, 0));
+
+  test('right mousedown puts the selected text under the pointer until the next key', async () => {
+    term.select(0, 0, 9);
+    const { textarea } = internals(term);
+    const original = textarea.style.cssText;
 
     rightDown();
+    expect(term.getSelection()).toBe('copy this'); // not cleared by the click
+    expect(textarea.value).toBe('copy this');
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([0, 9]);
+    expect(textarea.style.position).toBe('fixed');
+    expect(textarea.style.left).toBe('48px');
+    expect(textarea.style.clipPath).toBe('none');
+    expect(textarea.style.pointerEvents).toBe('auto');
+    expect(document.activeElement).toBe(textarea);
 
-    expect(selMgr.getSelection()).toBe('copy this'); // not cleared by the click
-    expect(ta.value).toBe('copy this');
-    expect([ta.selectionStart, ta.selectionEnd]).toEqual([0, 9]);
-    expect(ta.style.position).toBe('fixed');
-    expect(ta.style.left).toBe('48px');
-    expect(ta.style.clipPath).toBe('none');
-    expect(ta.style.pointerEvents).toBe('auto');
-    expect(document.activeElement).toBe(ta);
-
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
-        expect(ta.style.cssText).toBe(original);
-        expect(ta.value).toBe('');
-        resolve();
-      }, 5);
-    });
+    await listening();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+    expect(textarea.style.cssText).toBe(original);
+    expect(textarea.value).toBe('');
   });
 
-  test('right-click with no selection still prepares the textarea (for Paste)', () => {
+  test('with no selection the textarea is still prepared (for Paste), and a press restores it', async () => {
+    const { textarea } = internals(term);
+    const original = textarea.style.cssText;
     rightDown();
-    const ta = (term as any).textarea as HTMLTextAreaElement;
-    expect(ta.value).toBe('');
-    expect(ta.style.clipPath).toBe('none');
+    expect(textarea.value).toBe('');
+    expect(textarea.style.clipPath).toBe('none');
+    await listening();
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(textarea.style.cssText).toBe(original);
+  });
+
+  test('the context-menu key prepares the textarea at the event position', () => {
+    term.select(0, 0, 4);
+    const { canvas, textarea } = internals(term);
+    canvas.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, clientX: 30, clientY: 12 })
+    );
+    expect(textarea.value).toBe('copy');
+    expect([textarea.style.left, textarea.style.top]).toEqual(['28px', '10px']);
   });
 });
