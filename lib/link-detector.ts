@@ -1,26 +1,51 @@
 /**
- * Link detection and caching system
+ * Link detection
  *
- * The LinkDetector coordinates between multiple link providers and caches
- * results for performance. Links are cached by position range, and earlier
- * providers (e.g. OSC8) take precedence over later ones (e.g. regex).
+ * The LinkDetector asks its providers for the links on a row, in order, so
+ * earlier providers (OSC 8) take precedence over later ones (regex URLs).
+ * Rows are scanned on every lookup, so a link is never stale after the screen
+ * changes; a link found again with the same range and text is returned as the
+ * same object, so hover state survives repeated lookups.
  */
 
-import type { IBufferCellPosition, ILink, ILinkProvider } from './types';
+import type { IBufferRange, ILink, ILinkProvider } from './types';
+
+/** URI schemes a link may open: anything else (javascript:, file:, ...) is ignored. */
+const OPENABLE_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'ftp:']);
+
+/** Whether a URI uses a scheme that links are allowed to open. */
+export function isOpenableUri(uri: string): boolean {
+  try {
+    return OPENABLE_SCHEMES.has(new URL(uri).protocol);
+  } catch {
+    return false;
+  }
+}
 
 /**
- * Manages link detection across multiple providers with intelligent caching
+ * Open a link's URI in a new tab, for a Ctrl+click (Cmd+click on macOS), if its
+ * scheme is one links may open.
  */
+export function openLink(uri: string, event: MouseEvent): void {
+  if (!(event.ctrlKey || event.metaKey) || !isOpenableUri(uri)) return;
+  window.open(uri, '_blank', 'noopener,noreferrer');
+}
+
+/** Whether a buffer cell (absolute row) lies in a range; ranges may span rows. */
+export function rangeContains(range: IBufferRange, col: number, row: number): boolean {
+  const { start, end } = range;
+  if (row < start.y || row > end.y) return false;
+  if (row === start.y && col < start.x) return false;
+  if (row === end.y && col > end.x) return false;
+  return true;
+}
+
 export class LinkDetector {
   private providers: ILinkProvider[] = [];
 
-  // Cache links by position range: `r${row}:${startX}-${endX}`
-  private linkCache = new Map<string, ILink>();
+  /** Links returned so far, by range and text, to keep their identity stable. */
+  private known = new Map<string, ILink>();
 
-  // Track which rows have been scanned to avoid redundant provider calls
-  private scannedRows = new Set<number>();
-
-  // Terminal instance for buffer access
   constructor(private terminal: ITerminalForLinkDetector) {}
 
   /**
@@ -28,7 +53,7 @@ export class LinkDetector {
    */
   registerProvider(provider: ILinkProvider): void {
     this.providers.push(provider);
-    this.invalidateCache(); // New provider may detect different links
+    this.invalidateCache();
   }
 
   /**
@@ -38,154 +63,69 @@ export class LinkDetector {
    * @returns Link at position, or undefined if none
    */
   async getLinkAt(col: number, row: number): Promise<ILink | undefined> {
+    return this.findLinkAt(col, row);
+  }
+
+  /**
+   * The link at a buffer position. Synchronous when every provider answers
+   * synchronously (the built-in ones do), so a click can act on it while the
+   * browser still treats it as a user gesture; a promise otherwise.
+   */
+  findLinkAt(col: number, row: number): ILink | undefined | Promise<ILink | undefined> {
     const line = this.terminal.buffer.active.getLine(row);
-    if (!line || col < 0 || col >= line.length) {
-      return undefined;
-    }
+    if (!line || col < 0 || col >= line.length) return undefined;
 
-    const cell = line.getCell(col);
-    if (!cell) {
-      return undefined;
-    }
-
-    // Check if any cached link contains this position (fast path)
-    for (const link of this.linkCache.values()) {
-      if (this.isPositionInLink(col, row, link)) {
-        return link;
-      }
-    }
-
-    // Slow path: scan this row if not already scanned
-    if (!this.scannedRows.has(row)) {
-      await this.scanRow(row);
-    }
-
-    // Check cache again after scanning
-    for (const link of this.linkCache.values()) {
-      if (this.isPositionInLink(col, row, link)) {
-        return link;
-      }
-    }
-
-    return undefined;
-  }
-
-  /**
-   * Scan a row for links using all registered providers
-   */
-  private async scanRow(row: number): Promise<void> {
-    this.scannedRows.add(row);
-
-    const allLinks: ILink[] = [];
-
-    // Query all providers
-    for (const provider of this.providers) {
-      const links = await new Promise<ILink[] | undefined>((resolve) => {
-        provider.provideLinks(row, resolve);
+    const results: Array<ILink[] | undefined> = new Array(this.providers.length);
+    let pending = this.providers.length;
+    let finish: (() => void) | undefined;
+    this.providers.forEach((provider, i) => {
+      let answered = false;
+      provider.provideLinks(row, (links) => {
+        if (answered) return;
+        answered = true;
+        results[i] = links;
+        pending--;
+        if (pending === 0) finish?.();
       });
+    });
 
-      if (links) {
-        allLinks.push(...links);
+    const pick = (): ILink | undefined => {
+      for (const links of results) {
+        const link = links?.find((l) => rangeContains(l.range, col, row));
+        if (link) return this.canonical(link);
       }
-    }
-
-    // Cache all discovered links
-    for (const link of allLinks) {
-      this.cacheLink(link);
-    }
+      return undefined;
+    };
+    if (pending === 0) return pick();
+    return new Promise((resolve) => {
+      finish = () => resolve(pick());
+    });
   }
 
-  /**
-   * Cache a link for fast lookup
-   *
-   * Note: We cache by position range, not hyperlink_id, because the WASM
-   * returns hyperlink_id as a boolean (0 or 1), not a unique identifier.
-   * The actual unique identifier is the URI which is retrieved separately.
-   */
-  private cacheLink(link: ILink): void {
-    // Cache by position range - this uniquely identifies links even when
-    // multiple OSC 8 links exist on the same line
-    const { start: s, end: e } = link.range;
-    const cacheKey = `r${s.y}:${s.x}-${e.x}`;
-    // Don't overwrite existing entries - earlier providers (OSC8) take
-    // precedence over later ones (regex) for the same range
-    if (!this.linkCache.has(cacheKey)) {
-      this.linkCache.set(cacheKey, link);
-    }
-  }
-
-  /**
-   * Check if a position is within a link's range
-   */
-  private isPositionInLink(col: number, row: number, link: ILink): boolean {
+  /** The link object previously returned for the same range and text, if any. */
+  private canonical(link: ILink): ILink {
     const { start, end } = link.range;
-
-    // Check if row is in range
-    if (row < start.y || row > end.y) {
-      return false;
-    }
-
-    // Single-line link
-    if (start.y === end.y) {
-      return col >= start.x && col <= end.x;
-    }
-
-    // Multi-line link
-    if (row === start.y) {
-      return col >= start.x; // First line: from start.x to end of line
-    } else if (row === end.y) {
-      return col <= end.x; // Last line: from start of line to end.x
-    } else {
-      return true; // Middle line: entire line is part of link
-    }
+    const key = `${start.x},${start.y}-${end.x},${end.y}:${link.text}`;
+    const known = this.known.get(key);
+    if (known) return known;
+    if (this.known.size > 256) this.known.clear();
+    this.known.set(key, link);
+    return link;
   }
 
   /**
-   * Invalidate cache when terminal content changes
-   * Should be called on terminal write, resize, or clear
+   * Forget the links returned so far. Called when the terminal content
+   * changes; lookups always rescan, so this only resets link identity.
    */
   invalidateCache(): void {
-    this.linkCache.clear();
-    this.scannedRows.clear();
-  }
-
-  /**
-   * Invalidate cache for specific rows
-   * Used when only part of the terminal changed
-   */
-  invalidateRows(startRow: number, endRow: number): void {
-    // Remove scanned markers
-    for (let row = startRow; row <= endRow; row++) {
-      this.scannedRows.delete(row);
-    }
-
-    // Remove cached links in this range
-    // This is conservative - we remove any link that touches these rows
-    const toDelete: string[] = [];
-    for (const [key, link] of this.linkCache.entries()) {
-      const { start, end } = link.range;
-      if (
-        (start.y >= startRow && start.y <= endRow) ||
-        (end.y >= startRow && end.y <= endRow) ||
-        (start.y < startRow && end.y > endRow)
-      ) {
-        toDelete.push(key);
-      }
-    }
-
-    for (const key of toDelete) {
-      this.linkCache.delete(key);
-    }
+    this.known.clear();
   }
 
   /**
    * Dispose and cleanup
    */
   dispose(): void {
-    this.linkCache.clear();
-    this.scannedRows.clear();
-
-    // Dispose all providers
+    this.known.clear();
     for (const provider of this.providers) {
       provider.dispose?.();
     }
@@ -195,21 +135,11 @@ export class LinkDetector {
 
 /**
  * Minimal terminal interface required by LinkDetector
- * Keeps coupling low and testing easy
  */
 export interface ITerminalForLinkDetector {
   buffer: {
     active: {
-      getLine(y: number):
-        | {
-            length: number;
-            getCell(x: number):
-              | {
-                  getHyperlinkId(): number;
-                }
-              | undefined;
-          }
-        | undefined;
+      getLine(y: number): { length: number } | undefined;
     };
   };
 }

@@ -1,187 +1,115 @@
 /**
  * URL Detection Tests
  *
- * Tests for the UrlRegexProvider to ensure plain text URLs
- * are correctly detected and made clickable.
+ * The UrlRegexProvider over a real terminal's buffer: plain text URLs are
+ * found with ranges in cells.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { UrlRegexProvider } from './providers/url-regex-provider';
+import type { Terminal } from './terminal';
+import { createIsolatedTerminal } from './test-helpers';
 import type { ILink } from './types';
 
-/**
- * Mock terminal for testing
- */
-function createMockTerminal(lineText: string) {
-  const cells = Array.from(lineText).map((char) => ({
-    getCodepoint: () => char.codePointAt(0) || 0,
-  }));
+let container: HTMLElement;
+let term: Terminal;
 
-  return {
-    buffer: {
-      active: {
-        getLine: (y: number) => {
-          if (y !== 0) return undefined;
-          return {
-            length: cells.length,
-            getCell: (x: number) => cells[x],
-          };
-        },
-      },
-    },
-  };
-}
+beforeEach(async () => {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  term = await createIsolatedTerminal({ cols: 80, rows: 5 });
+  term.open(container);
+});
 
-/**
- * Helper to get links from provider
- */
-function getLinks(lineText: string): Promise<ILink[] | undefined> {
-  const terminal = createMockTerminal(lineText) as any;
-  const provider = new UrlRegexProvider(terminal);
+afterEach(() => {
+  term.dispose();
+  container.remove();
+});
 
-  return new Promise((resolve) => {
-    provider.provideLinks(0, resolve);
+function linksOn(row: number): ILink[] | undefined {
+  let result: ILink[] | undefined;
+  new UrlRegexProvider(term).provideLinks(row, (links) => {
+    result = links;
   });
+  return result;
 }
+
+/** Write a line and return the links found on it. */
+function getLinks(text: string): ILink[] | undefined {
+  term.write(text);
+  return linksOn(term.buffer.active.baseY + term.buffer.active.cursorY);
+}
+
+const texts = (links: ILink[] | undefined) => links?.map((l) => l.text);
 
 describe('URL Detection', () => {
-  test('detects HTTPS URLs', async () => {
-    const links = await getLinks('Visit https://github.com for code');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://github.com');
-    expect(links?.[0].range.start.x).toBe(6);
-    // End is inclusive - last character is at index 23 (https://github.com is 19 chars, starts at 6)
-    expect(links?.[0].range.end.x).toBe(23);
+  test('detects HTTPS URLs with an inclusive cell range', () => {
+    const links = getLinks('Visit https://github.com for code');
+    expect(texts(links)).toEqual(['https://github.com']);
+    expect(links![0].range).toEqual({ start: { x: 6, y: 0 }, end: { x: 23, y: 0 } });
   });
 
-  test('detects HTTP URLs', async () => {
-    const links = await getLinks('Check http://example.com');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('http://example.com');
+  test('detects http, ftp and mailto links', () => {
+    expect(texts(getLinks('Check http://example.com'))).toEqual(['http://example.com']);
+    term.reset();
+    expect(texts(getLinks('Get ftp://files.example.com/file'))).toEqual([
+      'ftp://files.example.com/file',
+    ]);
+    term.reset();
+    expect(texts(getLinks('Email: mailto:test@example.com'))).toEqual(['mailto:test@example.com']);
   });
 
-  test('detects mailto: links', async () => {
-    const links = await getLinks('Email: mailto:test@example.com');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('mailto:test@example.com');
+  test('ignores schemes links may not open', () => {
+    expect(getLinks('ssh://user@host git://h/r.git tel:+1234 javascript:alert(1)')).toBeUndefined();
   });
 
-  test('detects ssh:// URLs', async () => {
-    const links = await getLinks('Connect via ssh://user@server.com');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('ssh://user@server.com');
+  test('strips trailing punctuation', () => {
+    expect(texts(getLinks('Check https://example.com. See https://a.org, https://b.org!'))).toEqual(
+      ['https://example.com', 'https://a.org', 'https://b.org']
+    );
   });
 
-  test('detects git:// URLs', async () => {
-    const links = await getLinks('Clone git://github.com/repo.git');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('git://github.com/repo.git');
+  test('strips a closing parenthesis only when it is unbalanced', () => {
+    expect(texts(getLinks('(see https://example.com/a)'))).toEqual(['https://example.com/a']);
+    term.reset();
+    expect(texts(getLinks('https://en.wikipedia.org/wiki/Foo_(bar) and more'))).toEqual([
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+    ]);
+    term.reset();
+    expect(texts(getLinks("(https://en.wikipedia.org/wiki/Foo_(bar)), it's"))).toEqual([
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+    ]);
   });
 
-  test('detects ftp:// URLs', async () => {
-    const links = await getLinks('Download ftp://files.example.com/file');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('ftp://files.example.com/file');
+  test('keeps query strings, fragments, ports and quotes inside the URL', () => {
+    expect(
+      texts(getLinks("https://example.com:8080/p?foo=bar&baz=qux#sec https://x.org/it's"))
+    ).toEqual(['https://example.com:8080/p?foo=bar&baz=qux#sec', "https://x.org/it's"]);
   });
 
-  test('strips trailing period', async () => {
-    const links = await getLinks('Check https://example.com.');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com');
-    // Should NOT include the trailing period
-    expect(links?.[0].text.endsWith('.')).toBe(false);
+  test('returns undefined when there is no URL, including paths and a bare scheme', () => {
+    expect(getLinks('No URLs here /home/user/file.txt ./relative/path http://')).toBeUndefined();
   });
 
-  test('strips trailing comma', async () => {
-    const links = await getLinks('See https://example.com, or else');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com');
+  test('columns after emoji and wide characters are cells, not code units', () => {
+    const links = getLinks('🎉 日本 https://example.com');
+    expect(texts(links)).toEqual(['https://example.com']);
+    // 🎉 and 日本 take two cells each: "🎉 " is 3 cells, "日本 " is 5.
+    expect(links![0].range.start.x).toBe(8);
+    expect(links![0].range.end.x).toBe(26);
   });
 
-  test('strips trailing parenthesis', async () => {
-    const links = await getLinks('(see https://example.com)');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com');
-  });
-
-  test('strips trailing exclamation', async () => {
-    const links = await getLinks('Visit https://example.com!');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com');
-  });
-
-  test('handles multiple URLs on same line', async () => {
-    const links = await getLinks('https://a.com and https://b.com');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(2);
-    expect(links?.[0].text).toBe('https://a.com');
-    expect(links?.[1].text).toBe('https://b.com');
-  });
-
-  test('returns undefined when no URL present', async () => {
-    const links = await getLinks('No URLs here');
-    expect(links).toBeUndefined();
-  });
-
-  test('handles URLs with query parameters', async () => {
-    const links = await getLinks('https://example.com?foo=bar&baz=qux');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com?foo=bar&baz=qux');
-  });
-
-  test('handles URLs with fragments', async () => {
-    const links = await getLinks('https://example.com/page#section');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com/page#section');
-  });
-
-  test('handles URLs with ports', async () => {
-    const links = await getLinks('https://example.com:8080/path');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('https://example.com:8080/path');
-  });
-
-  test('does not detect file paths', async () => {
-    const links = await getLinks('/home/user/file.txt');
-    expect(links).toBeUndefined();
-  });
-
-  test('does not detect relative paths', async () => {
-    const links = await getLinks('./relative/path');
-    expect(links).toBeUndefined();
-  });
-
-  test('link has activate function', async () => {
-    const links = await getLinks('https://example.com');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(typeof links?.[0].activate).toBe('function');
-  });
-
-  test('detects tel: URLs', async () => {
-    const links = await getLinks('Call tel:+1234567890');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toBe('tel:+1234567890');
-  });
-
-  test('detects magnet: URLs', async () => {
-    const links = await getLinks('Download magnet:?xt=urn:btih:abc123');
-    expect(links).toBeDefined();
-    expect(links?.length).toBe(1);
-    expect(links?.[0].text).toContain('magnet:?xt=urn:btih:abc123');
+  test('a URL that soft-wraps is one link spanning the rows', async () => {
+    term.dispose();
+    term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    term.open(container);
+    const url = 'https://example.com/a/very/long/path';
+    term.write(`see ${url} end`);
+    for (const row of [0, 1]) {
+      const links = linksOn(row);
+      expect(texts(links)).toEqual([url]);
+      expect(links![0].range).toEqual({ start: { x: 4, y: 0 }, end: { x: 19, y: 1 } });
+    }
+    expect(linksOn(2)).toBeUndefined();
   });
 });

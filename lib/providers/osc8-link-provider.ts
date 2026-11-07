@@ -1,206 +1,78 @@
 /**
  * OSC 8 Hyperlink Provider
  *
- * Detects hyperlinks created with OSC 8 escape sequences.
- * Supports multi-line links that wrap across lines.
- *
- * OSC 8 format: \x1b]8;;URL\x07TEXT\x1b]8;;\x07
- *
- * The Ghostty WASM automatically assigns hyperlink_id to cells,
- * so we just need to scan for contiguous regions with the same ID.
+ * Detects hyperlinks created with OSC 8 escape sequences
+ * (\x1b]8;;URL\x07TEXT\x1b]8;;\x07). libghostty keeps the link on each cell;
+ * every cell of one URI carries the same hyperlink ID, so a link is a run of
+ * cells with one ID. A link that soft-wraps continues onto the next row, and
+ * is reported as one range spanning those rows.
  */
 
-import type { IBufferRange, ILink, ILinkProvider } from '../types';
+import { openLink } from '../link-detector';
+import type { ILink, ILinkProvider } from '../types';
 
-/**
- * OSC 8 Hyperlink Provider
- *
- * Detects OSC 8 hyperlinks by scanning for hyperlink_id in cells.
- * Automatically handles multi-line links since Ghostty WASM preserves
- * hyperlink_id across wrapped lines.
- */
 export class OSC8LinkProvider implements ILinkProvider {
   constructor(private terminal: ITerminalForOSC8Provider) {}
 
   /**
-   * Provide all OSC 8 links on the given row
-   * Note: This may return links that span multiple rows
+   * Provide the OSC 8 links that touch the given row (absolute buffer row).
    */
   provideLinks(y: number, callback: (links: ILink[] | undefined) => void): void {
-    const links: ILink[] = [];
-    const visitedPositions = new Set<number>(); // Track which columns we've already processed
-
-    const line = this.terminal.buffer.active.getLine(y);
-    if (!line) {
+    const rows = new Map<number, OSC8Line | undefined>();
+    const getLine = (row: number) => {
+      if (!rows.has(row)) rows.set(row, this.terminal.buffer.active.getLine(row));
+      return rows.get(row);
+    };
+    const buffer = { getLine };
+    const line = getLine(y);
+    const wasmTerm = this.terminal.wasmTerm;
+    if (!line || !wasmTerm) {
       callback(undefined);
       return;
     }
+    const idAt = (row: number, col: number) => getLine(row)?.getCell(col)?.getHyperlinkId() ?? 0;
 
-    // Scan through this line looking for hyperlink_id
-    for (let x = 0; x < line.length; x++) {
-      // Skip already processed positions
-      if (visitedPositions.has(x)) continue;
-
-      const cell = line.getCell(x);
-      if (!cell) continue;
-
-      const hyperlinkId = cell.getHyperlinkId();
-
-      // Skip cells without links
-      if (hyperlinkId === 0) {
+    const links: ILink[] = [];
+    let x = 0;
+    while (x < line.length) {
+      const id = line.getCell(x)?.getHyperlinkId() ?? 0;
+      if (id === 0) {
+        x++;
         continue;
       }
+      let endX = x;
+      while (endX + 1 < line.length && idAt(y, endX + 1) === id) endX++;
 
-      // y is an absolute buffer row, which libghostty addresses directly.
-      if (!this.terminal.wasmTerm) continue;
-      const uri = this.terminal.wasmTerm.getScreenHyperlinkUri(y, x);
+      // Follow the link back and forward across soft-wrapped rows.
+      let start = { x, y };
+      while (start.x === 0 && buffer.getLine(start.y)?.isWrapped) {
+        const prev = buffer.getLine(start.y - 1);
+        if (!prev || idAt(start.y - 1, prev.length - 1) !== id) break;
+        let px = prev.length - 1;
+        while (px > 0 && idAt(start.y - 1, px - 1) === id) px--;
+        start = { x: px, y: start.y - 1 };
+      }
+      let end = { x: endX, y };
+      while (end.x === line.length - 1) {
+        const next = buffer.getLine(end.y + 1);
+        if (!next?.isWrapped || idAt(end.y + 1, 0) !== id) break;
+        let nx = 0;
+        while (nx + 1 < next.length && idAt(end.y + 1, nx + 1) === id) nx++;
+        end = { x: nx, y: end.y + 1 };
+      }
 
+      const uri = wasmTerm.getScreenHyperlinkUri(y, x);
       if (uri) {
-        // Every cell of one link has the same hyperlink ID, so the link ends
-        // where the ID changes.
-        let endX = x;
-        for (let col = x + 1; col < line.length; col++) {
-          const nextCell = line.getCell(col);
-          if (!nextCell || nextCell.getHyperlinkId() !== hyperlinkId) break;
-          endX = col;
-        }
-
-        // Mark all columns in this link as visited
-        for (let col = x; col <= endX; col++) {
-          visitedPositions.add(col);
-        }
-
-        const range: IBufferRange = {
-          start: { x, y },
-          end: { x: endX, y },
-        };
-
         links.push({
           text: uri,
-          range,
-          activate: (event) => {
-            // Open link if Ctrl/Cmd is pressed
-            if (event.ctrlKey || event.metaKey) {
-              window.open(uri, '_blank', 'noopener,noreferrer');
-            }
-          },
+          range: { start, end },
+          activate: (event) => openLink(uri, event),
         });
       }
+      x = endX + 1;
     }
 
     callback(links.length > 0 ? links : undefined);
-  }
-
-  /**
-   * Find the full extent of a link by scanning for contiguous cells
-   * with the same hyperlink_id. Handles multi-line links.
-   */
-  private findLinkRange(hyperlinkId: number, startY: number, startX: number): IBufferRange {
-    const buffer = this.terminal.buffer.active;
-
-    // Find the start of the link (scan backwards)
-    let minY = startY;
-    let minX = startX;
-
-    // Scan backwards on current line
-    while (minX > 0) {
-      const line = buffer.getLine(minY);
-      if (!line) break;
-
-      const cell = line.getCell(minX - 1);
-      if (!cell || cell.getHyperlinkId() !== hyperlinkId) break;
-      minX--;
-    }
-
-    // If at start of line, check if link continues from previous line
-    if (minX === 0 && minY > 0) {
-      let prevY = minY - 1;
-
-      while (prevY >= 0) {
-        const prevLine = buffer.getLine(prevY);
-        if (!prevLine || prevLine.length === 0) break;
-
-        // Check if last cell of previous line has same hyperlink_id
-        const lastCell = prevLine.getCell(prevLine.length - 1);
-        if (!lastCell || lastCell.getHyperlinkId() !== hyperlinkId) break;
-
-        // Link continues from previous line - find where it starts
-        minY = prevY;
-        minX = 0;
-
-        // Scan backwards on this line
-        for (let x = prevLine.length - 1; x >= 0; x--) {
-          const cell = prevLine.getCell(x);
-          if (!cell || cell.getHyperlinkId() !== hyperlinkId) {
-            minX = x + 1;
-            break;
-          }
-        }
-
-        // If entire line is part of link, continue to previous line
-        if (minX === 0) {
-          prevY--;
-        } else {
-          break;
-        }
-      }
-    }
-
-    // Find the end of the link (scan forwards)
-    let maxY = startY;
-    let maxX = startX;
-
-    // Scan forwards on current line
-    const currentLine = buffer.getLine(maxY);
-    if (currentLine) {
-      while (maxX < currentLine.length - 1) {
-        const cell = currentLine.getCell(maxX + 1);
-        if (!cell || cell.getHyperlinkId() !== hyperlinkId) break;
-        maxX++;
-      }
-
-      // If at end of line, check if link continues to next line
-      if (maxX === currentLine.length - 1) {
-        let nextY = maxY + 1;
-        const maxBuffer = buffer.length;
-
-        while (nextY < maxBuffer) {
-          const nextLine = buffer.getLine(nextY);
-          if (!nextLine || nextLine.length === 0) break;
-
-          // Check if first cell of next line has same hyperlink_id
-          const firstCell = nextLine.getCell(0);
-          if (!firstCell || firstCell.getHyperlinkId() !== hyperlinkId) break;
-
-          // Link continues to next line - find where it ends
-          maxY = nextY;
-          maxX = 0;
-
-          // Scan forwards on this line
-          for (let x = 0; x < nextLine.length; x++) {
-            const cell = nextLine.getCell(x);
-            if (!cell) break;
-            if (cell.getHyperlinkId() !== hyperlinkId) {
-              maxX = x - 1;
-              break;
-            }
-            maxX = x;
-          }
-
-          // If entire line is part of link, continue to next line
-          if (maxX === nextLine.length - 1) {
-            nextY++;
-          } else {
-            break;
-          }
-        }
-      }
-    }
-
-    return {
-      start: { x: minX, y: minY },
-      end: { x: maxX, y: maxY },
-    };
   }
 
   dispose(): void {
@@ -211,20 +83,16 @@ export class OSC8LinkProvider implements ILinkProvider {
 /**
  * Minimal terminal interface required by OSC8LinkProvider
  */
+interface OSC8Line {
+  length: number;
+  isWrapped: boolean;
+  getCell(x: number): { getHyperlinkId(): number } | undefined;
+}
+
 export interface ITerminalForOSC8Provider {
   buffer: {
     active: {
-      length: number;
-      getLine(y: number):
-        | {
-            length: number;
-            getCell(x: number):
-              | {
-                  getHyperlinkId(): number;
-                }
-              | undefined;
-          }
-        | undefined;
+      getLine(y: number): OSC8Line | undefined;
     };
   };
   wasmTerm?: {

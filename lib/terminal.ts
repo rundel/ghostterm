@@ -1504,30 +1504,24 @@ export class Terminal implements ITerminalCore {
   /**
    * Handle mouse click for link activation
    */
-  private handleClick = async (e: MouseEvent): Promise<void> => {
-    // For more reliable clicking, detect the link at click time
-    // rather than relying on cached hover state (avoids async races)
+  private handleClick = (e: MouseEvent): void => {
+    // The link is looked up at click time rather than taken from the hover
+    // state (which is throttled). The built-in providers answer synchronously,
+    // so the link opens within the click's user gesture and the default action
+    // can still be prevented; only custom asynchronous providers resolve later.
     if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
 
-    // Get click position
     const rect = this.canvas.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / this.renderer.charWidth);
     const y = Math.floor((e.clientY - rect.top) / this.renderer.charHeight);
-
-    const bufferRow = this.viewportRowToBufferRow(y);
-
-    // Get the link at this position
-    const link = await this.linkDetector.getLinkAt(x, bufferRow);
-
-    if (link) {
-      // Activate link
-      link.activate(e);
-
-      // Prevent default action if modifier key held
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-      }
+    const found = this.linkDetector.findLinkAt(x, this.viewportRowToBufferRow(y));
+    if (found instanceof Promise) {
+      found.then((link) => link?.activate(e)).catch(() => {});
+      return;
     }
+    if (!found) return;
+    if (e.ctrlKey || e.metaKey) e.preventDefault();
+    found.activate(e);
   };
 
   /**
