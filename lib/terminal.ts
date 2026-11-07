@@ -39,12 +39,14 @@ import type {
   IKeyEvent,
   ILink,
   ILinkProvider,
+  IMarker,
   ITerminalAddon,
   ITerminalCore,
   ITerminalOptions,
   IUnicodeVersionProvider,
 } from './interfaces';
 import { LinkDetector } from './link-detector';
+import { MarkerRegistry } from './markers';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import {
@@ -158,6 +160,9 @@ export class Terminal implements ITerminalCore {
 
   // Addons
   private addons: ITerminalAddon[] = [];
+
+  /** Markers made with registerMarker() (and decorations' markers). */
+  private markerRegistry = new MarkerRegistry();
 
   // Custom event handlers
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
@@ -294,6 +299,7 @@ export class Terminal implements ITerminalCore {
 
       case 'scrollback': {
         this.wasmTerm?.setScrollbackLimit(this.options.scrollback);
+        this.markerRegistry.update();
         // Lowering the limit can prune history under a scrolled view.
         const scrollback = this.getScrollbackLength();
         if (this.viewportY > scrollback) this.scrollToViewportOffset(scrollback);
@@ -687,6 +693,7 @@ export class Terminal implements ITerminalCore {
 
     // Write directly to WASM terminal (handles VT parsing internally)
     this.wasmTerm!.write(data);
+    this.markerRegistry.update();
     if (scrolledOffset > 0) this.followScrolledContent(scrolledOffset);
     if (this.resetPending) {
       this.resetPending = false;
@@ -824,6 +831,7 @@ export class Terminal implements ITerminalCore {
 
       // Resize WASM terminal (may reallocate buffers, invalidating TypedArray views)
       this.wasmTerm!.resize(cols, rows);
+      this.markerRegistry.update();
 
       // Resize renderer (sizes the canvas for the device pixel ratio and gutter)
       this.renderer!.resize(cols, rows);
@@ -853,7 +861,12 @@ export class Terminal implements ITerminalCore {
    */
   clear(): void {
     this.assertOpen();
-    this.wasmTerm!.clearToCursorLine();
+    const wasmTerm = this.wasmTerm!;
+    // As in xterm.js, clearing drops every marker (unless already clear).
+    if (wasmTerm.getCursor().y > 0 || wasmTerm.getScrollbackLength() > 0) {
+      this.markerRegistry.clear();
+    }
+    wasmTerm.clearToCursorLine();
     this.selectionManager?.clearSelection();
     this.linkDetector?.invalidateCache();
     this.scrollToViewportOffset(0);
@@ -876,11 +889,14 @@ export class Terminal implements ITerminalCore {
     const alt = this.wasmTerm?.isAlternateScreen() ?? false;
     if (alt === this.lastAltScreen) return;
     this.lastAltScreen = alt;
+    // As in xterm.js, the alternate screen's markers go with it.
+    if (!alt) this.markerRegistry.disposeAlternate();
     this.buffer._fireBufferChange(this.buffer.active);
   }
 
   /** Drop what ghostterm kept about the screen libghostty just reset. */
   private afterReset(): void {
+    this.markerRegistry.clear();
     this.selectionManager?.clearSelection();
     this.linkDetector?.invalidateCache();
     this.cancelScrollAnimation();
@@ -1059,6 +1075,28 @@ export class Terminal implements ITerminalCore {
   ): void {
     this.customWheelEventHandler = customWheelEventHandler;
     this.inputHandler?.setCustomWheelEventHandler(customWheelEventHandler);
+  }
+
+  // ==========================================================================
+  // Markers
+  // ==========================================================================
+
+  /** The markers that are not disposed, oldest first. */
+  public get markers(): readonly IMarker[] {
+    return this.markerRegistry.markers;
+  }
+
+  /**
+   * Add a marker on the cursor's line, or `cursorYOffset` lines below it
+   * (negative: above). It follows its line as output scrolls and history is
+   * pruned, and is disposed when that line leaves the buffer. A line outside
+   * the buffer gives a marker that is already disposed.
+   */
+  public registerMarker(cursorYOffset: number = 0): IMarker {
+    this.assertOpen();
+    const wasmTerm = this.wasmTerm!;
+    const line = wasmTerm.getScrollbackLength() + wasmTerm.getCursor().y + cursorYOffset;
+    return this.markerRegistry.create(wasmTerm, line);
   }
 
   // ==========================================================================
@@ -1432,6 +1470,8 @@ export class Terminal implements ITerminalCore {
       this.linkDetector.dispose();
       this.linkDetector = undefined;
     }
+
+    this.markerRegistry.dispose();
 
     // Free WASM terminal
     if (this.wasmTerm) {

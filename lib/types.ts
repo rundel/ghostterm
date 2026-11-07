@@ -348,6 +348,14 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
   ghostty_terminal_get(terminal: TerminalHandle, data: number, out: number): number;
   ghostty_terminal_vt_write(terminal: TerminalHandle, dataPtr: number, len: number): void;
   ghostty_terminal_grid_ref(terminal: TerminalHandle, pointPtr: number, outRef: number): number;
+  ghostty_terminal_grid_ref_track(
+    terminal: TerminalHandle,
+    pointPtr: number,
+    outRef: number
+  ): number;
+  ghostty_tracked_grid_ref_free(ref: number): void;
+  ghostty_tracked_grid_ref_has_value(ref: number): number;
+  ghostty_tracked_grid_ref_point(ref: number, tag: number, outCoord: number): number;
   /** Takes a pointer to a GhosttyTerminalScrollViewport. */
   ghostty_terminal_scroll_viewport(terminal: TerminalHandle, behaviorPtr: number): number;
 

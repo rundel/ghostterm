@@ -74,6 +74,22 @@ export interface IDisposable {
 
 export type IEvent<T> = (listener: (arg: T) => void) => IDisposable;
 
+/**
+ * A buffer line that follows its content as output scrolls, history is pruned
+ * and the screen reflows (xterm.js IMarker). It is disposed when its line
+ * leaves the buffer.
+ */
+export interface IMarker extends IDisposable {
+  /** A number unique among the markers of all terminals. */
+  readonly id: number;
+  /** Whether the marker was disposed (its line is gone, or dispose() was called). */
+  readonly isDisposed: boolean;
+  /** The absolute buffer line (0 = oldest scrollback line), or -1 once disposed. */
+  readonly line: number;
+  /** Fires once, when the marker is disposed. */
+  readonly onDispose: IEvent<void>;
+}
+
 export interface ITerminalAddon {
   activate(terminal: ITerminalCore): void;
   dispose(): void;

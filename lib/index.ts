@@ -23,6 +23,7 @@ export type {
   ILink,
   ILinkProvider,
   IKeyEvent,
+  IMarker,
   IUnicodeVersionProvider,
   IBufferNamespace,
   IBuffer,
@@ -64,6 +65,7 @@ export type {
 } from './ghostty';
 export { Key, KeyAction, Mods, UnderlineStyle } from './types';
 export type { KeyEvent, GhosttyCell, RGB, Cursor, TerminalHandle } from './types';
+export type { TrackedRow } from './ghostty';
 
 // Low-level components (for custom integrations)
 export { CanvasRenderer } from './renderer';

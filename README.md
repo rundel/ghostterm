@@ -123,6 +123,16 @@ With shell integration, `term.scrollToPrompt(-1)` and `term.scrollToPrompt(1)` j
 
 Programs can also query the terminal's light or dark color scheme and its cell size in pixels, change the cursor shape, blink and color, set the mouse pointer shape (OSC 22) and use synchronized output (mode 2026). ghostterm answers and applies all of these.
 
+### Markers
+
+`term.registerMarker(cursorYOffset)` marks the cursor's line (or one above or below it) and returns an xterm.js `IMarker`. Its `line` follows the content as output scrolls, history is pruned and the screen reflows, because libghostty tracks it (a tracked grid reference). A marker is disposed, firing `onDispose`, when its line leaves the buffer; as in xterm.js, `reset()` and `clear()` dispose every marker, and leaving the alternate screen disposes the markers made on it. `term.markers` lists the live ones.
+
+```javascript
+const marker = term.registerMarker();
+marker.onDispose(() => console.log('line gone'));
+term.scrollToLine(marker.line);
+```
+
 ### Behavior worth knowing
 
 These follow Ghostty rather than xterm.js:
@@ -147,6 +157,7 @@ Other differences from xterm.js:
 
 - `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
 - No password indicator: Ghostty marks password prompts (a lock at the cursor) from the PTY's terminal settings (echo off), which only its own PTY code can see. libghostty-vt has no way to be told, so ghostterm can't show one.
+- Markers are disposed when their line leaves the buffer, not when the line is erased in place (xterm.js also disposes markers on lines erased with ED or EL). Since libghostty prunes scrollback a page at a time, a marker on an old line can be disposed some lines before the `scrollback` limit alone would drop it.
 
 ## Development
 

@@ -2744,6 +2744,14 @@ export class GhosttyTerminal {
    * Returns false if the point is outside the requested area.
    */
   private gridRef(tag: number, x: number, y: number, refPtr: number): boolean {
+    const pointPtr = this.writePoint(tag, x, y);
+    return (
+      this.exports.ghostty_terminal_grid_ref(this.handle, pointPtr, refPtr) === GHOSTTY_SUCCESS
+    );
+  }
+
+  /** Write a GhosttyPoint to the scratch area and return its address. */
+  private writePoint(tag: number, x: number, y: number): number {
     const P = this.L.point;
     const pointPtr = this.scratch + 256;
     const view = this.mem.view();
@@ -2751,9 +2759,28 @@ export class GhosttyTerminal {
     view.setInt32(pointPtr, tag, true);
     view.setUint16(pointPtr + P.value + P.x, x, true);
     view.setUint32(pointPtr + P.value + P.y, y, true);
-    return (
-      this.exports.ghostty_terminal_grid_ref(this.handle, pointPtr, refPtr) === GHOSTTY_SUCCESS
-    );
+    return pointPtr;
+  }
+
+  /**
+   * Follow absolute screen row `row` (as in getScreenLine) as the terminal
+   * changes, with a libghostty tracked grid reference: it moves with its
+   * content as output scrolls, history is pruned and the screen reflows, and
+   * loses its value when the row leaves the buffer. Returns null when the row
+   * is outside the screen.
+   */
+  trackRow(row: number): TrackedRow | null {
+    if (row < 0 || !Number.isInteger(row)) return null;
+    const pointPtr = this.writePoint(PointTag.SCREEN, 0, row);
+    const out = this.scratch + 320;
+    this.mem.view().setUint32(out, 0, true);
+    if (
+      this.exports.ghostty_terminal_grid_ref_track(this.handle, pointPtr, out) !== GHOSTTY_SUCCESS
+    ) {
+      return null;
+    }
+    const ref = this.mem.view().getUint32(out, true);
+    return ref ? new TrackedRow(this.exports, this.mem, this.L, ref) : null;
   }
 
   /**
@@ -3367,6 +3394,48 @@ export class GhosttyTerminal {
  * autoscroll at the edges. Every selection it produces is installed as the
  * terminal's selection. Pointer positions are viewport cells plus CSS pixels.
  */
+/**
+ * A row followed by a libghostty tracked grid reference (see
+ * GhosttyTerminal.trackRow). It stays usable after its terminal is freed: it
+ * then has no value. Call free() when done with it.
+ */
+export class TrackedRow {
+  private out: number;
+
+  constructor(
+    private exports: GhosttyWasmExports,
+    private mem: Memory,
+    private L: Layout,
+    private ref: number
+  ) {
+    this.out = exports.ghostty_wasm_alloc(L.coordinate.size);
+  }
+
+  /** Whether the row is still in the buffer (cheaper than reading it). */
+  get alive(): boolean {
+    return this.ref !== 0 && this.exports.ghostty_tracked_grid_ref_has_value(this.ref) !== 0;
+  }
+
+  /** The row's absolute screen row now, or null when it left the buffer. */
+  get row(): number | null {
+    if (!this.ref) return null;
+    if (
+      this.exports.ghostty_tracked_grid_ref_point(this.ref, PointTag.SCREEN, this.out) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return null;
+    }
+    return this.mem.view().getUint32(this.out + this.L.coordinate.y, true);
+  }
+
+  free(): void {
+    if (!this.ref) return;
+    this.exports.ghostty_tracked_grid_ref_free(this.ref);
+    this.exports.ghostty_wasm_free(this.out, this.L.coordinate.size);
+    this.ref = this.out = 0;
+  }
+}
+
 const DOUBLE_CLICK_INTERVAL_MS = 500;
 const DOUBLE_CLICK_DISTANCE_PX = 10;
 
