@@ -52,7 +52,7 @@ import type {
 import { LinkDetector } from './link-detector';
 import { MarkerRegistry } from './markers';
 import { DEFAULT_MODES, readModes } from './modes';
-import { Parser } from './parser';
+import { Parser, countLineFeeds } from './parser';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import {
@@ -126,6 +126,8 @@ export class Terminal implements ITerminalCore {
   private progressEmitter = new EventEmitter<ProgressReport>();
   private programStatusEmitter = new EventEmitter<ProgramStatus>();
   private semanticPromptEmitter = new EventEmitter<SemanticPromptEvent>();
+  private lineFeedEmitter = new EventEmitter<void>();
+  private writeParsedEmitter = new EventEmitter<void>();
   // Public event accessors (xterm.js compatibility)
   public readonly onData: IEvent<string> = this.dataEmitter.event;
   public readonly onResize: IEvent<{ cols: number; rows: number }> = this.resizeEmitter.event;
@@ -136,6 +138,13 @@ export class Terminal implements ITerminalCore {
   public readonly onScroll: IEvent<number> = this.scrollEmitter.event;
   public readonly onRender: IEvent<{ start: number; end: number }> = this.renderEmitter.event;
   public readonly onCursorMove: IEvent<void> = this.cursorMoveEmitter.event;
+  /**
+   * Fires for each line feed (LF, VT or FF) written, after the write is
+   * processed. Counted from the bytes written (see countLineFeeds).
+   */
+  public readonly onLineFeed: IEvent<void> = this.lineFeedEmitter.event;
+  /** Fires once the queued writes have been processed (once per batch, as in xterm.js). */
+  public readonly onWriteParsed: IEvent<void> = this.writeParsedEmitter.event;
 
   // Requests from the running program, reported by libghostty
   /** The program reported its working directory (OSC 7), as a file:// URL. */
@@ -692,13 +701,20 @@ export class Terminal implements ITerminalCore {
   private flushPendingWrites(): void {
     if (this.writing) return;
     this.writing = true;
+    let wrote = false;
     try {
       while (this.pendingWrites.length > 0 && this.isOpen) {
         const { data, callback } = this.pendingWrites.shift()!;
         this.writeInternal(data, callback);
+        wrote = true;
       }
     } finally {
       this.writing = false;
+    }
+    if (wrote && !this.isDisposed) {
+      this.writeParsedEmitter.fire();
+      // Listeners may have written; those writes were queued.
+      if (this.pendingWrites.length > 0 && this.isOpen) this.flushPendingWrites();
     }
   }
 
@@ -724,6 +740,9 @@ export class Terminal implements ITerminalCore {
       wasmTerm.write(data);
     }
     this.markerRegistry.update();
+    if (this.lineFeedEmitter.hasListeners) {
+      for (let n = countLineFeeds(data); n > 0; n--) this.lineFeedEmitter.fire();
+    }
     if (scrolledOffset > 0) this.followScrolledContent(scrolledOffset);
     if (this.resetPending) {
       this.resetPending = false;
@@ -1394,6 +1413,8 @@ export class Terminal implements ITerminalCore {
     this.progressEmitter.dispose();
     this.programStatusEmitter.dispose();
     this.semanticPromptEmitter.dispose();
+    this.lineFeedEmitter.dispose();
+    this.writeParsedEmitter.dispose();
   }
 
   // ==========================================================================

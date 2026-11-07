@@ -3,6 +3,11 @@ import type { IDisposable, IEvent } from './interfaces';
 export class EventEmitter<T> {
   private listeners: Array<(arg: T) => void> = [];
 
+  /** Whether anything listens, so work done only for listeners can be skipped. */
+  get hasListeners(): boolean {
+    return this.listeners.length > 0;
+  }
+
   fire(arg: T): void {
     // A copy, so a listener that disposes itself (or another) doesn't make
     // the next one miss this event.

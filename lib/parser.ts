@@ -16,6 +16,27 @@
 
 import type { IDisposable, IFunctionIdentifier, IParser } from './interfaces';
 
+/**
+ * The line feeds (LF, VT and FF, which libghostty all treats as LF) in
+ * written data, for onLineFeed. libghostty doesn't report line feeds, so this
+ * counts the bytes: one inside an OSC or DCS string, where it is not a line
+ * feed, is counted too.
+ */
+export function countLineFeeds(data: string | Uint8Array): number {
+  let count = 0;
+  if (typeof data === 'string') {
+    for (let i = 0; i < data.length; i++) {
+      const c = data.charCodeAt(i);
+      if (c >= 0x0a && c <= 0x0c) count++;
+    }
+  } else {
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] >= 0x0a && data[i] <= 0x0c) count++;
+    }
+  }
+  return count;
+}
+
 type OscHandler = (data: string) => boolean | Promise<boolean>;
 
 export class Parser implements IParser {

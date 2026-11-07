@@ -176,6 +176,46 @@ describe('writing', () => {
     term.dispose();
     expect(() => term.write('test')).toThrow('Terminal has been disposed');
   });
+
+  test('onLineFeed fires for each LF, VT and FF written', () => {
+    const { term } = fixture.open({ cols: 20, rows: 5 });
+    let feeds = 0;
+    term.onLineFeed(() => feeds++);
+    term.write('a\nb\r\nc\x0bd\x0c');
+    expect(feeds).toBe(4);
+    term.write(new TextEncoder().encode('\n\n'));
+    expect(feeds).toBe(6);
+    term.write('no feeds\r');
+    expect(feeds).toBe(6);
+  });
+
+  test('onWriteParsed fires once the queued writes are processed', () => {
+    const term = fixture.create({ cols: 20, rows: 5 });
+    const seen: Array<string | undefined> = [];
+    term.onWriteParsed(() => seen.push(bufferLine(term, 0)));
+    term.write('one ');
+    term.write('two');
+    expect(seen).toEqual([]);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    fixture.defer(() => container.remove());
+    // Both writes queued before open() are processed together.
+    term.open(container);
+    expect(seen).toEqual(['one two']);
+    term.write('!');
+    expect(seen).toEqual(['one two', 'one two!']);
+  });
+
+  test('a write from onWriteParsed is processed and reported too', () => {
+    const { term } = fixture.open({ cols: 20, rows: 5 });
+    let count = 0;
+    term.onWriteParsed(() => {
+      if (++count === 1) term.write('b');
+    });
+    term.write('a');
+    expect(bufferLine(term, 0)).toBe('ab');
+    expect(count).toBe(2);
+  });
 });
 
 describe('echo rendering', () => {
