@@ -198,6 +198,8 @@ export class InputHandler {
   private getModeCallback?: (mode: number) => boolean;
   private getTerminal?: () => GhosttyTerminal | undefined;
   private keyupListener: ((e: KeyboardEvent) => void) | null = null;
+  private focusInListener: ((e: FocusEvent) => void) | null = null;
+  private focusOutListener: ((e: FocusEvent) => void) | null = null;
   private onCopyCallback?: () => boolean;
   private mouseConfig?: MouseTrackingConfig;
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
@@ -306,6 +308,11 @@ export class InputHandler {
     // protocol); the encoder produces nothing for them otherwise.
     this.keyupListener = this.handleKeyUp.bind(this);
     this.container.addEventListener('keyup', this.keyupListener);
+
+    this.focusInListener = (e: FocusEvent) => this.handleFocusChange(e, true);
+    this.focusOutListener = (e: FocusEvent) => this.handleFocusChange(e, false);
+    this.container.addEventListener('focusin', this.focusInListener);
+    this.container.addEventListener('focusout', this.focusOutListener);
 
     this.pasteListener = this.handlePaste.bind(this);
     this.container.addEventListener('paste', this.pasteListener);
@@ -859,13 +866,30 @@ export class InputHandler {
    * Emit paste data with bracketed paste support
    */
   private emitPasteData(text: string): void {
-    const hasBracketedPaste = this.getModeCallback?.(2004) ?? false;
-
-    if (hasBracketedPaste) {
-      this.onDataCallback('\x1b[200~' + text + '\x1b[201~');
-    } else {
-      this.onDataCallback(text);
+    const terminal = this.getTerminal?.();
+    if (terminal) {
+      // libghostty applies the terminal's paste modes (bracketed paste, Kitty
+      // paste events) and makes the text safe to send.
+      const data = terminal.encodePaste(text);
+      if (data) this.onDataCallback(data);
+      return;
     }
+    const hasBracketedPaste = this.getModeCallback?.(2004) ?? false;
+    this.onDataCallback(hasBracketedPaste ? '\x1b[200~' + text + '\x1b[201~' : text);
+  }
+
+  /**
+   * Report focus changes to programs that asked for them (mode 1004). Focus
+   * moving between elements inside the terminal doesn't count.
+   */
+  private handleFocusChange(event: FocusEvent, focused: boolean): void {
+    if (this.isDisposed) return;
+    const other = event.relatedTarget as Node | null;
+    if (other && typeof this.container.contains === 'function' && this.container.contains(other)) {
+      return;
+    }
+    const data = this.getTerminal?.()?.encodeFocus(focused);
+    if (data) this.onDataCallback(data);
   }
 
   /**
@@ -996,6 +1020,14 @@ export class InputHandler {
     if (this.keyupListener) {
       this.container.removeEventListener('keyup', this.keyupListener);
       this.keyupListener = null;
+    }
+    if (this.focusInListener) {
+      this.container.removeEventListener('focusin', this.focusInListener);
+      this.focusInListener = null;
+    }
+    if (this.focusOutListener) {
+      this.container.removeEventListener('focusout', this.focusOutListener);
+      this.focusOutListener = null;
     }
 
     if (this.keypressListener) {

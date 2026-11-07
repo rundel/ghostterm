@@ -370,8 +370,13 @@ class Memory {
  * functions can be stored in a function table, so this is how a JS callback gets
  * a function pointer that libghostty-vt can call.
  */
-function wasmCallback(fn: (...args: number[]) => void, params: number): unknown {
-  const typeSection = [0x01, 0x60, params, ...new Array(params).fill(0x7f), 0x00];
+function wasmCallback(
+  fn: (...args: number[]) => unknown,
+  params: number,
+  returnsI32 = false
+): unknown {
+  const results = returnsI32 ? [0x01, 0x7f] : [0x00];
+  const typeSection = [0x01, 0x60, params, ...new Array(params).fill(0x7f), ...results];
   const importSection = [0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00];
   const exportSection = [0x01, 0x01, 0x66, 0x00, 0x00];
   const bytes = new Uint8Array([
@@ -450,6 +455,64 @@ export class Ghostty {
     return index;
   }
 
+  /** Put a JS function in the module's function table; returns its index. */
+  private tableFunction(fn: unknown): number {
+    const table = this.exports.__indirect_function_table;
+    const index = table.grow(1);
+    table.set(index, fn as any);
+    return index;
+  }
+
+  private mimeReaderFn = 0;
+  /** Bytes the paste being performed should read, if any. */
+  private pasteData: Uint8Array | null = null;
+
+  /**
+   * Function-table index of the GhosttyMimeReaderFn used by
+   * ghostty_terminal_paste. It hands the current paste's bytes to the
+   * GhosttyWriter that libghostty passes in, by calling its function pointer.
+   */
+  private mimeReaderCallback(): number {
+    if (this.mimeReaderFn) return this.mimeReaderFn;
+    const ex = this.exports;
+    const fn = wasmCallback(
+      (_userdata: number, _mimePtr: number, writerPtr: number) => {
+        const data = this.pasteData;
+        if (!data) return 0;
+        const view = this.mem.view();
+        const write = view.getUint32(writerPtr, true);
+        const writerData = view.getUint32(writerPtr + 4, true);
+        const len = Math.max(1, data.length);
+        const ptr = ex.ghostty_wasm_alloc(len);
+        if (!ptr) return 0;
+        this.mem.bytes().set(data, ptr);
+        const writeFn = ex.__indirect_function_table.get(write) as (
+          ud: number,
+          p: number,
+          n: number
+        ) => number;
+        const ok = writeFn(writerData, ptr, data.length);
+        ex.ghostty_wasm_free(ptr, len);
+        return ok ? 1 : 0;
+      },
+      3,
+      true
+    );
+    this.mimeReaderFn = this.tableFunction(fn);
+    return this.mimeReaderFn;
+  }
+
+  /** @internal Run a paste with `data` as the clipboard's text/plain. */
+  withPasteData<T>(data: Uint8Array, run: (readerFn: number) => T): T {
+    const readerFn = this.mimeReaderCallback();
+    this.pasteData = data;
+    try {
+      return run(readerFn);
+    } finally {
+      this.pasteData = null;
+    }
+  }
+
   createKeyEncoder(): KeyEncoder {
     return new KeyEncoder(this.exports, this.mem);
   }
@@ -464,6 +527,7 @@ export class Ghostty {
     config?: GhosttyTerminalConfig
   ): GhosttyTerminal {
     const term = new GhosttyTerminal(this.exports, this.mem, this.layout, cols, rows, config);
+    term.ghostty = this;
     this.terminals.set(term.handle, term);
     term.setWritePty(this.writePtyCallback(), () => this.terminals.delete(term.handle));
     return term;
@@ -946,7 +1010,84 @@ export class GhosttyTerminal {
 
   /** @internal */
   queueResponse(bytes: Uint8Array): void {
-    this.responses.push(bytes);
+    (this.capture ?? this.responses).push(bytes);
+  }
+
+  /** @internal The Ghostty instance that created this terminal. */
+  ghostty?: Ghostty;
+  /** While set, write_pty output is collected here instead of as responses. */
+  private capture: Uint8Array[] | null = null;
+
+  /**
+   * Encode a paste of `text` the way the terminal's current modes require:
+   * bracketed paste (mode 2004) when the program asked for it, newlines as
+   * carriage returns otherwise, unsafe control bytes replaced with spaces, and
+   * a Kitty paste event (mode 5522) when applicable. Returns the bytes for the
+   * pty, or '' if nothing should be written.
+   *
+   * Text that could run commands (a newline outside bracketed paste, or the
+   * bracketed paste terminator) is allowed, as ghostty-web and xterm.js always
+   * have; libghostty can refuse it instead, which a future confirmation hook
+   * could use.
+   */
+  encodePaste(text: string): string {
+    const ghostty = this.ghostty;
+    if (!ghostty) return '';
+    const ex = this.exports;
+    const data = new TextEncoder().encode(text);
+    const mime = new TextEncoder().encode('text/plain');
+
+    return ghostty.withPasteData(data, (readerFn) => {
+      const block = ex.ghostty_wasm_alloc(64);
+      const mimePtr = block + 48;
+      const mimes = block + 40; // GhosttyString[1]
+      const paste = block; // GhosttyPaste (32 bytes)
+      const out = block + 36;
+      const view = this.mem.view();
+      for (let i = 0; i < 64; i += 4) view.setUint32(block + i, 0, true);
+      this.mem.bytes().set(mime, mimePtr);
+      view.setUint32(mimes, mimePtr, true);
+      view.setUint32(mimes + 4, mime.length, true);
+      view.setUint32(paste, 32, true); // size
+      view.setUint32(paste + 4, 0, true); // location: standard clipboard
+      view.setUint32(paste + 8, 0, true); // source: clipboard
+      view.setUint32(paste + 12, mimes, true);
+      view.setUint32(paste + 16, 1, true);
+      view.setUint32(paste + 20, readerFn, true); // reader.read
+      view.setUint32(paste + 24, 0, true); // reader.userdata
+      view.setUint8(paste + 28, 1); // allow_unsafe
+
+      this.capture = [];
+      try {
+        const result = ex.ghostty_terminal_paste(this.handle, paste, out);
+        const chunks = this.capture;
+        if (result !== GHOSTTY_SUCCESS) return '';
+        const all = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+        let at = 0;
+        for (const c of chunks) {
+          all.set(c, at);
+          at += c.length;
+        }
+        return new TextDecoder().decode(all);
+      } finally {
+        this.capture = null;
+        ex.ghostty_wasm_free(block, 64);
+      }
+    });
+  }
+
+  /**
+   * Encode a focus change for a program that asked for focus reports (mode
+   * 1004), or '' when it didn't.
+   */
+  encodeFocus(focused: boolean): string {
+    if (!this.getMode(1004, false)) return '';
+    const ex = this.exports;
+    const buf = this.selScratch + 192;
+    const written = this.selScratch + 224;
+    if (ex.ghostty_focus_encode(focused ? 0 : 1, buf, 16, written) !== GHOSTTY_SUCCESS) return '';
+    const len = this.mem.view().getUint32(written, true);
+    return new TextDecoder().decode(this.mem.bytes().slice(buf, buf + len));
   }
 
   private setMode(mode: number, ansi: boolean, value: boolean): void {

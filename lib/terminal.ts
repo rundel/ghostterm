@@ -644,14 +644,10 @@ export class Terminal implements ITerminalCore {
 
     this.awaitingEcho = true;
 
-    // Check if terminal has bracketed paste mode enabled
-    if (this.wasmTerm!.hasBracketedPaste()) {
-      // Wrap with bracketed paste sequences (DEC mode 2004)
-      this.dataEmitter.fire('\x1b[200~' + data + '\x1b[201~');
-    } else {
-      // Send data directly
-      this.dataEmitter.fire(data);
-    }
+    // libghostty applies the paste modes (bracketed paste, Kitty paste events)
+    // and makes the text safe to send.
+    const encoded = this.wasmTerm!.encodePaste(data);
+    if (encoded) this.dataEmitter.fire(encoded);
   }
 
   /**

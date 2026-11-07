@@ -422,6 +422,8 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
 
   // Focus and paste
   ghostty_focus_encode(event: number, bufPtr: number, bufLen: number, writtenPtr: number): number;
+  /** Takes a pointer to a GhosttyPaste; the output goes to the write_pty callback. */
+  ghostty_terminal_paste(terminal: TerminalHandle, pastePtr: number, outPasted: number): number;
 
   // Terminal
   ghostty_terminal_new(allocator: number, slot: number, cols: number, rows: number): number;
