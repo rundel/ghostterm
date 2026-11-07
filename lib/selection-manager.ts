@@ -56,6 +56,9 @@ export class SelectionManager {
   /** Whether the current drag is a block selection (Alt held). */
   private rectangle = false;
 
+  /** The textarea's own style while it is borrowed for a context menu. */
+  private textareaStyle: string | null = null;
+
   // Track rows that need redraw for clearing old selection
   private dirtySelectionRows: Set<number> = new Set();
 
@@ -332,6 +335,7 @@ export class SelectionManager {
 
     // Stop auto-scroll if active
     this.stopAutoScroll();
+    this.restoreTextarea();
 
     // The terminal may already have been freed by the time we are disposed.
     if (this.gesture) {
@@ -420,6 +424,13 @@ export class SelectionManager {
     // Mouse down - start a gesture. A single click clears the selection; a
     // double or triple click selects a word or line.
     canvas.addEventListener('mousedown', (e: MouseEvent) => {
+      // A context-menu click must not start (or clear) a selection. The textarea
+      // is moved under the pointer now, before the browser picks the menu's
+      // target; doing it in the contextmenu event is too late.
+      if (e.button === 2 || (e.button === 0 && e.ctrlKey && SelectionManager.isMac())) {
+        this.prepareContextMenu(e.clientX, e.clientY);
+        return;
+      }
       if (e.button !== 0) return;
 
       // CRITICAL: Focus the terminal so it can receive keyboard input
@@ -482,63 +493,11 @@ export class SelectionManager {
     };
     document.addEventListener('mouseup', this.boundMouseUpHandler);
 
-    // Right-click (context menu) - position textarea to show browser's native menu
-    // This allows Copy/Paste options to appear in the context menu
+    // Keyboard context-menu key (no mousedown): prepare as late as possible.
     this.boundContextMenuHandler = (e: MouseEvent) => {
-      // Position textarea at mouse cursor
-      this.textarea.style.position = 'fixed';
-      this.textarea.style.left = `${e.clientX}px`;
-      this.textarea.style.top = `${e.clientY}px`;
-      this.textarea.style.width = '1px';
-      this.textarea.style.height = '1px';
-      this.textarea.style.zIndex = '1000';
-      this.textarea.style.opacity = '0';
-
-      // Enable pointer events temporarily so context menu targets the textarea
-      this.textarea.style.pointerEvents = 'auto';
-
-      // If there's a selection, populate textarea with it and select the text
-      if (this.hasSelection()) {
-        const text = this.getSelection();
-        this.textarea.value = text;
-        this.textarea.select();
-        this.textarea.setSelectionRange(0, text.length);
-      } else {
-        // No selection - clear textarea but still show menu (for paste)
-        this.textarea.value = '';
-      }
-
-      // Focus the textarea so the context menu appears on it
-      this.textarea.focus();
-
-      // After a short delay, restore the textarea to its hidden state
-      // This allows the context menu to appear first
-      setTimeout(() => {
-        // Listen for when the context menu closes (user clicks away or selects an option)
-        const resetTextarea = () => {
-          this.textarea.style.pointerEvents = 'none';
-          this.textarea.style.zIndex = '-10';
-          this.textarea.style.width = '0';
-          this.textarea.style.height = '0';
-          this.textarea.style.left = '0';
-          this.textarea.style.top = '0';
-          this.textarea.value = '';
-
-          // Remove the one-time listeners
-          document.removeEventListener('click', resetTextarea);
-          document.removeEventListener('contextmenu', resetTextarea);
-          this.textarea.removeEventListener('blur', resetTextarea);
-        };
-
-        // Reset on any of these events (menu closed)
-        document.addEventListener('click', resetTextarea, { once: true });
-        document.addEventListener('contextmenu', resetTextarea, { once: true });
-        this.textarea.addEventListener('blur', resetTextarea, { once: true });
-      }, 10);
-
+      if (this.textareaStyle === null) this.prepareContextMenu(e.clientX, e.clientY);
       // Don't prevent default - let browser show the context menu on the textarea
     };
-
     canvas.addEventListener('contextmenu', this.boundContextMenuHandler);
 
     // Click outside canvas - clear selection
@@ -570,6 +529,56 @@ export class SelectionManager {
 
     document.addEventListener('click', this.boundClickHandler);
   }
+
+  private static isMac(): boolean {
+    return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  }
+
+  /**
+   * Put the hidden input textarea under the pointer, holding the selected text
+   * (selected), so the browser's native context menu opens on it and offers
+   * Copy and Paste. The terminal hides the textarea with a clip-path, which
+   * also stops it being hit, so that is lifted until the menu is done.
+   */
+  private prepareContextMenu(clientX: number, clientY: number): void {
+    const ta = this.textarea;
+    if (this.textareaStyle === null) this.textareaStyle = ta.style.cssText;
+    Object.assign(ta.style, {
+      position: 'fixed',
+      left: `${clientX - 2}px`,
+      top: `${clientY - 2}px`,
+      width: '4px',
+      height: '4px',
+      zIndex: '1000',
+      opacity: '0',
+      clipPath: 'none',
+      pointerEvents: 'auto',
+    });
+
+    ta.value = this.hasSelection() ? this.getSelection() : '';
+    ta.focus();
+    if (ta.value) ta.setSelectionRange(0, ta.value.length);
+
+    // Put the textarea back once the menu is done with: on the next pointer
+    // press or key press anywhere, or when it loses focus. Registered after
+    // this event so the press that opened the menu doesn't count.
+    setTimeout(() => {
+      document.addEventListener('mousedown', this.restoreTextarea, true);
+      document.addEventListener('keydown', this.restoreTextarea, true);
+      ta.addEventListener('blur', this.restoreTextarea);
+    }, 0);
+  }
+
+  /** Undo prepareContextMenu(). */
+  private restoreTextarea = (): void => {
+    document.removeEventListener('mousedown', this.restoreTextarea, true);
+    document.removeEventListener('keydown', this.restoreTextarea, true);
+    this.textarea.removeEventListener('blur', this.restoreTextarea);
+    if (this.textareaStyle === null) return;
+    this.textarea.style.cssText = this.textareaStyle;
+    this.textareaStyle = null;
+    this.textarea.value = '';
+  };
 
   /**
    * Mark current selection rows as dirty for redraw

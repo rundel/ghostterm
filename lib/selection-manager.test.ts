@@ -837,3 +837,61 @@ describe('SelectionManager block selection (Alt-drag)', () => {
     expect([inSel(5, 0), inSel(0, 2)]).toEqual([false, false]);
   });
 });
+
+describe('SelectionManager context menu', () => {
+  let container: HTMLElement;
+  let term: Terminal;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
+    term.open(container);
+    term.write('copy this text');
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+  });
+
+  function rightDown(init: MouseEventInit = { button: 2 }) {
+    const canvas: HTMLCanvasElement = (term as any).renderer.getCanvas();
+    const e = new MouseEvent('mousedown', { bubbles: true, clientX: 50, clientY: 20, ...init });
+    canvas.dispatchEvent(e);
+  }
+
+  test('right mousedown puts the selected text under the pointer, unclipped', () => {
+    const selMgr = (term as any).selectionManager;
+    selMgr.select(0, 0, 9);
+    const ta = (term as any).textarea as HTMLTextAreaElement;
+    const original = ta.style.cssText;
+
+    rightDown();
+
+    expect(selMgr.getSelection()).toBe('copy this'); // not cleared by the click
+    expect(ta.value).toBe('copy this');
+    expect([ta.selectionStart, ta.selectionEnd]).toEqual([0, 9]);
+    expect(ta.style.position).toBe('fixed');
+    expect(ta.style.left).toBe('48px');
+    expect(ta.style.clipPath).toBe('none');
+    expect(ta.style.pointerEvents).toBe('auto');
+    expect(document.activeElement).toBe(ta);
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+        expect(ta.style.cssText).toBe(original);
+        expect(ta.value).toBe('');
+        resolve();
+      }, 5);
+    });
+  });
+
+  test('right-click with no selection still prepares the textarea (for Paste)', () => {
+    rightDown();
+    const ta = (term as any).textarea as HTMLTextAreaElement;
+    expect(ta.value).toBe('');
+    expect(ta.style.clipPath).toBe('none');
+  });
+});
