@@ -2,12 +2,14 @@
  * Cut a release: bun run release <version> [--push]
  *
  * A plain version (0.2.0) becomes a GitHub release; one with a suffix (0.2.0-rc.1) becomes a
- * prerelease. The script checks the version and the working tree, runs the checks, sets the version in
- * package.json, commits and creates the tag. Pushing the tag starts .github/workflows/release.yml,
+ * prerelease. The script checks the version, the working tree and that CHANGELOG.md has entries under
+ * Unreleased, runs the checks, sets the version in package.json, moves the Unreleased entries under the
+ * version (a release only; see scripts/changelog.ts), commits and creates the tag. Pushing the tag starts .github/workflows/release.yml,
  * which builds and publishes the GitHub release. Without --push it prints the push command instead.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { CHANGELOG, cutRelease, unreleasedNotes } from './changelog';
 
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
@@ -54,14 +56,22 @@ function main(): void {
   const problem = versionProblem(version, run(['git', 'tag', '--list'], true).split('\n'));
   if (problem) fail(problem);
 
+  const changelog = readFileSync(CHANGELOG, 'utf8');
+  if (!unreleasedNotes(changelog))
+    fail(`Add the changes to ${CHANGELOG} under "## Unreleased" first`);
+
   for (const script of ['fmt', 'lint', 'typecheck', 'test']) run(['bun', 'run', script]);
 
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   pkg.version = version;
   writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
+  if (!isPrerelease(version)) {
+    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
+    writeFileSync(CHANGELOG, cutRelease(changelog, version, today));
+  }
 
   const tag = `v${version}`;
-  run(['git', 'commit', '--quiet', '-m', `Release ${tag}`, 'package.json']);
+  run(['git', 'commit', '--quiet', '-m', `Release ${tag}`, 'package.json', CHANGELOG]);
   run(['git', 'tag', '-a', tag, '-m', tag]);
   const kind = isPrerelease(version) ? 'prerelease' : 'release';
   console.log(`✅ Tagged ${tag} (${kind}, libghostty-vt ${pkg['libghostty-vt']})`);

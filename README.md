@@ -150,17 +150,19 @@ Before committing, run `bun run fmt && bun run lint && bun run typecheck && bun 
 
 ## Releases
 
-Versions are ghostterm's own semver. To release from an up-to-date, clean `main`:
+Versions are ghostterm's own semver, and [CHANGELOG.md](./CHANGELOG.md) records what changed in each one: add
+entries under `## Unreleased` as changes land. To release from an up-to-date, clean `main`:
 
 ```bash
 bun run release 0.2.0-rc.1        # a prerelease: any suffix after the patch number
 bun run release 0.2.0 --push      # a release, pushed straight away
 ```
 
-This runs the checks, sets the version in `package.json`, commits and tags. Pushing the tag runs
-`.github/workflows/release.yml`, which builds and creates the GitHub release, marked as a prerelease when the
-version has a suffix. Each release carries the package tarball, a zip of `dist/` and `SHA256SUMS`, and its notes
-name the libghostty-vt release it is built on.
+This refuses to run while Unreleased is empty. It runs the checks, sets the version in `package.json`, moves the
+Unreleased entries under the new version (a prerelease leaves them for the release that follows), commits and
+tags. Pushing the tag runs `.github/workflows/release.yml`, which builds and creates the GitHub release, marked
+as a prerelease when the version has a suffix. Each release carries the package tarball, a zip of `dist/` and
+`SHA256SUMS`, and its notes are its changelog entries and the libghostty-vt release it is built on.
 
 ## License
 

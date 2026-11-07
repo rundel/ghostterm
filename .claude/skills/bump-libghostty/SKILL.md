@@ -97,6 +97,8 @@ that only the test suite was run.
 
 - CLAUDE.md: the version in the "Known libghostty-vt X.Y quirks" heading and the quirks list itself.
 - README.md: anything from step 4 that users would notice.
+- CHANGELOG.md: a line under `## Unreleased` naming the new release and what it brings users, e.g.
+  `- Update libghostty-vt to NEW: <one-line summary of what users get>.`
 
 ## 6. Commit (only when the user asks)
 

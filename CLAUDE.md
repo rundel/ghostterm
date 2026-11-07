@@ -145,9 +145,12 @@ Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be 
 
 Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that
 changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every
-`v*` tag, runs the checks, commits `Release vX.Y.Z` and creates an annotated tag; `--push` pushes both. The tag
+`v*` tag, and entries under `## Unreleased` in `CHANGELOG.md`. It runs the checks, moves those entries under
+`## X.Y.Z - <date>` (releases only; a prerelease leaves them, see `scripts/changelog.ts`), commits `Release vX.Y.Z`
+and creates an annotated tag; `--push` pushes both. The tag
 starts `.github/workflows/release.yml`, which checks the tag against `package.json`, builds, and creates the GitHub
-release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`. A version with a suffix (`0.2.0-rc.1`) becomes a
+release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`; its notes are the version's changelog
+entries (`bun scripts/changelog.ts notes <version>`). A version with a suffix (`0.2.0-rc.1`) becomes a
 prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests.
 
 ## Upgrading libghostty-vt
@@ -177,3 +180,5 @@ Known libghostty-vt 1.0 quirks the code works around or documents:
 - Keep the public API xterm.js-compatible where xterm.js has an equivalent; new events and methods are additive.
 - Document deliberate differences from xterm.js (they follow Ghostty) in the README's "Behavior worth knowing".
 - Tests accompany behavior changes; prefer asserting what a program would receive (bytes sent) or what is drawn.
+- Changes users would notice get a short, high-level line under `## Unreleased` in `CHANGELOG.md`, in the same
+  commit. Internal refactors, tests and tooling don't.

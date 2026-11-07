@@ -67,12 +67,19 @@ jobs:
           TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ steps.tag.outputs.prerelease }}
           LIBGHOSTTY: ${{ steps.tag.outputs.libghostty }}
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -euo pipefail
           FLAGS=(--latest)
           [ "$PRERELEASE" = true ] && FLAGS=(--prerelease --latest=false)
+          {
+            echo "Built on libghostty-vt $LIBGHOSTTY."
+            echo
+            bun scripts/changelog.ts notes "$VERSION"
+          } > notes.md
+          # --generate-notes appends GitHub's compare link (and any merged pull requests).
           gh release create "$TAG" release/* \
             --title "$TAG" \
-            --notes "Built on libghostty-vt $LIBGHOSTTY." \
+            --notes-file notes.md \
             --generate-notes \
             "${FLAGS[@]}"
