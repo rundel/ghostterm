@@ -10,12 +10,17 @@ export interface FixtureOptions {
   fontFamily?: string;
   scrollback?: number;
   smoothScrollDuration?: number;
+  theme?: 'light' | 'transparent';
+  /** Put the terminal in a CSS-sized flex layout with a FitAddon (window.fit). */
+  fit?: boolean;
 }
 
 /** Open e2e/fixture.html and wait for its terminal. */
 export async function openFixture(page: Page, options: FixtureOptions = {}): Promise<void> {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(options)) query.set(key, String(value));
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== false) query.set(key, value === true ? '' : String(value));
+  }
   await page.goto(`/e2e/fixture.html?${query}`);
   await page.evaluate(() => window.ready);
   // open() focuses the textarea again from a zero timeout; let that run before the spec starts.
@@ -29,10 +34,36 @@ export async function nextFrame(page: Page): Promise<void> {
   );
 }
 
+/** Wait for `count` animation frames. */
+export async function frames(page: Page, count: number): Promise<void> {
+  await page.evaluate(async (n) => {
+    for (let i = 0; i < n; i++) await new Promise((r) => requestAnimationFrame(r));
+  }, count);
+}
+
 /** Write to the terminal and wait for the frame that draws it. */
 export async function write(page: Page, data: string): Promise<void> {
   await page.evaluate((d) => new Promise<void>((r) => window.term.write(d, r)), data);
   await nextFrame(page);
+}
+
+/** The text of an absolute buffer row (0 = oldest scrollback row), trailing spaces trimmed. */
+export async function lineText(page: Page, row: number): Promise<string> {
+  return page.evaluate(
+    (y) => window.term.buffer.active.getLine(y)?.translateToString(true) ?? '',
+    row
+  );
+}
+
+/** The text of every viewport row as displayed, trailing spaces trimmed. */
+export async function viewportText(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const buffer = window.term.buffer.active;
+    return Array.from(
+      { length: window.term.rows },
+      (_, i) => buffer.getLine(buffer.viewportY + i)?.translateToString(true) ?? ''
+    );
+  });
 }
 
 /** Everything the terminal has sent, joined. */
@@ -87,13 +118,40 @@ export async function mouseToCell(page: Page, col: number, row: number): Promise
   await page.mouse.move(p.x, p.y);
 }
 
-/** The device pixels of a block of viewport cells (one by default) as RGBA bytes, rows of `width` pixels. */
+/** Device pixels as RGBA bytes, rows of `width` pixels. */
 export interface CellPixels {
   width: number;
   height: number;
   data: number[];
 }
 
+/**
+ * The device pixels of a rectangle of the canvas given in CSS px (it may include the scrollbar
+ * gutter), with the edges rounded the way the backing store is.
+ */
+export async function canvasPixels(
+  page: Page,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Promise<CellPixels> {
+  return page.evaluate(
+    ([x, y, width, height]) => {
+      const canvas = window.term['canvas']!;
+      const scale = canvas.width / Number.parseFloat(canvas.style.width);
+      const x0 = Math.round(x * scale);
+      const y0 = Math.round(y * scale);
+      const x1 = Math.round((x + width) * scale);
+      const y1 = Math.round((y + height) * scale);
+      const image = canvas.getContext('2d')!.getImageData(x0, y0, x1 - x0, y1 - y0);
+      return { width: image.width, height: image.height, data: Array.from(image.data) };
+    },
+    [x, y, width, height]
+  );
+}
+
+/** The device pixels of a block of viewport cells (one by default). */
 export async function cellPixels(
   page: Page,
   col: number,
@@ -101,20 +159,13 @@ export async function cellPixels(
   cols = 1,
   rows = 1
 ): Promise<CellPixels> {
-  return page.evaluate(
-    ([col, row, cols, rows]) => {
-      const term = window.term;
-      const canvas = term['canvas']!;
-      const scale = canvas.width / Number.parseFloat(canvas.style.width);
-      const { charWidth, charHeight } = term['renderer']!;
-      const x0 = Math.round(col * charWidth * scale);
-      const y0 = Math.round(row * charHeight * scale);
-      const x1 = Math.round((col + cols) * charWidth * scale);
-      const y1 = Math.round((row + rows) * charHeight * scale);
-      const image = canvas.getContext('2d')!.getImageData(x0, y0, x1 - x0, y1 - y0);
-      return { width: image.width, height: image.height, data: Array.from(image.data) };
-    },
-    [col, row, cols, rows]
+  const g = await geometry(page);
+  return canvasPixels(
+    page,
+    col * g.cellWidth,
+    row * g.cellHeight,
+    cols * g.cellWidth,
+    rows * g.cellHeight
   );
 }
 
@@ -187,4 +238,48 @@ export function rowsWithColor(px: CellPixels, hex: string, tolerance = 8): numbe
     }
   }
   return rows;
+}
+
+/** How many pixels are fully transparent. */
+export function countTransparent(px: CellPixels): number {
+  let n = 0;
+  for (let i = 3; i < px.data.length; i += 4) if (px.data[i] === 0) n++;
+  return n;
+}
+
+/** The distinct colors in the pixels, as #rrggbb, most frequent first. */
+export function colorsOf(px: CellPixels): string[] {
+  const counts = new Map<string, number>();
+  for (let i = 0; i < px.data.length; i += 4) {
+    const hex = `#${[px.data[i], px.data[i + 1], px.data[i + 2]]
+      .map((v) => v.toString(16).padStart(2, '0'))
+      .join('')}`;
+    counts.set(hex, (counts.get(hex) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([hex]) => hex);
+}
+
+/**
+ * Read the clipboard by pasting it into the page's #before input with the platform shortcut, then
+ * give focus back to the terminal. Works in every browser, unlike navigator.clipboard.readText()
+ * (WebKit refuses it without a user gesture).
+ */
+export async function readClipboard(page: Page): Promise<string> {
+  const input = page.locator('#before');
+  await input.fill('');
+  await input.focus();
+  await page.keyboard.press('ControlOrMeta+v');
+  const text = await input.inputValue();
+  await page.evaluate(() => window.term.textarea!.focus());
+  return text;
+}
+
+/** Put text on the clipboard by copying it from the #before input; focus goes back to the terminal. */
+export async function writeClipboard(page: Page, text: string): Promise<void> {
+  const input = page.locator('#before');
+  await input.fill(text);
+  await input.selectText();
+  await page.keyboard.press('ControlOrMeta+c');
+  await input.fill('');
+  await page.evaluate(() => window.term.textarea!.focus());
 }

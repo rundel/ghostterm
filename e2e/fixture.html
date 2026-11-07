@@ -18,11 +18,24 @@
         display: block;
         margin-bottom: 10px;
       }
+      /* With ?fit: the terminal fills a flex column whose size the specs change. */
+      body.fit #frame {
+        display: flex;
+        flex-direction: column;
+        width: 600px;
+        height: 300px;
+      }
+      body.fit #terminal {
+        display: block;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
     </style>
   </head>
   <body>
     <input id="before" aria-label="Before the terminal" />
-    <div id="terminal"></div>
+    <div id="frame"><div id="terminal"></div></div>
     <script type="module" src="./fixture.ts"></script>
   </body>
 </html>
