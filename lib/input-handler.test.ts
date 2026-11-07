@@ -1193,3 +1193,147 @@ describe('InputHandler', () => {
     });
   });
 });
+
+describe('InputHandler with the terminal driving the key encoder', () => {
+  let ghostty: Ghostty;
+  let container: ReturnType<typeof createMockContainer>;
+  let sent: string[];
+  let term: ReturnType<Ghostty['createTerminal']>;
+  let handler: InputHandler;
+
+  beforeEach(async () => {
+    ghostty = await Ghostty.load();
+    container = createMockContainer();
+    sent = [];
+    term = ghostty.createTerminal(80, 24);
+    handler = new InputHandler(
+      ghostty,
+      container as any,
+      (data) => sent.push(data),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => term
+    );
+  });
+
+  function press(
+    code: string,
+    key: string,
+    mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } = {},
+    type: 'keydown' | 'keyup' = 'keydown'
+  ) {
+    const event = createKeyEvent(code, key, mods);
+    for (const h of container._listeners.get(type) || []) h(event);
+    return event;
+  }
+
+  const last = () => sent[sent.length - 1];
+
+  test('legacy encoding for everyday keys', () => {
+    press('KeyA', 'a');
+    press('KeyA', 'A', { shift: true });
+    press('Enter', 'Enter');
+    press('Backspace', 'Backspace');
+    press('Tab', 'Tab', { shift: true });
+    press('Home', 'Home');
+    press('F1', 'F1');
+    press('F5', 'F5');
+    press('KeyC', 'c', { ctrl: true });
+    press('KeyB', 'b', { alt: true });
+    expect(sent).toEqual([
+      'a',
+      'A',
+      '\r',
+      '\x7f',
+      '\x1b[Z',
+      '\x1b[H',
+      '\x1bOP',
+      '\x1b[15~',
+      '\x03',
+      '\x1bb',
+    ]);
+  });
+
+  test('follows application cursor mode set by the program', () => {
+    press('ArrowUp', 'ArrowUp');
+    term.write('\x1b[?1h');
+    press('ArrowUp', 'ArrowUp');
+    expect(sent).toEqual(['\x1b[A', '\x1bOA']);
+  });
+
+  test('Shift+Enter is distinguishable, and Kitty protocol disambiguates Escape', () => {
+    // Like Ghostty, Shift+Enter uses the xterm modifyOtherKeys form even in
+    // legacy mode, so programs can tell it from Enter.
+    press('Enter', 'Enter', { shift: true });
+    press('Escape', 'Escape');
+    expect(sent).toEqual(['\x1b[27;2;13~', '\x1b']);
+
+    sent = [];
+    term.write('\x1b[>1u'); // push "disambiguate escape codes"
+    press('Enter', 'Enter', { shift: true });
+    press('Escape', 'Escape');
+    press('KeyA', 'a', { ctrl: true });
+    expect(sent).toEqual(['\x1b[13;2u', '\x1b[27u', '\x1b[97;5u']);
+
+    sent = [];
+    term.write('\x1b[<u'); // pop
+    press('Escape', 'Escape');
+    expect(sent).toEqual(['\x1b']);
+  });
+
+  test('Kitty keyboard protocol: key releases only when requested', () => {
+    press('KeyA', 'a', {}, 'keyup');
+    expect(sent).toEqual([]);
+    term.write('\x1b[>3u'); // disambiguate + report event types
+    press('KeyA', 'a', {}, 'keyup');
+    expect(last()).toBe('\x1b[97;1:3u');
+  });
+
+  test('modifyOtherKeys reports Ctrl+Shift combinations', () => {
+    term.write('\x1b[>4;2m');
+    press('KeyA', 'A', { ctrl: true, shift: true });
+    expect(last()).toBe('\x1b[27;6;65~');
+  });
+
+  test('AltGr characters are sent as text', () => {
+    const event = createKeyEvent('KeyQ', '@', { ctrl: true, alt: true });
+    for (const h of container._listeners.get('keydown') || []) h(event);
+    expect(last()).toBe('@');
+  });
+
+  test('dead keys and bare Cmd shortcuts are left to the browser', () => {
+    let prevented = false;
+    const dead = createKeyEvent('KeyE', 'Dead');
+    dead.preventDefault = () => {
+      prevented = true;
+    };
+    for (const h of container._listeners.get('keydown') || []) h(dead);
+    expect(sent).toEqual([]);
+    expect(prevented).toBe(false);
+
+    const reload = createKeyEvent('KeyR', 'r', { meta: true });
+    reload.preventDefault = () => {
+      prevented = true;
+    };
+    for (const h of container._listeners.get('keydown') || []) h(reload);
+    expect(sent).toEqual([]);
+    expect(prevented).toBe(false);
+  });
+
+  test('Cmd combinations reach programs using the Kitty protocol', () => {
+    term.write('\x1b[>1u');
+    press('KeyR', 'r', { meta: true });
+    expect(last()).toBe('\x1b[114;9u');
+  });
+
+  test('non-ASCII text from the layout passes through', () => {
+    press('KeyE', 'é');
+    press('Semicolon', 'ö');
+    expect(sent).toEqual(['é', 'ö']);
+  });
+});

@@ -482,7 +482,8 @@ export class Terminal implements ITerminalCore {
           return this.copySelection();
         },
         this.textarea,
-        mouseConfig
+        mouseConfig,
+        () => this.wasmTerm
       );
 
       // Create selection manager (pass textarea for context menu positioning)

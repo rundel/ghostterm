@@ -13,8 +13,7 @@
  * - Captures all keyboard input (preventDefault on everything)
  */
 
-import type { Ghostty } from './ghostty';
-import type { KeyEncoder } from './ghostty';
+import type { Ghostty, GhosttyTerminal, KeyEncoder } from './ghostty';
 import type { IKeyEvent } from './interfaces';
 import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
 
@@ -22,6 +21,9 @@ import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
  * Map KeyboardEvent.code values to USB HID Key enum values
  * Based on: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
  */
+/** GhosttyOptionAsAlt: Option acts as Alt on both sides. */
+const OPTION_AS_ALT_TRUE = 1;
+
 const KEY_MAP: Record<string, Key> = {
   // Letters
   KeyA: Key.A,
@@ -181,6 +183,8 @@ export class InputHandler {
   private onKeyCallback?: (keyEvent: IKeyEvent) => void;
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
   private getModeCallback?: (mode: number) => boolean;
+  private getTerminal?: () => GhosttyTerminal | undefined;
+  private keyupListener: ((e: KeyboardEvent) => void) | null = null;
   private onCopyCallback?: () => boolean;
   private mouseConfig?: MouseTrackingConfig;
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
@@ -220,6 +224,10 @@ export class InputHandler {
    * @param onCopy - Optional callback to handle copy (Cmd+C/Ctrl+C with selection)
    * @param inputElement - Optional input element for beforeinput events
    * @param mouseConfig - Optional mouse tracking configuration
+   * @param getTerminal - Optional accessor for the WASM terminal. When given,
+   *   the key encoder follows all of the terminal's keyboard modes (Kitty
+   *   keyboard protocol, modifyOtherKeys, keypad mode, ...); otherwise only
+   *   cursor key mode is followed, through getMode.
    */
   constructor(
     ghostty: Ghostty,
@@ -231,7 +239,8 @@ export class InputHandler {
     getMode?: (mode: number) => boolean,
     onCopy?: () => boolean,
     inputElement?: HTMLElement,
-    mouseConfig?: MouseTrackingConfig
+    mouseConfig?: MouseTrackingConfig,
+    getTerminal?: () => GhosttyTerminal | undefined
   ) {
     this.encoder = ghostty.createKeyEncoder();
     this.container = container;
@@ -243,6 +252,7 @@ export class InputHandler {
     this.getModeCallback = getMode;
     this.onCopyCallback = onCopy;
     this.mouseConfig = mouseConfig;
+    this.getTerminal = getTerminal;
 
     // Attach event listeners
     this.attach();
@@ -276,6 +286,11 @@ export class InputHandler {
 
     this.keydownListener = this.handleKeyDown.bind(this);
     this.container.addEventListener('keydown', this.keydownListener);
+
+    // Key releases are only sent when a program asks for them (Kitty keyboard
+    // protocol); the encoder produces nothing for them otherwise.
+    this.keyupListener = this.handleKeyUp.bind(this);
+    this.container.addEventListener('keyup', this.keyupListener);
 
     this.pasteListener = this.handlePaste.bind(this);
     this.container.addEventListener('paste', this.pasteListener);
@@ -341,19 +356,85 @@ export class InputHandler {
   }
 
   /**
-   * Check if this is a printable character with no special modifiers
-   * @param event - KeyboardEvent
-   * @returns true if printable character
+   * The text a key produced in the current layout, before any Ctrl/Meta
+   * transformation, or undefined for keys that produce no text (named keys
+   * such as "Enter" or "ArrowUp", dead keys, control characters).
    */
-  private isPrintableCharacter(event: KeyboardEvent): boolean {
-    // If Ctrl, Alt, or Meta (Cmd on Mac) is pressed, it's not a simple printable character
-    // Exception: AltGr (Ctrl+Alt on some keyboards) can produce printable characters
-    if (event.ctrlKey && !event.altKey) return false;
-    if (event.altKey && !event.ctrlKey) return false;
-    if (event.metaKey) return false; // Cmd key on Mac
+  private keyText(event: KeyboardEvent): string | undefined {
+    const key = event.key;
+    if (!key) return undefined;
+    // Named key values are ASCII words like "Enter", "F1" or "Dead".
+    if (key.length > 1 && /^[A-Za-z][A-Za-z0-9]*$/.test(key)) return undefined;
+    const cp = key.codePointAt(0)!;
+    if (cp < 0x20 || cp === 0x7f || (cp >= 0xf700 && cp <= 0xf8ff)) return undefined;
+    return key;
+  }
 
-    // If key produces a single printable character
-    return event.key.length === 1;
+  /**
+   * The codepoint the physical key produces without Shift, which the Kitty
+   * keyboard protocol reports as the key's identity.
+   */
+  private unshiftedCodepoint(event: KeyboardEvent, text: string | undefined): number | undefined {
+    const code = event.code;
+    if (/^Key[A-Z]$/.test(code)) return code.charCodeAt(3) + 32;
+    if (/^Digit[0-9]$/.test(code)) return code.charCodeAt(5);
+    if (code === 'Space') return 0x20;
+    if (text && !event.shiftKey && [...text].length === 1) return text.codePointAt(0);
+    return undefined;
+  }
+
+  /**
+   * Point the encoder at the terminal's current keyboard modes. Option keeps
+   * acting as Alt/Meta, as it always has in ghostty-web.
+   */
+  private syncEncoder(): void {
+    const terminal = this.getTerminal?.();
+    if (terminal) {
+      this.encoder.syncFromTerminal(terminal);
+    } else if (this.getModeCallback) {
+      this.encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, this.getModeCallback(1));
+    }
+    this.encoder.setOption(KeyEncoderOption.MACOS_OPTION_AS_ALT, OPTION_AS_ALT_TRUE);
+  }
+
+  /**
+   * Encode a key event with libghostty's key encoder.
+   * @returns the bytes for the pty, or '' when the event produces nothing
+   */
+  private encodeKey(event: KeyboardEvent, action: KeyAction): string | null {
+    const key = this.mapKeyCode(event.code);
+    if (key === null) return null;
+
+    // Cmd combinations carry no text: in legacy mode they produce nothing (so
+    // browser shortcuts keep working); the Kitty protocol can still report them.
+    const text = event.metaKey ? undefined : this.keyText(event);
+    const unshifted = this.unshiftedCodepoint(event, this.keyText(event));
+    let mods = this.extractModifiers(event);
+
+    let consumedMods = Mods.NONE;
+    if (text) {
+      const unshiftedText = unshifted !== undefined ? String.fromCodePoint(unshifted) : undefined;
+      const changedText = text !== unshiftedText;
+      // AltGr (reported as Ctrl+Alt) produced a character: it is plain text,
+      // as the OS would have delivered it to a native terminal.
+      const altGraph = event.getModifierState?.('AltGraph') ?? false;
+      if (altGraph || (event.ctrlKey && event.altKey && changedText)) {
+        mods &= ~(Mods.CTRL | Mods.ALT);
+      }
+      // Shift that went into producing the text (capitals, symbols).
+      if (event.shiftKey && changedText) consumedMods |= Mods.SHIFT;
+    }
+
+    this.syncEncoder();
+    const encoded = this.encoder.encode({
+      action,
+      key,
+      mods,
+      consumedMods,
+      utf8: text,
+      unshiftedCodepoint: unshifted,
+    });
+    return new TextDecoder().decode(encoded);
   }
 
   /**
@@ -402,156 +483,51 @@ export class InputHandler {
       return;
     }
 
-    // For printable characters without modifiers, send the character directly
-    // This handles: a-z, A-Z (with shift), 0-9, punctuation, etc.
-    if (this.isPrintableCharacter(event)) {
-      event.preventDefault();
-      this.onDataCallback(event.key);
-      this.recordKeyDownData(event.key);
+    // Dead keys start a composition; the composed text arrives through
+    // composition or beforeinput events.
+    if (event.key === 'Dead' && !event.ctrlKey && !event.altKey && !event.metaKey) {
       return;
     }
 
-    // Map the physical key code
-    const key = this.mapKeyCode(event.code);
-    if (key === null) {
-      // Unknown key - ignore it
-      return;
-    }
-
-    // Extract modifiers
-    const mods = this.extractModifiers(event);
-
-    // Handle simple special keys that produce standard sequences
-    if (mods === Mods.NONE || mods === Mods.SHIFT) {
-      let simpleOutput: string | null = null;
-
-      switch (key) {
-        case Key.ENTER:
-          simpleOutput = '\r'; // Carriage return
-          break;
-        case Key.TAB:
-          if (mods === Mods.SHIFT) {
-            simpleOutput = '\x1b[Z'; // Backtab
-          } else {
-            simpleOutput = '\t'; // Tab
-          }
-          break;
-        case Key.BACKSPACE:
-          simpleOutput = '\x7F'; // DEL (most terminals use 0x7F for backspace)
-          break;
-        case Key.ESCAPE:
-          simpleOutput = '\x1B'; // ESC
-          break;
-        // Arrow keys are handled by the encoder (respects application cursor mode)
-        // Navigation keys
-        case Key.HOME:
-          simpleOutput = '\x1B[H';
-          break;
-        case Key.END:
-          simpleOutput = '\x1B[F';
-          break;
-        case Key.INSERT:
-          simpleOutput = '\x1B[2~';
-          break;
-        case Key.DELETE:
-          simpleOutput = '\x1B[3~';
-          break;
-        case Key.PAGE_UP:
-          simpleOutput = '\x1B[5~';
-          break;
-        case Key.PAGE_DOWN:
-          simpleOutput = '\x1B[6~';
-          break;
-        // Function keys
-        case Key.F1:
-          simpleOutput = '\x1BOP';
-          break;
-        case Key.F2:
-          simpleOutput = '\x1BOQ';
-          break;
-        case Key.F3:
-          simpleOutput = '\x1BOR';
-          break;
-        case Key.F4:
-          simpleOutput = '\x1BOS';
-          break;
-        case Key.F5:
-          simpleOutput = '\x1B[15~';
-          break;
-        case Key.F6:
-          simpleOutput = '\x1B[17~';
-          break;
-        case Key.F7:
-          simpleOutput = '\x1B[18~';
-          break;
-        case Key.F8:
-          simpleOutput = '\x1B[19~';
-          break;
-        case Key.F9:
-          simpleOutput = '\x1B[20~';
-          break;
-        case Key.F10:
-          simpleOutput = '\x1B[21~';
-          break;
-        case Key.F11:
-          simpleOutput = '\x1B[23~';
-          break;
-        case Key.F12:
-          simpleOutput = '\x1B[24~';
-          break;
-      }
-
-      if (simpleOutput !== null) {
-        event.preventDefault();
-        this.onDataCallback(simpleOutput);
-        this.recordKeyDownData(simpleOutput);
-        return;
-      }
-    }
-
-    // Determine action (we only care about PRESS for now, not RELEASE or REPEAT)
-    const action = KeyAction.PRESS;
-
-    // For non-printable keys or keys with modifiers, encode using Ghostty
+    let data: string | null;
     try {
-      // Sync encoder options with terminal mode state
-      // Mode 1 (DECCKM) controls whether arrow keys send CSI or SS3 sequences
-      if (this.getModeCallback) {
-        const appCursorMode = this.getModeCallback(1);
-        this.encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, appCursorMode);
-      }
-
-      // For letter/number keys, even with modifiers, pass the base character
-      // This helps the encoder produce correct control sequences (e.g., Ctrl+A = 0x01)
-      // For special keys (Enter, Arrow keys, etc.), don't pass utf8
-      const utf8 =
-        event.key.length === 1 && event.key.charCodeAt(0) < 128
-          ? event.key.toLowerCase() // Use lowercase for consistency
-          : undefined;
-
-      const encoded = this.encoder.encode({
-        action,
-        key,
-        mods,
-        utf8,
-      });
-
-      // Convert Uint8Array to string
-      const decoder = new TextDecoder();
-      const data = decoder.decode(encoded);
-
-      // Prevent default browser behavior
-      event.preventDefault();
-      event.stopPropagation();
-
-      // Emit the data
-      if (data.length > 0) {
-        this.onDataCallback(data);
-        this.recordKeyDownData(data);
-      }
+      data = this.encodeKey(event, event.repeat ? KeyAction.REPEAT : KeyAction.PRESS);
     } catch (error) {
       // Encoding failed - log but don't crash
       console.warn('Failed to encode key:', event.code, error);
+      return;
+    }
+
+    // A key with no physical mapping (unusual layouts and devices): fall back
+    // to the text it produced, if any.
+    if (data === null) {
+      const text = this.keyText(event);
+      if (!text || event.ctrlKey || event.metaKey) return;
+      data = text;
+    }
+
+    if (data.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.onDataCallback(data);
+      this.recordKeyDownData(data);
+    } else if (!event.metaKey) {
+      // Nothing to send (e.g. a bare modifier). Keep the browser from acting on
+      // it, except for Cmd shortcuts, which stay the browser's.
+      event.preventDefault();
+    }
+  }
+
+  /**
+   * Handle keyup: send a release event when the program asked for them.
+   */
+  private handleKeyUp(event: KeyboardEvent): void {
+    if (this.isDisposed || this.isComposing || event.isComposing) return;
+    try {
+      const data = this.encodeKey(event, KeyAction.RELEASE);
+      if (data) this.onDataCallback(data);
+    } catch (error) {
+      console.warn('Failed to encode key release:', event.code, error);
     }
   }
 
@@ -1039,6 +1015,11 @@ export class InputHandler {
     if (this.keydownListener) {
       this.container.removeEventListener('keydown', this.keydownListener);
       this.keydownListener = null;
+    }
+
+    if (this.keyupListener) {
+      this.container.removeEventListener('keyup', this.keyupListener);
+      this.keyupListener = null;
     }
 
     if (this.keypressListener) {

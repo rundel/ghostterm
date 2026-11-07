@@ -581,6 +581,17 @@ export class KeyEncoder {
     this.exports.ghostty_wasm_free(valuePtr, 4);
   }
 
+  /**
+   * Copy the terminal's keyboard modes into the encoder: cursor and keypad
+   * application modes, Kitty keyboard flags, modifyOtherKeys, the alt escape
+   * prefix and backarrow mode. Programs change these in any write, so call it
+   * right before encoding. It resets MACOS_OPTION_AS_ALT, which is not a
+   * terminal mode; set that again afterwards.
+   */
+  syncFromTerminal(terminal: GhosttyTerminal): void {
+    this.exports.ghostty_key_encoder_set_from_terminal(this.encoder, terminal.handle);
+  }
+
   setKittyFlags(flags: KittyKeyFlags): void {
     this.setOption(KeyEncoderOption.KITTY_KEYBOARD_FLAGS, flags);
   }
