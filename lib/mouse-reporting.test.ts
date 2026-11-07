@@ -121,4 +121,18 @@ describe('Mouse reporting', () => {
     mouse('wheel', 1, 1, { deltaY: -66 });
     expect(sent).toEqual(['\x1bOA', '\x1bOA']);
   });
+
+  test('a wheel notch is one report; a big flick several; trackpad pixels accumulate', () => {
+    term.write('\x1b[?1000h\x1b[?1006h');
+    mouse('wheel', 1, 1, { deltaY: 100 });
+    expect(sent).toHaveLength(1);
+    sent = [];
+    mouse('wheel', 1, 1, { deltaY: 300 });
+    expect(sent).toHaveLength(3);
+    sent = [];
+    const cell = (term as any).renderer.charHeight;
+    for (let i = 0; i < 4; i++) mouse('wheel', 1, 1, { deltaY: cell / 4 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/^\x1b\[<65;/);
+  });
 });

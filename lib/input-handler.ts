@@ -868,24 +868,56 @@ export class InputHandler {
     this.reportMouse(event, MouseAction.MOTION, held);
   }
 
+  /** Trackpad scrolling not yet reported, in rows (fractional). */
+  private wheelRemainder = { x: 0, y: 0 };
+
   /**
-   * Handle wheel event: each event is reported as one wheel-button press.
+   * How many wheel reports a wheel event is worth. Like Ghostty, a mouse wheel
+   * notch is one report and trackpad scrolling is one report per cell height.
+   * The browser doesn't say which device it is, so large pixel deltas are
+   * taken as notches (about 100px each) and small ones are accumulated.
+   */
+  private wheelSteps(event: WheelEvent, delta: number, axis: 'x' | 'y'): number {
+    if (event.deltaMode === 1) {
+      // DOM_DELTA_LINE: Firefox reports 3 lines per notch.
+      return Math.sign(delta) * Math.max(1, Math.round(Math.abs(delta) / 3));
+    }
+    if (event.deltaMode === 2) return Math.sign(delta); // DOM_DELTA_PAGE
+    if (Math.abs(delta) >= 50) {
+      this.wheelRemainder[axis] = 0;
+      return Math.sign(delta) * Math.max(1, Math.round(Math.abs(delta) / 100));
+    }
+    const cell = this.mouseConfig?.getCellDimensions();
+    const size = axis === 'y' ? cell?.height : cell?.width;
+    if (!size || size <= 0) return Math.sign(delta);
+    this.wheelRemainder[axis] += delta / size;
+    const steps = Math.trunc(this.wheelRemainder[axis]);
+    this.wheelRemainder[axis] -= steps;
+    return steps;
+  }
+
+  /**
+   * Handle wheel event: reported as wheel-button presses to a program
+   * tracking the mouse.
    */
   private handleWheel(event: WheelEvent): void {
-    if (this.isDisposed) return;
+    if (this.isDisposed || !this.isReportingMouse(event)) return;
     const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
     const delta = horizontal ? event.deltaX : event.deltaY;
+    // The program owns the wheel while it tracks the mouse; never also scroll
+    // the page or the terminal, even for movement too small to report yet.
+    event.preventDefault();
     if (delta === 0) return;
+    const steps = this.wheelSteps(event, delta, horizontal ? 'x' : 'y');
     const button = horizontal
-      ? delta < 0
+      ? steps < 0
         ? MouseButton.WHEEL_LEFT
         : MouseButton.WHEEL_RIGHT
-      : delta < 0
+      : steps < 0
         ? MouseButton.WHEEL_UP
         : MouseButton.WHEEL_DOWN;
-    if (this.reportMouse(event, MouseAction.PRESS, button)) {
-      // The program consumed the wheel; don't also scroll the terminal.
-      event.preventDefault();
+    for (let i = 0; i < Math.min(Math.abs(steps), 10); i++) {
+      this.reportMouse(event, MouseAction.PRESS, button);
     }
   }
 
