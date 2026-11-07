@@ -37,7 +37,7 @@ Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test
 ## Architecture
 
 ```
-Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, render loop
+Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, frame scheduling
 ├─ GhosttyTerminal (lib/bridge/)      the only code that touches the WASM module
 ├─ CanvasRenderer (lib/renderer.ts)   draws the render state; cursor, scrollbar, highlights
 ├─ InputHandler (lib/input-handler.ts)    DOM keyboard/mouse/paste/focus → libghostty encoders
@@ -79,6 +79,8 @@ Three row systems are in use; mixing them up is the most common bug.
 ### Rendering
 
 `GhosttyTerminal.update()` refreshes the render state and accumulates dirty flags (an update only ever adds dirty state; `markClean()` clears it). Reads refresh it only when `pendingUpdate` is set, so anything that changes the terminal outside `write()` (search steps, gestures, reset) must call `invalidate()`. `getLine()` reads the live grid, not the render state. `getViewport()` re-reads only stale rows, one `CELLS_RAW` call per row, and only fetches styles and graphemes for cells that have them. Each `GhosttyCell` carries resolved colors, flags, width, underline style and color, overline, `selected` (from the render state's selection), `bg_default`, a hyperlink ID shared by every cell of one URI, and the full grapheme in `chars` (filled by `readRow`, so the renderer never looks graphemes up per cell).
+
+Frames are drawn on demand, never in a loop: `GhosttyTerminal.onChange` (every change that marks the render state stale), `CanvasRenderer.onChange` (theme, font, focus, hover, cursor blink), scrolling, decorations, highlights and `refresh()` call `Terminal.requestRender()`, which schedules one animation frame (`drawFrame`). Changes made while `render()` runs don't schedule another. Anything new that changes what is drawn must reach one of those.
 
 Synchronized output (mode 2026) arrives as a render hold: `onRenderHold` captures the frame when the hold starts and `update()` is a no-op until it ends or times out (1 s).
 

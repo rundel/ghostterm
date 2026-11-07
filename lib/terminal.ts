@@ -165,7 +165,10 @@ export class Terminal implements ITerminalCore {
   // Lifecycle state
   private isOpen = false;
   private isDisposed = false;
+  /** The frame requestRender() scheduled, if any. */
   private animationFrameId?: number;
+  /** Wakes the renderer when a render hold (mode 2026) times out with nothing else to draw. */
+  private renderHoldTimeout?: number;
   /** refresh() was called: the next frame redraws every row. */
   private refreshPending = false;
   /** Writes waiting for open() or for the write in progress to finish. */
@@ -189,6 +192,7 @@ export class Terminal implements ITerminalCore {
     cellSize: () => this.renderer?.getMetrics(),
     topLine: () => this.topLine(),
     isAlternateScreen: () => this.wasmTerm?.isAlternateScreen() ?? false,
+    requestRender: () => this.requestRender(),
   });
   /** Search highlights (SearchAddon), drawn with the decorations' cell colors. */
   private searchHighlights?: () => HighlightRange[];
@@ -472,6 +476,7 @@ export class Terminal implements ITerminalCore {
       // Create WASM terminal with current dimensions and config
       const config = this.buildWasmConfig();
       this.wasmTerm = this.ghostty!.createTerminal(this.cols, this.rows, config);
+      this.wasmTerm.onChange = () => this.requestRender();
       this.connectEffects(this.wasmTerm);
 
       // Create canvas element
@@ -526,6 +531,7 @@ export class Terminal implements ITerminalCore {
         theme: this.options.theme,
         allowTransparency: this.options.allowTransparency,
       });
+      this.renderer.onChange = () => this.requestRender();
 
       // Size canvas to terminal dimensions (use renderer.resize for proper DPI scaling)
       this.renderer.resize(this.cols, this.rows);
@@ -636,11 +642,8 @@ export class Terminal implements ITerminalCore {
       }
       this.watchDevicePixelRatio();
 
-      // Render initial blank screen (force full redraw)
+      // Render initial blank screen (force full redraw); later frames are drawn on demand.
       this.renderFrame(true);
-
-      // Start render loop
-      this.startRenderLoop();
 
       // Focus input (auto-focus so user can start typing immediately)
       this.focus();
@@ -868,12 +871,6 @@ export class Terminal implements ITerminalCore {
       return;
     }
 
-    // Cancel render loop before resize to prevent accessing detached TypedArray
-    // views while WASM reallocates buffers. We restart it after resize completes.
-    // This avoids the background-tab regression of using an isResizing flag
-    // cleared via requestAnimationFrame (rAF is throttled/paused in background tabs).
-    this.cancelRenderLoop();
-
     try {
       // Update dimensions
       this.cols = cols;
@@ -902,8 +899,6 @@ export class Terminal implements ITerminalCore {
     } catch (e) {
       console.error('Terminal resize failed:', e);
     }
-
-    this.startRenderLoop();
   }
 
   /**
@@ -1082,6 +1077,7 @@ export class Terminal implements ITerminalCore {
     if (!this.renderer || Number.isNaN(start) || Number.isNaN(end)) return;
     if (Math.min(start, end) > this.rows - 1 || Math.max(start, end) < 0) return;
     this.refreshPending = true;
+    this.requestRender();
   }
 
   /** @internal Cell size in CSS pixels, or undefined before open() (for FitAddon). */
@@ -1097,6 +1093,7 @@ export class Terminal implements ITerminalCore {
   /** @internal Set where the renderer gets search highlights from (for SearchAddon). */
   public setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void {
     this.searchHighlights = provider;
+    this.requestRender();
   }
 
   /**
@@ -1274,6 +1271,8 @@ export class Terminal implements ITerminalCore {
   private setViewportY(y: number): void {
     this.viewportY = y;
     this.syncViewport();
+    // Fractional steps move the scrollbar without changing the rows.
+    this.requestRender();
   }
 
   /** Put libghostty's viewport on the displayed offset, floor(viewportY). */
@@ -1387,8 +1386,8 @@ export class Terminal implements ITerminalCore {
 
     this.isDisposed = true;
 
-    // Stop render loop and clear write queue
-    this.cancelRenderLoop();
+    // Stop rendering and clear write queue
+    this.cancelRender();
     this.pendingWrites.length = 0;
 
     this.cancelScrollAnimation();
@@ -1434,13 +1433,15 @@ export class Terminal implements ITerminalCore {
   // Private Methods
   // ==========================================================================
 
-  /**
-   * Cancel the render loop
-   */
-  private cancelRenderLoop(): void {
-    if (this.animationFrameId) {
+  /** Cancel a scheduled frame and the render hold wake-up. */
+  private cancelRender(): void {
+    if (this.animationFrameId !== undefined) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
+    }
+    if (this.renderHoldTimeout !== undefined) {
+      clearTimeout(this.renderHoldTimeout);
+      this.renderHoldTimeout = undefined;
     }
   }
 
@@ -1461,31 +1462,39 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Start the render loop
+   * Draw a frame on the next animation frame. Frames are drawn only when something asked for one:
+   * libghostty reporting a change (output, scrolling, selection, ...), the renderer (hover, focus,
+   * cursor blink, theme, font), scrolling, decorations and highlights. Nothing runs while idle.
    */
-  private startRenderLoop(): void {
-    if (this.animationFrameId) return; // already running
-    const loop = () => {
-      if (!this.isDisposed && this.isOpen) {
-        // Render using WASM's native dirty tracking
-        // The render() method:
-        // 1. Calls update() once to sync state and check dirty flags
-        // 2. Only redraws dirty rows when forceAll=false
-        // 3. Always calls clearDirty() at the end
-        this.renderFrame(false);
-
-        // onCursorMove; getCursor() reads the render state render() updated
-        const cursor = this.wasmTerm!.getCursor();
-        if (cursor.x !== this.lastCursor.x || cursor.y !== this.lastCursor.y) {
-          this.lastCursor = { x: cursor.x, y: cursor.y };
-          this.cursorMoveEmitter.fire();
-        }
-
-        this.animationFrameId = requestAnimationFrame(loop);
-      }
-    };
-    loop();
+  private requestRender(): void {
+    if (this.animationFrameId !== undefined || !this.isOpen || this.isDisposed) return;
+    this.animationFrameId = requestAnimationFrame(this.drawFrame);
   }
+
+  private drawFrame = (): void => {
+    this.animationFrameId = undefined;
+    if (this.isDisposed || !this.isOpen || !this.wasmTerm) return;
+    this.renderFrame(false);
+
+    // onCursorMove; getCursor() reads the render state render() updated
+    const cursor = this.wasmTerm.getCursor();
+    if (cursor.x !== this.lastCursor.x || cursor.y !== this.lastCursor.y) {
+      this.lastCursor = { x: cursor.x, y: cursor.y };
+      this.cursorMoveEmitter.fire();
+    }
+
+    // The scrollbar fades by time, one frame after another until it settles.
+    if (this.scrollbarOpacity !== this.scrollbarFade.to) this.requestRender();
+
+    // A render hold keeps the old frame until it ends (a change) or times out (no change).
+    const hold = this.wasmTerm.renderHoldRemaining();
+    if (hold !== null && this.renderHoldTimeout === undefined) {
+      this.renderHoldTimeout = window.setTimeout(() => {
+        this.renderHoldTimeout = undefined;
+        this.requestRender();
+      }, hold + 1);
+    }
+  };
 
   /** Rows of history above the active area. */
   public getScrollbackLength(): number {
@@ -1644,13 +1653,8 @@ export class Terminal implements ITerminalCore {
     }
 
     // Update renderer for underline rendering
-    const previousHyperlinkId = this.renderer.getHoveredHyperlinkId();
-    if (hyperlinkId !== previousHyperlinkId) {
-      this.renderer.setHoveredHyperlinkId(hyperlinkId);
-
-      // The 60fps render loop will pick up the change automatically
-      // No need to force a render - this keeps performance smooth
-    }
+    // The renderer schedules a frame when it changes.
+    this.renderer.setHoveredHyperlinkId(hyperlinkId);
 
     // Check if there's a link at this position (for click handling and cursor)
     const bufferRow = this.viewportRowToBufferRow(viewportRow);
@@ -1708,12 +1712,7 @@ export class Terminal implements ITerminalCore {
     this.lastPointer = undefined;
     // Clear hyperlink underline
     if (this.renderer && this.wasmTerm) {
-      const previousHyperlinkId = this.renderer.getHoveredHyperlinkId();
-      if (previousHyperlinkId > 0) {
-        this.renderer.setHoveredHyperlinkId(0);
-
-        // The 60fps render loop will pick up the change automatically
-      }
+      this.renderer.setHoveredHyperlinkId(0);
       // Clear regex link underline
       this.renderer.setHoveredLinkRange(null);
     }
@@ -1899,8 +1898,8 @@ export class Terminal implements ITerminalCore {
 
   /**
    * The scrollbar's opacity now: it fades between `from` and `to` over
-   * SCROLLBAR_FADE_DURATION_MS from `start`. The render loop reads it every
-   * frame, so fading needs no animation loop of its own.
+   * SCROLLBAR_FADE_DURATION_MS from `start`. Each frame reads it, and
+   * drawFrame() asks for another until the fade settles.
    */
   private get scrollbarOpacity(): number {
     const { from, to, start } = this.scrollbarFade;
@@ -1911,6 +1910,7 @@ export class Terminal implements ITerminalCore {
   private fadeScrollbar(to: number): void {
     if (this.scrollbarFade.to === to) return;
     this.scrollbarFade = { from: this.scrollbarOpacity, to, start: performance.now() };
+    this.requestRender();
   }
 
   /**

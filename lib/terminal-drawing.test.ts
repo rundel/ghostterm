@@ -3,9 +3,16 @@
  * cell backgrounds and the screen restored after the alternate screen.
  */
 
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Terminal } from './terminal';
-import { drawnText, internals, paintedRects, render, terminalFixture } from './test-helpers';
+import {
+  drawnText,
+  internals,
+  nextFrame,
+  paintedRects,
+  render,
+  terminalFixture,
+} from './test-helpers';
 
 const fixture = terminalFixture();
 let term: Terminal;
@@ -86,6 +93,69 @@ describe('synchronized output', () => {
     expect(cursorAt()).toEqual([[2, 0]]);
     term.write('\x1b[?2026l');
     expect(cursorAt()).toEqual([[11, 2]]);
+  });
+});
+
+describe('frames on demand', () => {
+  /** Count renderer.render() calls over a few animation frames. */
+  async function framesDrawn(during: () => void = () => {}): Promise<number> {
+    const draw = spyOn(internals(term).renderer, 'render');
+    try {
+      during();
+      for (let i = 0; i < 4; i++) await nextFrame();
+      return draw.mock.calls.length;
+    } finally {
+      draw.mockRestore();
+    }
+  }
+
+  test('an idle terminal draws nothing', async () => {
+    await framesDrawn();
+    expect(await framesDrawn()).toBe(0);
+  });
+
+  test('output, focus, hover, refresh() and scrolling each draw', async () => {
+    await framesDrawn();
+    expect(await framesDrawn(() => term.write('hello'))).toBe(1);
+    expect(await framesDrawn(() => internals(term).renderer.setFocused(false))).toBe(1);
+    expect(await framesDrawn(() => internals(term).renderer.setHoveredHyperlinkId(7))).toBe(1);
+    expect(await framesDrawn(() => internals(term).renderer.setHoveredHyperlinkId(7))).toBe(0);
+    expect(await framesDrawn(() => term.refresh(0, 0))).toBe(1);
+    // Scrolling draws, and keeps drawing while the scrollbar fades in.
+    for (let i = 0; i < 30; i++) term.write('line\r\n');
+    await framesDrawn();
+    expect(await framesDrawn(() => term.scrollLines(-1))).toBeGreaterThanOrEqual(1);
+  });
+
+  test('a write during a frame batch draws once', async () => {
+    await framesDrawn();
+    const n = await framesDrawn(() => {
+      for (let i = 0; i < 50; i++) term.write('x');
+    });
+    expect(n).toBe(1);
+  });
+
+  test('a timed-out render hold is drawn without further output', async () => {
+    term.write('before');
+    await framesDrawn();
+    const realNow = performance.now.bind(performance);
+    let offset = 0;
+    const now = spyOn(performance, 'now').mockImplementation(() => realNow() + offset);
+    try {
+      term.write('\x1b[?2026h\x1b[2J\x1b[Hafter');
+      await framesDrawn();
+      offset = 2000;
+      await new Promise((r) => setTimeout(r, 1100));
+      for (let i = 0; i < 3; i++) await nextFrame();
+      const text = drawnText(term, render(term, false))
+        .map((t) => t.text)
+        .join('');
+      // The frame after the timeout already drew the new content.
+      expect(text).toBe('');
+      expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('after');
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 

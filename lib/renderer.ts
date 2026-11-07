@@ -54,6 +54,15 @@ export interface IRenderable {
   clearDirty(): void;
 }
 
+/** A hovered link's cells in viewport rows, both ends included. */
+type LinkRange = { startX: number; startY: number; endX: number; endY: number };
+
+function sameLinkRange(a: LinkRange | null, b: LinkRange | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.startX === b.startX && a.startY === b.startY && a.endX === b.endX && a.endY === b.endY;
+}
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -226,6 +235,19 @@ export class CanvasRenderer {
     endY: number;
   } | null = null;
 
+  /**
+   * Called when something the renderer draws changed (theme, font, hover, focus, the cursor's
+   * blink phase, ...), so the owner can schedule a frame; render() draws it.
+   */
+  public onChange?: () => void;
+
+  /** Set while render() runs: what it changes is drawn by that same frame. */
+  private rendering = false;
+
+  private changed(): void {
+    if (!this.rendering) this.onChange?.();
+  }
+
   constructor(canvas: HTMLCanvasElement, options: RendererOptions = {}) {
     this.canvas = canvas;
     this.allowTransparency = options.allowTransparency ?? false;
@@ -288,6 +310,7 @@ export class CanvasRenderer {
    * whether the cell size changed (the caller then resizes).
    */
   public remeasureFont(): boolean {
+    this.changed();
     const old = this.metrics;
     this.metrics = this.measureFont();
     this.needsFullRender = true;
@@ -336,6 +359,7 @@ export class CanvasRenderer {
    * Resize canvas to fit terminal dimensions
    */
   public resize(cols: number, rows: number): void {
+    this.changed();
     this.gridCols = cols;
     this.gridRows = rows;
     this.needsFullRender = true;
@@ -388,6 +412,20 @@ export class CanvasRenderer {
     forceAll: boolean = false,
     viewportY: number = 0,
     scrollbarOpacity: number = 1
+  ): { start: number; end: number } | null {
+    this.rendering = true;
+    try {
+      return this.draw(buffer, forceAll, viewportY, scrollbarOpacity);
+    } finally {
+      this.rendering = false;
+    }
+  }
+
+  private draw(
+    buffer: IRenderable,
+    forceAll: boolean,
+    viewportY: number,
+    scrollbarOpacity: number
   ): { start: number; end: number } | null {
     // Store buffer reference for grapheme lookups in renderCell
     this.currentBuffer = buffer;
@@ -468,8 +506,7 @@ export class CanvasRenderer {
     // Track rows with hyperlinks that need redraw when hover changes
     const hyperlinkRows = new Set<number>();
     const hyperlinkChanged = this.hoveredHyperlinkId !== this.previousHoveredHyperlinkId;
-    const linkRangeChanged =
-      JSON.stringify(this.hoveredLinkRange) !== JSON.stringify(this.previousHoveredLinkRange);
+    const linkRangeChanged = !sameLinkRange(this.hoveredLinkRange, this.previousHoveredLinkRange);
 
     if (hyperlinkChanged) {
       // Find rows containing the old or new hovered hyperlink
@@ -793,6 +830,7 @@ export class CanvasRenderer {
 
   /** Set (or clear) where cell highlights come from, e.g. the SearchAddon. */
   public setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void {
+    this.changed();
     this.highlightProvider = provider;
     this.needsFullRender = true;
   }
@@ -945,9 +983,10 @@ export class CanvasRenderer {
   // ==========================================================================
 
   private startCursorBlink(): void {
-    // xterm.js uses ~530ms blink interval; the render loop redraws the cursor row.
+    // xterm.js uses ~530ms blink interval; each toggle asks for a frame, which redraws the cursor row.
     this.cursorBlinkInterval = window.setInterval(() => {
       this.cursorVisible = !this.cursorVisible;
+      this.changed();
     }, 530);
   }
 
@@ -967,6 +1006,7 @@ export class CanvasRenderer {
    * Update theme colors
    */
   public setTheme(theme: ITheme): void {
+    this.changed();
     this.theme = { ...DEFAULT_THEME, ...theme };
     this.background = this.themeBackground();
     this.needsFullRender = true;
@@ -976,6 +1016,7 @@ export class CanvasRenderer {
    * Update font size
    */
   public setFontSize(size: number): void {
+    this.changed();
     this.fontSize = size;
     this.metrics = this.measureFont();
   }
@@ -984,12 +1025,14 @@ export class CanvasRenderer {
    * Update font family
    */
   public setFontFamily(family: string): void {
+    this.changed();
     this.fontFamily = family;
     this.metrics = this.measureFont();
   }
 
   /** Whether the terminal has keyboard focus (the cursor is drawn hollow without it). */
   public setFocused(focused: boolean): void {
+    this.changed();
     this.focused = focused;
   }
 
@@ -997,6 +1040,7 @@ export class CanvasRenderer {
    * Update cursor style
    */
   public setCursorStyle(style: 'block' | 'underline' | 'bar'): void {
+    this.changed();
     this.cursorStyle = style;
   }
 
@@ -1004,6 +1048,7 @@ export class CanvasRenderer {
    * Enable/disable cursor blinking (the default; a program can change it)
    */
   public setCursorBlink(enabled: boolean): void {
+    this.changed();
     this.cursorBlink = enabled;
     this.applyCursorBlink(enabled);
   }
@@ -1094,6 +1139,7 @@ export class CanvasRenderer {
    * its container and the scrollbar sits against the container's edge.
    */
   public setScrollbarGutter(px: number): void {
+    this.changed();
     const gutter = Math.max(SCROLLBAR_GUTTER, Math.floor(px));
     if (gutter === this.scrollbarGutter) return;
     this.scrollbarGutter = gutter;
@@ -1118,7 +1164,9 @@ export class CanvasRenderer {
    * Set the currently hovered hyperlink ID for rendering underlines
    */
   public setHoveredHyperlinkId(hyperlinkId: number): void {
+    if (hyperlinkId === this.hoveredHyperlinkId) return;
     this.hoveredHyperlinkId = hyperlinkId;
+    this.changed();
   }
 
   /** The hovered hyperlink ID (0 for none). */
@@ -1138,7 +1186,9 @@ export class CanvasRenderer {
       endY: number;
     } | null
   ): void {
+    const same = sameLinkRange(this.hoveredLinkRange, range);
     this.hoveredLinkRange = range;
+    if (!same) this.changed();
   }
 
   /**
@@ -1159,6 +1209,7 @@ export class CanvasRenderer {
    * Clear the canvas; the next render() redraws every row.
    */
   public clear(): void {
+    this.changed();
     // clearRect first because fillRect composites rather than replaces,
     // so transparent/translucent backgrounds wouldn't clear previous content.
     this.ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);

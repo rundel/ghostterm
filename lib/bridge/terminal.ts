@@ -172,6 +172,19 @@ export class GhosttyTerminal {
   /** Set by write()/resize(); getViewport() updates the render state first. */
   private pendingUpdate = true;
 
+  /**
+   * Called whenever the terminal changed in a way that may change what is drawn (output, resize,
+   * scrolling, selection, colors, a reset, the end of a render hold, ...), so the owner can
+   * schedule a frame. It runs synchronously, possibly inside a write, so it must not call back.
+   */
+  onChange?: () => void;
+
+  /** Mark the render state stale and tell the owner. */
+  private changed(): void {
+    this.pendingUpdate = true;
+    this.onChange?.();
+  }
+
   /** Bytes the terminal wrote back for the pty (DSR, DA, DECRQM replies, ...). */
   private responses: Uint8Array[] = [];
 
@@ -448,8 +461,14 @@ export class GhosttyTerminal {
       this.holdStarted = performance.now();
     } else {
       this.holdStarted = null;
-      this.pendingUpdate = true;
+      this.changed();
     }
+  }
+
+  /** Milliseconds until a render hold in effect times out, or null without one. */
+  renderHoldRemaining(): number | null {
+    if (!this.isRenderHeld()) return null;
+    return Math.max(0, RENDER_HOLD_TIMEOUT_MS - (performance.now() - (this.holdStarted ?? 0)));
   }
 
   /** Whether a render hold is freezing the screen. */
@@ -614,7 +633,7 @@ export class GhosttyTerminal {
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_BYTES, ptr);
     this.mem.view().setUint32(ptr, Math.min(scrollback, SIZE_MAX), true);
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, ptr);
-    this.pendingUpdate = true;
+    this.changed();
     this.primary = null;
   }
 
@@ -653,7 +672,7 @@ export class GhosttyTerminal {
 
     // Every cell's resolved colors may have changed.
     this.colorsFresh = false;
-    this.pendingUpdate = true;
+    this.changed();
     this.dirty = DirtyState.FULL;
     this.rowDirty?.fill(1);
     this.rowStale?.fill(1);
@@ -670,7 +689,7 @@ export class GhosttyTerminal {
     if (!ptr) throw new Error('Failed to allocate write buffer (out of memory)');
     this.mem.bytes().set(bytes, ptr);
     this.exports.ghostty_terminal_vt_write(this.handle, ptr, bytes.length);
-    this.pendingUpdate = true;
+    this.changed();
     this.primary = null;
     this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
@@ -755,7 +774,7 @@ export class GhosttyTerminal {
       }
     } finally {
       ex.ghostty_wasm_free(ptr, len + 1 + W.size);
-      this.pendingUpdate = true;
+      this.changed();
     }
   }
 
@@ -776,7 +795,7 @@ export class GhosttyTerminal {
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_STYLE, ptr);
     this.mem.view().setUint8(ptr, blink ? 1 : 0);
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_BLINK, ptr);
-    this.pendingUpdate = true;
+    this.changed();
   }
 
   /** Cell size in pixels, reported to programs (in-band resize, mode 2048). */
@@ -802,7 +821,7 @@ export class GhosttyTerminal {
       this.cellPx.width,
       this.cellPx.height
     );
-    this.pendingUpdate = true;
+    this.changed();
     this.primary = null;
     this.atBottom = this.getViewportOffset() === 0;
     this.rowDirty = new Uint8Array(rows).fill(1);
@@ -991,7 +1010,7 @@ export class GhosttyTerminal {
     this.responses = [];
     this.atBottom = true;
     this.colorsFresh = false;
-    this.pendingUpdate = true;
+    this.changed();
     this.dirty = DirtyState.FULL;
     this.rowDirty.fill(1);
     this.rowStale.fill(1);
@@ -1331,7 +1350,7 @@ export class GhosttyTerminal {
     if (tag === ScrollViewport.ROW) view.setUint32(ptr + S.row, value, true);
     else view.setInt32(ptr + S.delta, value, true);
     this.exports.ghostty_terminal_scroll_viewport(this.handle, ptr);
-    this.pendingUpdate = true;
+    this.changed();
   }
 
   private scrollBy(tag: number, amount: number): void {
@@ -1778,7 +1797,7 @@ export class GhosttyTerminal {
    * the next read refreshes the render state.
    */
   invalidate(): void {
-    this.pendingUpdate = true;
+    this.changed();
   }
 
   /** @internal Make the selection snapshot at ptr the terminal's selection. */
@@ -1786,7 +1805,7 @@ export class GhosttyTerminal {
     const ok =
       this.exports.ghostty_terminal_set(this.handle, TerminalOpt.SELECTION, ptr) ===
       GHOSTTY_SUCCESS;
-    this.pendingUpdate = true;
+    this.changed();
     return ok;
   }
 
@@ -1810,7 +1829,7 @@ export class GhosttyTerminal {
 
   clearSelection(): void {
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.SELECTION, 0);
-    this.pendingUpdate = true;
+    this.changed();
   }
 
   /** Select all selectable content, scrollback included. */
