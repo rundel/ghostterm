@@ -11,6 +11,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - `onLineFeed` and `onWriteParsed` events.
 - `unicode` follows xterm.js's `IUnicodeHandling` and reports libghostty's Unicode version (18) instead of a fixed 15.1; `IUnicodeVersionProvider` is now xterm.js's provider type.
 - `parser.registerOscHandler()` sees and can consume any OSC sequence; the CSI, DCS and ESC registrations are accepted but not called.
+- SearchAddon supports the `regex`, `wholeWord` and `caseSensitive` options.
 - `attachCustomKeyEventHandler` and `attachCustomWheelEventHandler` follow xterm.js: returning false stops the terminal handling the event. The key handler also runs for keyup, and the wheel handler also sees wheel events reported to a program.
 - `onKey` reports the data sent for the key (`"\r"` for Enter) and fires only when something is sent.
 - `select()`, `selectLines()`, `getSelectionPosition()` and `scrollToLine()` use buffer rows including the scrollback, and `onScroll` reports the top line, as in xterm.js. The end column of `getSelectionPosition()` is exclusive.
@@ -35,7 +36,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - Programs that ask for the `default` pointer (OSC 22) get the arrow instead of the text cursor.
 - FitAddon no longer ignores `fit()` shortly after a resize or after the terminal was resized another way.
 - SerializeAddon keeps the normal screen and its scrollback while a full-screen program runs (honoring `scrollback`), and has new `excludeAltBuffer` and `range` options.
-- SearchAddon counts `resultIndex` from the top as in xterm.js, counts every match, keeps its place during incremental search, and warns about the unsupported `regex`, `wholeWord` and `caseSensitive` options.
+- SearchAddon counts `resultIndex` from the top as in xterm.js, counts every match and keeps its place during incremental search.
 - `init()` loads the module once even when called concurrently, and warns when a later call asks for a different `wasmPath`.
 - Without focus the cursor is drawn as a hollow block, as in Ghostty and xterm.js.
 - Programs asking for the terminfo name (XTGETTCAP `TN`) are told `xterm-ghostty`, as Ghostty answers.

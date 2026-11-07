@@ -10,7 +10,8 @@
  * take precedence over regex-detected URLs.
  */
 
-import type { IBufferCellPosition, ILink, ILinkProvider } from '../interfaces';
+import type { ILink, ILinkProvider } from '../interfaces';
+import { type ITextLine, lineText } from '../line-text';
 import { openLink } from '../link-detector';
 
 export class UrlRegexProvider implements ILinkProvider {
@@ -38,7 +39,7 @@ export class UrlRegexProvider implements ILinkProvider {
     }
 
     // The logical line: rows joined across soft wraps.
-    const rows: Array<{ y: number; line: IBufferLineForUrlProvider }> = [{ y, line: first }];
+    const rows: Array<{ y: number; line: ITextLine }> = [{ y, line: first }];
     let top = first;
     for (let i = 0; i < UrlRegexProvider.MAX_WRAPPED_ROWS && top.isWrapped; i++) {
       const prev = buffer.getLine(rows[0].y - 1);
@@ -53,23 +54,7 @@ export class UrlRegexProvider implements ILinkProvider {
     }
 
     // The text, and for each UTF-16 unit the first and last cell it covers.
-    let text = '';
-    const startCell: IBufferCellPosition[] = [];
-    const endCell: IBufferCellPosition[] = [];
-    for (const { y: row, line } of rows) {
-      for (let x = 0; x < line.length; x++) {
-        const cell = line.getCell(x);
-        // The second half of a wide character has no text of its own.
-        if (cell && cell.getWidth() === 0) continue;
-        const chars = cell?.getChars() || ' ';
-        const width = Math.max(1, cell?.getWidth() ?? 1);
-        for (let i = 0; i < chars.length; i++) {
-          startCell.push({ x, y: row });
-          endCell.push({ x: Math.min(x + width - 1, line.length - 1), y: row });
-        }
-        text += chars;
-      }
-    }
+    const { text, startCell, endCell } = lineText(rows);
 
     const links: ILink[] = [];
     const regex = new RegExp(UrlRegexProvider.URL_REGEX);
@@ -121,21 +106,7 @@ export class UrlRegexProvider implements ILinkProvider {
 export interface ITerminalForUrlProvider {
   buffer: {
     active: {
-      getLine(y: number): IBufferLineForUrlProvider | undefined;
+      getLine(y: number): ITextLine | undefined;
     };
   };
-}
-
-/**
- * Minimal buffer line interface for URL detection
- */
-interface IBufferLineForUrlProvider {
-  length: number;
-  isWrapped: boolean;
-  getCell(x: number):
-    | {
-        getChars(): string;
-        getWidth(): number;
-      }
-    | undefined;
 }

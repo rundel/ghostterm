@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import type { GhosttyTerminal } from '../ghostty';
 import { DEFAULT_THEME } from '../renderer';
 import type { Terminal } from '../terminal';
@@ -150,19 +150,6 @@ describe('SearchAddon', () => {
     expect(term.getSelection()).toBe('item 1');
   });
 
-  test('warns once about the unsupported regex, wholeWord and caseSensitive options', () => {
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      search.findNext('needle', { regex: true, caseSensitive: true });
-      search.findNext('needle', { wholeWord: true });
-      search.findNext('needle');
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0][0])).toContain('regex, caseSensitive');
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   test('decorations highlight every match on screen, the active one differently', () => {
     search.findNext('needle', {
       decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
@@ -200,5 +187,135 @@ describe('SearchAddon active match', () => {
     const matchText = drawnText(term, calls).filter((t) => t.row === 2 && t.col >= 7);
     expect(matchText.map((t) => t.text).join('')).toBe('Needle');
     for (const t of matchText) expect(t.fillStyle).toBe('rgb(212, 212, 212)');
+  });
+});
+
+describe('SearchAddon options', () => {
+  /** Every result event while running `fn`. */
+  function results(fn: () => void): { resultIndex: number; resultCount: number }[] {
+    const seen: { resultIndex: number; resultCount: number }[] = [];
+    const sub = search.onDidChangeResults((r) => seen.push(r));
+    fn();
+    sub.dispose();
+    return seen;
+  }
+
+  test('caseSensitive matches letters in their case only', () => {
+    expect(search.findNext('needle', { caseSensitive: true })).toBe(false);
+    expect(
+      results(() => expect(search.findNext('Needle', { caseSensitive: true })).toBe(true))
+    ).toEqual([{ resultIndex: 9, resultCount: 10 }]);
+    expect(term.getSelection()).toBe('Needle');
+  });
+
+  test('without caseSensitive the text search ignores case beyond ASCII', () => {
+    term.write('\r\nÉcole école ÉCOLE');
+    const [r] = results(() => search.findNext('école', { wholeWord: true }));
+    expect(r).toEqual({ resultIndex: 2, resultCount: 3 });
+    expect(term.getSelection()).toBe('ÉCOLE');
+  });
+
+  test('regex matches a regular expression', () => {
+    const [r] = results(() => search.findNext('item [3-5] N', { regex: true }));
+    expect(r).toEqual({ resultIndex: 2, resultCount: 3 });
+    expect(term.getSelection()).toBe('item 5 N');
+    search.findNext('item [3-5] N', { regex: true });
+    expect(term.getSelection()).toBe('item 4 N');
+  });
+
+  test('an invalid regex finds nothing instead of throwing', () => {
+    const [r] = results(() => expect(search.findNext('(', { regex: true })).toBe(false));
+    expect(r).toEqual({ resultIndex: -1, resultCount: 0 });
+  });
+
+  test('a regex skips empty matches', () => {
+    const [r] = results(() => search.findNext('x*', { regex: true }));
+    expect(r).toEqual({ resultIndex: -1, resultCount: 0 });
+  });
+
+  test('wholeWord needs a non-word character or the line edge on both sides', () => {
+    term.write('\r\ncat concat cat-dog cats');
+    const [r] = results(() => search.findNext('cat', { wholeWord: true }));
+    expect(r.resultCount).toBe(2);
+    expect(term.getSelectionPosition()?.start.x).toBe(11);
+    search.findNext('cat', { wholeWord: true });
+    expect(term.getSelectionPosition()?.start.x).toBe(0);
+  });
+
+  test('matches map to the cells of wide characters', () => {
+    term.write('\r\n日本 needle');
+    search.findNext('need', { caseSensitive: true });
+    expect(term.getSelection()).toBe('need');
+    const pos = term.getSelectionPosition()!;
+    // Each of 日 and 本 takes two cells; the end column is exclusive.
+    expect([pos.start.x, pos.end.x]).toEqual([5, 9]);
+  });
+
+  test('a match can span soft-wrapped rows', () => {
+    term.write(`\r\n${'x'.repeat(26)}wrapped`);
+    search.findNext('wrapped', { caseSensitive: true });
+    expect(term.getSelection()).toBe('wrapped');
+    const pos = term.getSelectionPosition()!;
+    expect(pos.end.y).toBe(pos.start.y + 1);
+  });
+
+  test('findNext and findPrevious step through the matches and wrap around', () => {
+    const indexes = results(() => {
+      for (let i = 0; i < 11; i++) search.findNext('Needle', { caseSensitive: true });
+      search.findPrevious('Needle', { caseSensitive: true });
+    }).map((r) => r.resultIndex);
+    expect(indexes).toEqual([9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 9, 0]);
+    const [r] = results(() => {
+      search.clearDecorations();
+      search.findPrevious('Needle', { caseSensitive: true });
+    }).slice(-1);
+    expect(r.resultIndex).toBe(0);
+    expect(selectedRow()).toBe(0);
+  });
+
+  test('scrolls to a match in scrollback', () => {
+    search.findPrevious('item 0', { caseSensitive: true });
+    expect(term.getViewportY()).toBe(term.buffer.active.baseY);
+    expect(selectedRow()).toBe(0);
+  });
+
+  test('incremental search keeps or stays near the selected match', () => {
+    const o = { caseSensitive: true, incremental: true };
+    search.findNext('item 5', { caseSensitive: true });
+    const row5 = selectedRow();
+    search.findNext('item 5', o);
+    expect(selectedRow()).toBe(row5);
+    search.findNext('item 5 N', o);
+    expect(selectedRow()).toBe(row5);
+    search.findNext('item 4', o);
+    expect(selectedRow()).toBe(row5 - 1);
+    search.findPrevious('item 6', o);
+    expect(selectedRow()).toBe(row5 + 1);
+  });
+
+  test('a later search finds output written since', () => {
+    search.findNext('Needle', { caseSensitive: true });
+    term.write('\r\nitem 10 Needle');
+    const [r] = results(() => search.findPrevious('Needle', { caseSensitive: true }));
+    expect(r.resultCount).toBe(11);
+  });
+
+  test('decorations highlight the matches on screen, the selected one differently', () => {
+    search.findNext('Needle', {
+      caseSensitive: true,
+      decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
+    });
+    const needle = [7, 8, 9, 10, 11, 12];
+    expect(paintedCells('#444400')).toEqual({ 0: needle, 1: needle });
+    expect(paintedCells('#ff8800')).toEqual({ 2: needle });
+    search.clearDecorations();
+    expect(paintedRects(term, '#444400')).toEqual([]);
+  });
+
+  test('switching back to a plain search uses libghostty again', () => {
+    search.findNext('Needle', { regex: true });
+    const [r] = results(() => search.findNext('needle'));
+    expect(r).toEqual({ resultIndex: 9, resultCount: 10 });
+    expect(term.getSelection()).toBe('Needle');
   });
 });
