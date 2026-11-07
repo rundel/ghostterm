@@ -820,27 +820,23 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Input data into terminal (as if typed by user)
+   * Send data to the program through onData, as xterm.js does.
    *
-   * @param data - Data to input
-   * @param wasUserInput - If true, triggers onData event (default: false for compat with some apps)
+   * @param data - Data to send
+   * @param wasUserInput - Treat it as the user's input, which scrolls to the bottom (default: true)
    */
-  input(data: string, wasUserInput: boolean = false): void {
+  input(data: string, wasUserInput: boolean = true): void {
     this.assertOpen();
 
-    // Don't input if stdin is disabled
     if (this.options.disableStdin) {
       return;
     }
 
     if (wasUserInput) {
+      if (this.viewportY !== 0) this.scrollToBottom();
       this.awaitingEcho = true;
-      // Trigger onData event as if user typed it
-      this.dataEmitter.fire(data);
-    } else {
-      // Just write to terminal without triggering onData
-      this.write(data);
     }
+    this.dataEmitter.fire(data);
   }
 
   /**

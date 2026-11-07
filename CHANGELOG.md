@@ -4,6 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- `input(data)` sends the data to the program (`onData`) by default, as in xterm.js; with `wasUserInput` false it is still sent but doesn't scroll to the bottom. It no longer writes to the screen.
 - Text keeps grayscale antialiasing without `allowTransparency`; 0.0.2's opaque canvas gave it colored subpixel edges in Chromium on Linux.
 
 ## 0.0.2 - 2026-11-07

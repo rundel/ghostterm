@@ -59,17 +59,27 @@ describe('paste()', () => {
 });
 
 describe('input()', () => {
-  test('as user input it is sent to the program, not written', () => {
-    term.input('user input', true);
+  test('is sent to the program by default, not written', () => {
+    term.input('user input');
     expect(sent).toEqual(['user input']);
     expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('');
   });
 
-  test('otherwise it is written to the screen without being sent', () => {
-    term.input('test data');
-    expect(sent).toEqual([]);
-    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('test data');
-    expect(term.buffer.active.cursorX).toBe(9);
+  test('as user input it scrolls to the bottom', () => {
+    term.write('line\r\n'.repeat(60));
+    term.scrollLines(-5);
+    term.input('x');
+    expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+  });
+
+  test('when not user input it is still sent but leaves the view where it is', () => {
+    term.write('line\r\n'.repeat(60));
+    term.scrollLines(-5);
+    const viewportY = term.buffer.active.viewportY;
+    term.input('y', false);
+    expect(sent).toEqual(['y']);
+    expect(term.buffer.active.viewportY).toBe(viewportY);
+    expect(viewportY).toBeLessThan(term.buffer.active.baseY);
   });
 });
 
@@ -104,8 +114,8 @@ describe('disableStdin', () => {
 
   test('programmatic input() is dropped too', () => {
     term.options.disableStdin = true;
-    term.input('shown');
-    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('');
+    term.input('dropped', false);
+    expect(sent).toEqual([]);
   });
 });
 
