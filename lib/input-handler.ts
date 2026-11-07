@@ -209,6 +209,8 @@ export interface InputHandlerOptions {
   onKey?: (keyEvent: IKeyEvent) => void;
   /** Runs first for every keydown and keyup; returning false stops processing. */
   customKeyEventHandler?: (event: KeyboardEvent) => boolean;
+  /** Runs first for every wheel event reported to the program; returning false stops it. */
+  customWheelEventHandler?: (event: WheelEvent) => boolean;
   /** Copy shortcut (Cmd+C, Ctrl+Shift+C): returns true if there was a selection to copy. */
   onCopy?: () => boolean;
   mouseConfig?: MouseTrackingConfig;
@@ -222,6 +224,7 @@ export class InputHandler {
   private onDataCallback: (data: string) => void;
   private onKeyCallback?: (keyEvent: IKeyEvent) => void;
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
+  private customWheelEventHandler?: (event: WheelEvent) => boolean;
   private getTerminal: () => GhosttyTerminal | undefined;
   /** Called after Shift+arrow keys moved the selection. */
   onSelectionAdjusted?: () => void;
@@ -255,6 +258,7 @@ export class InputHandler {
     this.onDataCallback = options.onData;
     this.onKeyCallback = options.onKey;
     this.customKeyEventHandler = options.customKeyEventHandler;
+    this.customWheelEventHandler = options.customWheelEventHandler;
     this.onCopyCallback = options.onCopy;
     this.mouseConfig = options.mouseConfig;
     this.getTerminal = options.getTerminal;
@@ -267,6 +271,11 @@ export class InputHandler {
    */
   setCustomKeyEventHandler(handler: ((event: KeyboardEvent) => boolean) | undefined): void {
     this.customKeyEventHandler = handler;
+  }
+
+  /** Set the custom wheel event handler (for runtime updates). */
+  setCustomWheelEventHandler(handler: ((event: WheelEvent) => boolean) | undefined): void {
+    this.customWheelEventHandler = handler;
   }
 
   private listen<E extends Event>(
@@ -844,6 +853,9 @@ export class InputHandler {
    */
   private handleWheel(event: WheelEvent): void {
     if (this.isDisposed || !this.isReportingMouse(event)) return;
+    // As in xterm.js, a custom handler returning false stops all processing
+    // (and the page may scroll).
+    if (this.customWheelEventHandler && this.customWheelEventHandler(event) === false) return;
     const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
     const delta = horizontal ? event.deltaX : event.deltaY;
     // The program owns the wheel while it tracks the mouse; never also scroll

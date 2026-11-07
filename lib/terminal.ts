@@ -522,6 +522,7 @@ export class Terminal implements IAddonTerminal {
         },
         onKey: (keyEvent: IKeyEvent) => this.keyEmitter.fire(keyEvent),
         customKeyEventHandler: this.customKeyEventHandler,
+        customWheelEventHandler: this.customWheelEventHandler,
         // Copy shortcuts: returns true if there was a selection to copy
         onCopy: () => this.copySelection(),
         mouseConfig,
@@ -1041,15 +1042,16 @@ export class Terminal implements IAddonTerminal {
   }
 
   /**
-   * Attach a custom wheel event handler, called before the terminal scrolls.
-   * As in xterm.js, return false to stop the terminal handling the event,
-   * true to let it continue. Not called for wheel events reported to a
-   * program that tracks the mouse.
+   * Attach a custom wheel event handler, called before the terminal handles
+   * a wheel event (scrolling, alternate-scroll arrow keys, or a report to a
+   * program tracking the mouse). As in xterm.js, return false to stop the
+   * terminal handling the event, true to let it continue.
    */
   public attachCustomWheelEventHandler(
     customWheelEventHandler?: (event: WheelEvent) => boolean
   ): void {
     this.customWheelEventHandler = customWheelEventHandler;
+    this.inputHandler?.setCustomWheelEventHandler(customWheelEventHandler);
   }
 
   // ==========================================================================
@@ -1627,7 +1629,8 @@ export class Terminal implements IAddonTerminal {
   private handleWheel = (e: WheelEvent): void => {
     // A program tracking the mouse gets the wheel as mouse reports. This
     // listener runs in the capture phase, so it must let the event through to
-    // the InputHandler, which reports it (and prevents the page scrolling).
+    // the InputHandler, which consults the custom handler, reports it and
+    // prevents the page scrolling.
     if (this.inputHandler?.isReportingMouse(e)) {
       return;
     }

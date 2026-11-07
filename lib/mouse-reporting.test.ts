@@ -136,6 +136,24 @@ describe('Mouse reporting', () => {
     expect(term.viewportY).toBe(0);
   });
 
+  test('a custom wheel handler runs first and false stops the report', () => {
+    term.write('\x1b[?1000h\x1b[?1006h');
+    const seen: WheelEvent[] = [];
+    term.attachCustomWheelEventHandler((e) => {
+      seen.push(e);
+      return false;
+    });
+    const stopped = mouse('wheel', 1, 1, { deltaY: -100 });
+    expect(seen).toEqual([stopped]);
+    expect(sent).toEqual([]);
+    expect(stopped.defaultPrevented).toBe(false);
+
+    term.attachCustomWheelEventHandler(() => true);
+    mouse('wheel', 1, 1, { deltaY: -100 });
+    expect(sent).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+  });
+
   test('Shift+drag selects text instead of reporting', () => {
     term.write('hello world\r\n\x1b[?1000h\x1b[?1006h');
     mouse('mousedown', 0, 0, { shiftKey: true });
