@@ -433,6 +433,10 @@ export class SelectionManager {
       }
       if (e.button !== 0) return;
 
+      // A program tracking the mouse gets plain clicks and drags (reported by
+      // the InputHandler); Shift+drag still selects, as in Ghostty.
+      if (this.wasmTerm.hasMouseTracking() && !e.shiftKey) return;
+
       // CRITICAL: Focus the terminal so it can receive keyboard input
       // The canvas doesn't have tabindex, but the parent container does
       if (canvas.parentElement) {

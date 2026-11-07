@@ -454,6 +454,10 @@ export class Ghostty {
     return new KeyEncoder(this.exports, this.mem);
   }
 
+  createMouseEncoder(): MouseEncoder {
+    return new MouseEncoder(this.exports, this.mem);
+  }
+
   createTerminal(
     cols: number = 80,
     rows: number = 24,
@@ -666,6 +670,159 @@ export class KeyEncoder {
       this.exports.ghostty_key_encoder_free(this.encoder);
       this.encoder = 0;
     }
+  }
+}
+
+// ============================================================================
+// Mouse encoder
+// ============================================================================
+
+/** Mouse button (GhosttyMouseButton). Wheel ticks are buttons 4-7. */
+export enum MouseButton {
+  LEFT = 1,
+  RIGHT = 2,
+  MIDDLE = 3,
+  WHEEL_UP = 4,
+  WHEEL_DOWN = 5,
+  WHEEL_LEFT = 6,
+  WHEEL_RIGHT = 7,
+}
+
+/** Mouse event action (GhosttyMouseAction). */
+export enum MouseAction {
+  PRESS = 0,
+  RELEASE = 1,
+  MOTION = 2,
+}
+
+/** Surface geometry for mouse encoding, in CSS pixels. */
+export interface MouseGeometry {
+  screenWidth: number;
+  screenHeight: number;
+  cellWidth: number;
+  cellHeight: number;
+}
+
+const MouseEncoderOpt = {
+  SIZE: 3,
+  ANY_BUTTON_PRESSED: 4,
+  TRACK_LAST_CELL: 5,
+} as const;
+
+/**
+ * Mouse Encoder - converts pointer events into mouse reports for programs
+ * that turned on mouse tracking, in whichever mode and format (X10, UTF-8,
+ * SGR, URxvt, SGR-Pixels) they asked for.
+ */
+export class MouseEncoder {
+  private exports: GhosttyWasmExports;
+  private mem: Memory;
+  private encoder = 0;
+  private event = 0;
+  private scratch = 0;
+
+  constructor(exports: GhosttyWasmExports, mem: Memory) {
+    this.exports = exports;
+    this.mem = mem;
+    const ex = exports;
+    const slot = ex.ghostty_wasm_alloc_opaque();
+    try {
+      if (ex.ghostty_mouse_encoder_new(0, slot) !== GHOSTTY_SUCCESS) {
+        throw new Error('libghostty-vt: failed to create mouse encoder');
+      }
+      this.encoder = ex.ghostty_wasm_take_opaque(slot);
+      if (ex.ghostty_mouse_event_new(0, slot) !== GHOSTTY_SUCCESS) {
+        throw new Error('libghostty-vt: failed to create mouse event');
+      }
+      this.event = ex.ghostty_wasm_take_opaque(slot);
+    } finally {
+      ex.ghostty_wasm_free_opaque(slot);
+    }
+    this.scratch = ex.ghostty_wasm_alloc(256);
+    // Report motion only when the pointer moves to another cell.
+    this.mem.view().setUint8(this.scratch, 1);
+    ex.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.TRACK_LAST_CELL, this.scratch);
+  }
+
+  /** Copy the terminal's mouse tracking mode and report format. */
+  syncFromTerminal(terminal: GhosttyTerminal): void {
+    this.exports.ghostty_mouse_encoder_set_from_terminal(this.encoder, terminal.handle);
+  }
+
+  /** Surface size and cell size; the encoder turns positions into cells. */
+  setGeometry(g: MouseGeometry): void {
+    const p = this.scratch;
+    const view = this.mem.view();
+    const u32 = (offset: number, v: number) => view.setUint32(p + offset, v, true);
+    for (let i = 0; i < 36; i += 4) u32(i, 0);
+    u32(0, 36); // size
+    u32(4, Math.max(1, Math.round(g.screenWidth)));
+    u32(8, Math.max(1, Math.round(g.screenHeight)));
+    u32(12, Math.max(1, Math.round(g.cellWidth)));
+    u32(16, Math.max(1, Math.round(g.cellHeight)));
+    this.exports.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.SIZE, p);
+  }
+
+  /** Whether any button is held, which decides motion reporting in button mode. */
+  setAnyButtonPressed(pressed: boolean): void {
+    this.mem.view().setUint8(this.scratch, pressed ? 1 : 0);
+    this.exports.ghostty_mouse_encoder_set(
+      this.encoder,
+      MouseEncoderOpt.ANY_BUTTON_PRESSED,
+      this.scratch
+    );
+  }
+
+  /** Forget the last reported cell, so the next motion is reported. */
+  reset(): void {
+    this.exports.ghostty_mouse_encoder_reset(this.encoder);
+  }
+
+  /**
+   * Encode one mouse event at surface position (x, y). Returns '' when the
+   * current mode reports nothing for it.
+   */
+  encode(
+    action: MouseAction,
+    button: MouseButton | null,
+    mods: number,
+    x: number,
+    y: number
+  ): string {
+    const ex = this.exports;
+    const ev = this.event;
+    ex.ghostty_mouse_event_set_action(ev, action);
+    if (button === null) ex.ghostty_mouse_event_clear_button(ev);
+    else ex.ghostty_mouse_event_set_button(ev, button);
+    ex.ghostty_mouse_event_set_mods(ev, mods);
+    const pos = this.scratch + 64;
+    const view = this.mem.view();
+    view.setFloat32(pos, x, true);
+    view.setFloat32(pos + 4, y, true);
+    ex.ghostty_mouse_event_set_position(ev, pos);
+
+    const buf = this.scratch + 96;
+    const written = this.scratch + 88;
+    if (ex.ghostty_mouse_encoder_encode(this.encoder, ev, buf, 128, written) !== GHOSTTY_SUCCESS) {
+      return '';
+    }
+    const len = this.mem.view().getUint32(written, true);
+    const bytes = this.mem.bytes().slice(buf, buf + len);
+    // The UTF-8 format is valid UTF-8. The X10/normal format puts raw bytes
+    // up to 255 in the report, which go out one character per byte.
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      return String.fromCharCode(...bytes);
+    }
+  }
+
+  dispose(): void {
+    const ex = this.exports;
+    if (this.event) ex.ghostty_mouse_event_free(this.event);
+    if (this.encoder) ex.ghostty_mouse_encoder_free(this.encoder);
+    if (this.scratch) ex.ghostty_wasm_free(this.scratch, 256);
+    this.event = this.encoder = this.scratch = 0;
   }
 }
 

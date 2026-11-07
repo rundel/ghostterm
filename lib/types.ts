@@ -398,6 +398,31 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
   /** Takes a pointer to a GhosttyString { ptr, len }; the event borrows the bytes. */
   ghostty_key_event_set_utf8(event: number, stringPtr: number): number;
 
+  // Mouse encoder and events
+  ghostty_mouse_encoder_new(allocator: number, slot: number): number;
+  ghostty_mouse_encoder_free(encoder: number): void;
+  ghostty_mouse_encoder_set(encoder: number, option: number, value: number): number;
+  ghostty_mouse_encoder_set_from_terminal(encoder: number, terminal: TerminalHandle): number;
+  ghostty_mouse_encoder_reset(encoder: number): number;
+  ghostty_mouse_encoder_encode(
+    encoder: number,
+    event: number,
+    bufPtr: number,
+    bufLen: number,
+    writtenPtr: number
+  ): number;
+  ghostty_mouse_event_new(allocator: number, slot: number): number;
+  ghostty_mouse_event_free(event: number): void;
+  ghostty_mouse_event_set_action(event: number, action: number): number;
+  ghostty_mouse_event_set_button(event: number, button: number): number;
+  ghostty_mouse_event_clear_button(event: number): number;
+  ghostty_mouse_event_set_mods(event: number, mods: number): number;
+  /** Takes a pointer to a GhosttyMousePosition { f32 x, f32 y }. */
+  ghostty_mouse_event_set_position(event: number, positionPtr: number): number;
+
+  // Focus and paste
+  ghostty_focus_encode(event: number, bufPtr: number, bufLen: number, writtenPtr: number): number;
+
   // Terminal
   ghostty_terminal_new(allocator: number, slot: number, cols: number, rows: number): number;
   ghostty_terminal_free(terminal: TerminalHandle): void;

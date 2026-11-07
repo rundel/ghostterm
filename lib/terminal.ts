@@ -37,6 +37,7 @@ import { UrlRegexProvider } from './providers/url-regex-provider';
 import { CanvasRenderer } from './renderer';
 import { SelectionManager } from './selection-manager';
 import type { ILink, ILinkProvider } from './types';
+import { Key } from './types';
 
 // ============================================================================
 // Terminal Class
@@ -434,8 +435,12 @@ export class Terminal implements ITerminalCore {
       const renderer = this.renderer;
       const wasmTerm = this.wasmTerm;
       const mouseConfig: MouseTrackingConfig = {
-        hasMouseTracking: () => wasmTerm?.hasMouseTracking() ?? false,
-        hasSgrMouseMode: () => wasmTerm?.getMode(1006, false) ?? true, // SGR extended mode
+        // this.wasmTerm, not a captured reference: reset() replaces it.
+        hasMouseTracking: () => this.wasmTerm?.hasMouseTracking() ?? false,
+        getScreenSize: () => ({
+          width: this.cols * renderer.charWidth,
+          height: this.rows * renderer.charHeight,
+        }),
         getCellDimensions: () => ({
           width: renderer.charWidth,
           height: renderer.charHeight,
@@ -1270,7 +1275,7 @@ export class Terminal implements ITerminalCore {
 
     // Remove event listeners
     if (this.element) {
-      this.element.removeEventListener('wheel', this.handleWheel);
+      this.element.removeEventListener('wheel', this.handleWheel, { capture: true });
       this.element.removeEventListener('mousedown', this.handleMouseDown, { capture: true });
       this.element.removeEventListener('mousemove', this.handleMouseMove);
       this.element.removeEventListener('mouseleave', this.handleMouseLeave);
@@ -1578,6 +1583,13 @@ export class Terminal implements ITerminalCore {
    * Handle wheel events for scrolling (Phase 2)
    */
   private handleWheel = (e: WheelEvent): void => {
+    // A program tracking the mouse gets the wheel as mouse reports. This
+    // listener runs in the capture phase, so it must let the event through to
+    // the InputHandler, which reports it (and prevents the page scrolling).
+    if (this.inputHandler?.isReportingMouse(e)) {
+      return;
+    }
+
     // Always prevent default browser scrolling
     e.preventDefault();
     e.stopPropagation();
@@ -1597,12 +1609,10 @@ export class Terminal implements ITerminalCore {
       const direction = e.deltaY > 0 ? 'down' : 'up';
       const count = Math.min(Math.abs(Math.round(e.deltaY / 33)), 5); // Cap at 5
 
+      // Encoded by libghostty, so application cursor mode (ESC O A) is honored.
+      const key = direction === 'up' ? Key.UP : Key.DOWN;
       for (let i = 0; i < count; i++) {
-        if (direction === 'up') {
-          this.dataEmitter.fire('\x1B[A'); // Up arrow
-        } else {
-          this.dataEmitter.fire('\x1B[B'); // Down arrow
-        }
+        this.inputHandler?.sendKey(key);
       }
     } else {
       // Normal screen: scroll viewport through history with smooth scrolling
