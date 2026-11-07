@@ -92,7 +92,7 @@ test('a transparent background stays transparent with allowTransparency', async 
 });
 
 test('without allowTransparency a transparent background is drawn opaque', async ({ page }) => {
-  await openFixture(page, { theme: 'transparent' });
+  await openFixture(page, { theme: 'transparent', allowTransparency: false });
   const g = await geometry(page);
   await write(page, 'output\r\n');
   // Right of the cursor, below the text.

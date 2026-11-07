@@ -1,8 +1,11 @@
 // The page the Playwright specs drive: one Terminal with fixed options and no program behind it.
 // Everything the terminal sends is recorded in window.sent. Query parameters override the
 // numeric options (cols, rows, fontSize, scrollback, smoothScrollDuration) and fontFamily;
-// `theme=light|transparent` picks other colors, `allowTransparency` sets that option, and `fit`
-// puts the terminal in a flex layout sized by CSS with a FitAddon observing it (window.fit).
+// `theme=light|transparent` picks other colors, `allowTransparency=false` turns that option off,
+// and `fit` puts the terminal in a flex layout sized by CSS with a FitAddon observing it
+// (window.fit). allowTransparency is on by default: it keeps the canvas context's alpha, so
+// Chromium on Linux draws text with grayscale antialiasing instead of LCD (subpixel) color
+// fringes, which would otherwise tint the pixels the specs count.
 
 import { FitAddon } from '../lib/addons/fit';
 import { Terminal, init } from '../lib/index';
@@ -43,7 +46,7 @@ window.ready = (async () => {
     scrollback: num('scrollback', 1000),
     smoothScrollDuration: num('smoothScrollDuration', 100),
     cursorBlink: false,
-    allowTransparency: params.has('allowTransparency'),
+    allowTransparency: params.get('allowTransparency') !== 'false',
     theme: themes[params.get('theme') as keyof typeof themes] ?? THEME,
   });
   term.onData((data) => window.sent.push(data));
