@@ -36,6 +36,8 @@ import type {
   IDisposable,
   IEvent,
   IKeyEvent,
+  ILink,
+  ILinkProvider,
   ITerminalAddon,
   ITerminalCore,
   ITerminalOptions,
@@ -46,7 +48,6 @@ import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import { CanvasRenderer, DEFAULT_THEME, parseCssColor } from './renderer';
 import { SelectionManager } from './selection-manager';
-import type { ILink, ILinkProvider } from './types';
 import { Key } from './types';
 
 // ============================================================================

@@ -8,7 +8,7 @@
  * same object, so hover state survives repeated lookups.
  */
 
-import type { IBufferRange, ILink, ILinkProvider } from './types';
+import type { IBufferRange, ILink, ILinkProvider } from './interfaces';
 
 /** URI schemes a link may open: anything else (javascript:, file:, ...) is ignored. */
 const OPENABLE_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'ftp:']);

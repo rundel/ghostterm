@@ -19,6 +19,9 @@ export type {
   IDisposable,
   IEvent,
   IBufferRange,
+  IBufferCellPosition,
+  ILink,
+  ILinkProvider,
   IKeyEvent,
   IUnicodeVersionProvider,
   IBufferNamespace,
@@ -85,4 +88,3 @@ export type { ITerminalDimensions } from './addons/fit';
 export { OSC8LinkProvider } from './providers/osc8-link-provider';
 export { UrlRegexProvider } from './providers/url-regex-provider';
 export { LinkDetector } from './link-detector';
-export type { ILink, ILinkProvider, IBufferCellPosition } from './types';

@@ -10,8 +10,8 @@
  * take precedence over regex-detected URLs.
  */
 
+import type { IBufferCellPosition, ILink, ILinkProvider } from '../interfaces';
 import { openLink } from '../link-detector';
-import type { IBufferCellPosition, ILink, ILinkProvider } from '../types';
 
 export class UrlRegexProvider implements ILinkProvider {
   /** A scheme followed by characters that may appear in a URL. */

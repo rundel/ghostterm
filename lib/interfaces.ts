@@ -85,11 +85,57 @@ export interface ITerminalCore {
 }
 
 /**
- * Buffer range for selection coordinates
+ * A cell position in the buffer: x is the 0-based column, y the 0-based absolute buffer row
+ * (0 = oldest scrollback line).
+ */
+export interface IBufferCellPosition {
+  x: number;
+  y: number;
+}
+
+/**
+ * A range of cells in the buffer, used for selections and links. Both ends are inclusive and may
+ * be on different rows.
  */
 export interface IBufferRange {
-  start: { x: number; y: number };
-  end: { x: number; y: number };
+  start: IBufferCellPosition;
+  end: IBufferCellPosition;
+}
+
+/**
+ * Represents a detected link in the terminal
+ */
+export interface ILink {
+  /** The URL or text of the link */
+  text: string;
+
+  /** The range of the link in the buffer (may span multiple lines) */
+  range: IBufferRange;
+
+  /** Called when the link is activated (clicked with modifier) */
+  activate(event: MouseEvent): void;
+
+  /** Optional: called when mouse enters/leaves the link */
+  hover?(isHovered: boolean): void;
+
+  /** Optional: called to clean up resources */
+  dispose?(): void;
+}
+
+/**
+ * Provides link detection for a specific type of link
+ * Examples: OSC 8 hyperlinks, URL regex detection
+ */
+export interface ILinkProvider {
+  /**
+   * Provide links for a given row
+   * @param y Absolute row in buffer (0-based)
+   * @param callback Called with detected links (or undefined if none)
+   */
+  provideLinks(y: number, callback: (links: ILink[] | undefined) => void): void;
+
+  /** Optional: called when terminal is disposed */
+  dispose?(): void;
 }
 
 /**

@@ -6,10 +6,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import type { ILink } from './interfaces';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import type { Terminal } from './terminal';
 import { createIsolatedTerminal } from './test-helpers';
-import type { ILink } from './types';
 
 let container: HTMLElement;
 let term: Terminal;

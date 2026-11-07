@@ -8,8 +8,8 @@
  * is reported as one range spanning those rows.
  */
 
+import type { ILink, ILinkProvider } from '../interfaces';
 import { openLink } from '../link-detector';
-import type { ILink, ILinkProvider } from '../types';
 
 export class OSC8LinkProvider implements ILinkProvider {
   constructor(private terminal: ITerminalForOSC8Provider) {}
