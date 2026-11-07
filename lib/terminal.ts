@@ -853,14 +853,7 @@ export class Terminal implements ITerminalCore {
    */
   clear(): void {
     this.assertOpen();
-    const wasmTerm = this.wasmTerm!;
-    const { x, y } = wasmTerm.getCursor();
-    // Scroll the cursor's line up to the top (SU), erase below it, put the
-    // cursor back on it and drop the history (ED 3).
-    let seq = y > 0 ? `\x1b[${y}S` : '';
-    if (this.rows > 1) seq += '\x1b[2;1H\x1b[J';
-    seq += `\x1b[1;${x + 1}H\x1b[3J`;
-    wasmTerm.write(seq);
+    this.wasmTerm!.clearToCursorLine();
     this.selectionManager?.clearSelection();
     this.linkDetector?.invalidateCache();
     this.scrollToViewportOffset(0);

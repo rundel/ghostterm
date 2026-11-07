@@ -1925,12 +1925,12 @@ export class GhosttyTerminal {
     return new TextDecoder().decode(this.mem.bytes().slice(buf, buf + len));
   }
 
-  private setMode(mode: number, ansi: boolean, value: boolean): void {
+  private setMode(mode: number, ansi: boolean, value: boolean, keepDefault = false): void {
     const ptr = this.scratch;
     const view = this.mem.view();
     view.setUint16(ptr, packMode(mode, ansi), true);
     view.setUint8(ptr + this.L.modeConfig.value, value ? 1 : 0);
-    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE_DEFAULT, ptr);
+    if (!keepDefault) this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE_DEFAULT, ptr);
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE, ptr);
   }
 
@@ -2993,6 +2993,38 @@ export class GhosttyTerminal {
     }
     this.mem.view().setUint8(sel + S.rectangle, rectangle ? 1 : 0);
     return this.installSelection(sel);
+  }
+
+  /**
+   * Clear as xterm.js's clear() does: the cursor's line becomes the top line, the rest of the
+   * screen and the scrollback are erased with the default background, and the cursor keeps its
+   * column. The program's scroll region, origin mode and pen are left as they were and don't
+   * limit it. Nothing is sent to the program.
+   */
+  clearToCursorLine(): void {
+    const { x, y } = this.getCursor();
+    // What the program set up, as the sequences that restore it: the formatter appends them to
+    // a row's content.
+    const extras = FormatterExtras.SCROLLING_REGION | FormatterExtras.STYLE;
+    const row = this.getScrollbackLength() + this._rows - 1;
+    const content = this.formatScreen({ format: 'vt', extras: 0, fromRow: row, toRow: row });
+    const withState = this.formatScreen({ format: 'vt', extras, fromRow: row, toRow: row });
+    const restore = withState.startsWith(content) ? withState.slice(content.length) : '';
+    const origin = this.getMode(6);
+    const leftRight = this.getMode(69);
+
+    // Full-screen margins (DECSTBM, and DECSLRM through mode 69) and the default pen. Then
+    // scroll the cursor's line up to the top (SU), erase below it and drop the history (ED 3).
+    let seq = `${leftRight ? '\x1b[?69l' : ''}\x1b[r\x1b[0m`;
+    if (y > 0) seq += `\x1b[${y}S`;
+    if (this._rows > 1) seq += '\x1b[2;1H\x1b[J';
+    seq += `\x1b[3J${leftRight ? '\x1b[?69h' : ''}${restore}`;
+    this.write(seq);
+    // Restoring the margins homed the cursor; put it on the top line at its column even in
+    // origin mode (which would keep it inside the region), as xterm.js does.
+    if (origin) this.setMode(6, false, false, true);
+    this.write(`\x1b[1;${x + 1}H`);
+    if (origin) this.setMode(6, false, true, true);
   }
 
   /**

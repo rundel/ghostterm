@@ -307,6 +307,51 @@ describe('clear() and reset()', () => {
     expect(term.buffer.active.cursorX).toBe(1);
   });
 
+  test("clear() is not limited by the program's scroll region, origin mode or colors", () => {
+    const { term, sent } = fixture.open({ cols: 20, rows: 8 });
+    for (let i = 0; i < 12; i++) term.write(`line ${i}\r\n`);
+    // Region rows 3-6, origin mode, a red background; the cursor on row 4 of the screen.
+    term.write('\x1b[3;6r\x1b[?6h\x1b[41m\x1b[2;1Hcur\x1b[K');
+    expect(term.buffer.active.cursorY).toBe(3);
+
+    term.clear();
+
+    const buf = term.buffer.active;
+    expect(buf.baseY).toBe(0);
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((y) => bufferLine(term, y))).toEqual([
+      'cur',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+    expect([buf.cursorX, buf.cursorY]).toEqual([3, 0]);
+    // Erased with the default background, not the program's red.
+    expect(buf.getLine(1)?.getCell(0)?.isBgDefault()).toBe(true);
+    expect(sent).toEqual([]);
+
+    // The program's state is as it left it: pen, origin mode and the region.
+    term.write('X');
+    expect(buf.getLine(0)?.getCell(3)?.getBgColor()).toBe(0xcd3131);
+    expect(term.getMode(6)).toBe(true);
+    term.write('\x1b[HR');
+    expect(bufferLine(term, 2)).toBe('R');
+    term.write('\x1b[4;1H\r\n');
+    expect(bufferLine(term, 2)).toBe('');
+    expect(bufferLine(term, 0)).toBe('curX');
+  });
+
+  test('clear() is not limited by left and right margins (DECSLRM)', () => {
+    const { term } = fixture.open({ cols: 20, rows: 5 });
+    term.write('above\r\nkeep this whole line\x1b[?69h\x1b[5;10s\x1b[2;1H');
+    term.clear();
+    expect([0, 1].map((y) => bufferLine(term, y))).toEqual(['keep this whole line', '']);
+    expect(term.getMode(69)).toBe(true);
+  });
+
   test('reset() clears screen, scrollback, modes, title and scrolling', () => {
     const { term, sent } = fixture.open({ cols: 20, rows: 5 });
     const wasmTerm = term.wasmTerm;

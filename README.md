@@ -146,7 +146,6 @@ These follow Ghostty rather than xterm.js:
 Other differences from xterm.js:
 
 - `buffer.normal` and `buffer.alternate`: libghostty exposes only the active screen, so the inactive buffer reads as empty (length 0) until the program switches to it.
-- `clear()` keeps the cursor's line as the new top line and drops the scrollback, as in xterm.js, but works through the terminal's own scrolling, so a scroll region set by the program limits it.
 
 ## Development
 
