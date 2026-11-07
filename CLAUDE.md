@@ -21,7 +21,7 @@ bun test -t "pattern"            # matching tests
 bun run typecheck
 bun run lint                     # Biome; `bun run lint:fix` to fix
 bun run fmt                      # Prettier check; `bun run fmt:fix` to fix
-bun run build                    # fetch WASM + vite build into dist/ (ES module + both .wasm files)
+bun run build                    # fetch WASM + vite build into dist/ (ES module + ghostty-vt-fast.wasm)
 bun run demo                     # Vite + PTY server: http://127.0.0.1:8000/demo/
 bun run bench                    # throughput against xterm.js
 bun run release <version>        # see "Releases" below
@@ -29,7 +29,7 @@ bun run release <version>        # see "Releases" below
 
 Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
 
-`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle) and `ghostty-vt-fast.wasm` (ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too. `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
+`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle and not shipped separately) and `ghostty-vt-fast.wasm` (ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too. `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
 
 ## Architecture
 
@@ -64,17 +64,17 @@ Conventions in the bridge:
 
 Three row systems are in use; mixing them up is the most common bug.
 
-| System       | Row 0 is                        | Used by                                                         |
-| ------------ | ------------------------------- | --------------------------------------------------------------- |
-| Viewport row | top of what is displayed        | renderer, `getViewportLine`, mouse hit-testing                  |
-| Active row   | top of the screen below history | `getLine`, `getCursor().x/y`, `isRowWrapped`, `getHyperlinkUri` |
-| Absolute row | oldest scrollback line          | `getScreenLine`, buffer API, selection ranges, search, links    |
+| System       | Row 0 is                        | Used by                                                                     |
+| ------------ | ------------------------------- | --------------------------------------------------------------------------- |
+| Viewport row | top of what is displayed        | renderer, `getViewportLine`, mouse hit-testing                              |
+| Active row   | top of the screen below history | `getLine`, `getCursor().x/y`                                                |
+| Absolute row | oldest scrollback line          | `getScreenLine`, `isScreenRowWrapped`, buffer API, selection, search, links |
 
-`Terminal.viewportY` is the scroll offset in rows above the bottom (fractional during smooth scrolling; always floored for mapping). libghostty owns the real viewport: the renderer calls `setViewportOffset(floor(viewportY))` each frame, and code that lets libghostty scroll (search, selection autoscroll, prompt jumps) copies the result back with `scrollToLine(wasmTerm.getViewportOffset())`. When scrolled up, new output keeps the same content on screen (`followScrolledContent` in `writeInternal`); user input scrolls to the bottom.
+`Terminal.viewportY` is the scroll offset in rows above the bottom (fractional during smooth scrolling; always floored for mapping). libghostty owns the real viewport: the renderer calls `setViewportOffset(floor(viewportY))` each frame, and code that lets libghostty scroll (search, selection autoscroll, prompt jumps) copies the result back with `scrollToViewportOffset(wasmTerm.getViewportOffset())`. Every immediate scroll goes through `scrollToViewportOffset`, which also cancels smooth scrolling. The public `scrollToLine()` and `onScroll` use absolute rows, as in xterm.js, and so do `select()`, `selectLines()` and `getSelectionPosition()`. When scrolled up, new output keeps the same content on screen (`followScrolledContent` in `writeInternal`); user input scrolls to the bottom.
 
 ### Rendering
 
-`GhosttyTerminal.update()` refreshes the render state and accumulates dirty flags (an update only ever adds dirty state; `markClean()` clears it). `getViewport()` re-reads only stale rows, one `CELLS_RAW` call per row, and only fetches styles and graphemes for cells that have them. Each `GhosttyCell` carries resolved colors, flags, width, underline style and color, overline, `selected` (from the render state's selection), `bg_default`, a hyperlink ID shared by every cell of one URI, and, for screen lines, the full grapheme in `chars`.
+`GhosttyTerminal.update()` refreshes the render state and accumulates dirty flags (an update only ever adds dirty state; `markClean()` clears it). Reads refresh it only when `pendingUpdate` is set, so anything that changes the terminal outside `write()` (search steps, gestures, reset) must call `invalidate()`. `getLine()` reads the live grid, not the render state. `getViewport()` re-reads only stale rows, one `CELLS_RAW` call per row, and only fetches styles and graphemes for cells that have them. Each `GhosttyCell` carries resolved colors, flags, width, underline style and color, overline, `selected` (from the render state's selection), `bg_default`, a hyperlink ID shared by every cell of one URI, and the full grapheme in `chars` (filled by `readRow`, so the renderer never looks graphemes up per cell).
 
 Synchronized output (mode 2026) arrives as a render hold: `onRenderHold` captures the frame when the hold starts and `update()` is a no-op until it ends or times out (1 s).
 
@@ -87,7 +87,7 @@ The renderer draws rows, then the cursor (shape, blink and color from the render
 - Paste: `GhosttyTerminal.encodePaste()` via `ghostty_terminal_paste` (bracketed paste, unsafe-byte stripping, Kitty paste events). Unsafe pastes are allowed, matching xterm.js.
 - Focus: reported only when the program enabled mode 1004.
 
-`Terminal.wasmTerm` is replaced by `reset()`. Anything holding on to it (gestures, searches, encoders) must look it up again or detect the change, as `SelectionManager` and `SearchAddon` do.
+`reset()` resets libghostty in place (`ghostty_terminal_reset`), so `Terminal.wasmTerm` stays the same object for the terminal's lifetime. A program's RIS (`ESC c`) is handled after `vt_write` returns. Writes made from event listeners during a write are queued and run after it; writes before `open()` are queued until it.
 
 ## Tests
 
@@ -99,13 +99,13 @@ Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be 
 
 ## Releases
 
-Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every `v*` tag, and entries under `## Unreleased` in `CHANGELOG.md`. It runs the checks, moves those entries under `## X.Y.Z - <date>` (releases only; a prerelease leaves them, see `scripts/changelog.ts`), commits `Release vX.Y.Z` and creates an annotated tag; `--push` pushes both. The tag starts `.github/workflows/release.yml`, which checks the tag against `package.json`, builds, and creates the GitHub release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`; its notes are the version's changelog entries (`bun scripts/changelog.ts notes <version>`). A version with a suffix (`0.2.0-rc.1`) becomes a prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests.
+Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every `v*` tag, and entries under `## Unreleased` in `CHANGELOG.md`. It runs the checks and the build, moves those entries under `## X.Y.Z - <date>` (releases only; a prerelease leaves them, see `scripts/changelog.ts`), commits `Release vX.Y.Z` and creates an annotated tag; `--push` pushes both. The tag starts `.github/workflows/release.yml`: a `build` job (read-only token) checks the tag against `package.json`, builds and uploads the release files, and a `publish` job, the only one with `contents: write`, creates the GitHub release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`; its notes are the version's changelog entries (`bun scripts/changelog.ts notes <version>`). A version with a suffix (`0.2.0-rc.1`) becomes a prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests. Workflow actions are pinned to commit SHAs with the version in a trailing comment.
 
 ## Upgrading libghostty-vt
 
 The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (what is downloaded) and the `libghostty-vt` field in `package.json` (what release notes name). A test in `lib/ghostty.test.ts` keeps both equal to the loaded module's version. To move to a new release, follow the `bump-libghostty` skill (`.claude/skills/bump-libghostty/`). In short:
 
-1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the minisign-verified `SHA256SUMS`, rewrites the pin and the `package.json` field, and fetches the modules.
+1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the minisign-verified `SHA256SUMS` (it refuses to run without minisign unless given `--no-verify`), rewrites the pin and the `package.json` field, and fetches the modules.
 2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields.
 3. Read the header diff and commits between the `vt-` tags for changed behavior in what the bridge relies on, and recheck the quirks below.
 

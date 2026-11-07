@@ -110,12 +110,23 @@ These follow Ghostty rather than xterm.js:
 - Shift+Enter is sent as `ESC [27;2;13~` (`ESC [13;2u` under the Kitty keyboard protocol), so programs such as Claude Code and Codex can tell it from Enter. Shells that don't bind it won't treat it as Enter.
 - Option on macOS acts as Alt (Meta).
 - Mouse: when a program tracks the mouse, clicks and drags go to the program and Shift+drag selects text. The wheel sends one report per notch, or one per cell of trackpad movement.
+- Mouse pointer: over the text it is a text cursor unless the program asks for another shape with OSC 22 (`default` is the arrow).
+- Wheel on the alternate screen: while a full-screen program leaves alternate scroll (mode 1007) on, the default, the wheel sends one arrow key per line scrolled; with it off the wheel sends nothing.
 - Selection: double-click selects a word and triple-click a line, using Ghostty's word rules (paths and URLs select as one word). Alt+drag selects a block. Shift+arrow keys extend a selection. Copied text joins soft-wrapped lines. `selectAll()` includes the scrollback.
+- Copy and paste: selecting text copies it to the clipboard. Cmd+C (macOS) and Ctrl+Shift+C also copy a selection; without one, Ctrl+Shift+C goes to the program. Ctrl+V is sent to the program (^V); paste with Cmd+V or Ctrl+Shift+V.
+- Links: Ctrl+click (Cmd+click on macOS) opens OSC 8 hyperlinks and plain-text URLs, including URLs that wrap across lines. Only http, https, mailto and ftp links are opened, and plain-text URLs are detected only for those schemes.
 - Scrolling: output arriving while you are scrolled up leaves the view where it is; typing returns to the bottom.
 - Paste: control characters in pasted text are replaced with spaces, so a paste can't break out of bracketed paste. Without bracketed paste, newlines are sent as carriage returns.
 - Clipboard: programs may write to the clipboard with OSC 52 (turn this off with `allowClipboardWrite: false`); reading it is always denied.
 - Search: literal text, case-insensitive for ASCII letters. `findNext()` moves toward older output (up from the prompt), as Ghostty's find does; `resultIndex` still counts matches from the top, as in xterm.js, so `findNext()` lowers it. The `regex`, `wholeWord` and `caseSensitive` options are not supported, and the first search that sets one logs a warning.
-- Scrollback limit: libghostty drops history a page at a time, so right after a page is dropped the number of lines kept can be somewhat below the `scrollback` option.
+- Scrollback limit: libghostty drops history a page at a time, so right after a page is dropped the number of lines kept can be somewhat below the `scrollback` option. `scrollback: 0` keeps no history, as in xterm.js.
+- Colors: the defaults are `DEFAULT_THEME`'s (#d4d4d4 on #1e1e1e) and are given to libghostty too, so programs that ask for the colors (OSC 10/11) get an answer. A background a program sets with OSC 11 is drawn, and survives `reset()`, as in Ghostty.
+
+Other differences from xterm.js:
+
+- `buffer.normal` and `buffer.alternate`: libghostty exposes only the active screen, so the inactive buffer reads as empty (length 0) until the program switches to it.
+- `clear()` keeps the cursor's line as the new top line and drops the scrollback, as in xterm.js, but works through the terminal's own scrolling, so a scroll region set by the program limits it.
+- `allowTransparency` is accepted and ignored: a theme background with alpha is always drawn transparent.
 
 ## Development
 
