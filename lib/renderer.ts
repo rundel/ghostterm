@@ -19,10 +19,11 @@ import { CellFlags, UnderlineStyle } from './types';
  * row by row (GhosttyTerminal).
  */
 export interface IRenderable {
-  /** Row y of the viewport as displayed, including scrollback rows when scrolled. */
+  /**
+   * Row y of the viewport as displayed, including scrollback rows when scrolled. The caller keeps
+   * the buffer's viewport on the offset it passes to render().
+   */
   getViewportLine(y: number): GhosttyCell[] | null;
-  /** Scroll the buffer's own viewport to this many rows above the bottom. */
-  setViewportOffset(offset: number): void;
   getCursor(): {
     x: number;
     y: number;
@@ -391,10 +392,9 @@ export class CanvasRenderer {
     // Store buffer reference for grapheme lookups in renderCell
     this.currentBuffer = buffer;
 
-    // The buffer owns its viewport; scroll it here, so every visible row,
-    // scrollback included, is read the same way below.
+    // The buffer's viewport is already scrolled to this offset (Terminal keeps it there), so every
+    // visible row, scrollback included, is read the same way below.
     const offset = Math.max(0, Math.floor(viewportY));
-    buffer.setViewportOffset(offset);
 
     // getCursor() calls update() internally to ensure fresh state.
     // Multiple update() calls are safe - dirty state persists until clearDirty().

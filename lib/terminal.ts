@@ -201,8 +201,9 @@ export class Terminal implements ITerminalCore {
 
   /**
    * Rows the view is scrolled above the bottom (0 = following output). May be
-   * fractional during smooth scrolling. Change it through
-   * scrollToViewportOffset() or smoothScrollTo().
+   * fractional during smooth scrolling. Change it only through setViewportY(),
+   * which keeps libghostty's viewport on floor(viewportY), so anything that
+   * reads viewport rows sees what is displayed (and will be drawn).
    */
   private viewportY: number = 0;
   /** Where a smooth scroll is heading (equal to viewportY when none runs). */
@@ -335,6 +336,7 @@ export class Terminal implements ITerminalCore {
         // Lowering the limit can prune history under a scrolled view.
         const scrollback = this.getScrollbackLength();
         if (this.viewportY > scrollback) this.scrollToViewportOffset(scrollback);
+        this.syncViewport();
         this.fireScrollIfMoved();
         break;
       }
@@ -730,11 +732,10 @@ export class Terminal implements ITerminalCore {
     // preserve selection when new data arrives. Selection is cleared by user actions
     // like clicking or typing, not by incoming data.
 
-    // When scrolled up, libghostty keeps its viewport on the same content as
-    // output pushes rows into history. Point it at what is displayed first so
-    // we can follow it afterwards.
+    // When scrolled up, libghostty keeps its viewport (already on what is
+    // displayed, see setViewportY) on the same content as output pushes rows
+    // into history; followScrolledContent() follows it afterwards.
     const scrolledOffset = Math.max(0, Math.floor(this.viewportY));
-    if (scrolledOffset > 0) this.wasmTerm!.setViewportOffset(scrolledOffset);
 
     // Write directly to WASM terminal (handles VT parsing internally)
     const wasmTerm = this.wasmTerm!;
@@ -885,11 +886,13 @@ export class Terminal implements ITerminalCore {
       // Resize renderer (sizes the canvas for the device pixel ratio and gutter)
       this.renderer!.resize(cols, rows);
 
-      // Reflow can shorten the history; stay within it.
+      // Reflow can shorten the history; stay within it. Either way, put
+      // libghostty's reflowed viewport back on the displayed offset.
       const scrollback = this.getScrollbackLength();
       if (this.viewportY > scrollback || this.targetViewportY > scrollback) {
         this.scrollToViewportOffset(Math.min(this.viewportY, scrollback));
       }
+      this.syncViewport();
 
       // Fire resize event
       this.resizeEmitter.fire({ cols, rows });
@@ -949,7 +952,7 @@ export class Terminal implements ITerminalCore {
     this.selectionManager?.clearSelection();
     this.linkDetector?.invalidateCache();
     this.cancelScrollAnimation();
-    this.viewportY = 0;
+    this.setViewportY(0);
     this.targetViewportY = 0;
     this.fireScrollIfMoved();
 
@@ -1246,7 +1249,6 @@ export class Terminal implements ITerminalCore {
    */
   public scrollToPrompt(delta: number): boolean {
     if (!this.wasmTerm) return false;
-    this.wasmTerm.setViewportOffset(Math.max(0, Math.floor(this.viewportY)));
     if (!this.wasmTerm.scrollToPrompt(delta)) return false;
     this.scrollToViewportOffset(this.wasmTerm.getViewportOffset());
     return true;
@@ -1263,9 +1265,20 @@ export class Terminal implements ITerminalCore {
     this.cancelScrollAnimation();
     this.targetViewportY = target;
     if (target === this.viewportY) return;
-    this.viewportY = target;
+    this.setViewportY(target);
     this.fireScrollIfMoved();
     if (scrollbackLength > 0) this.showScrollbar();
+  }
+
+  /** Set the scroll offset and move libghostty's viewport with it. */
+  private setViewportY(y: number): void {
+    this.viewportY = y;
+    this.syncViewport();
+  }
+
+  /** Put libghostty's viewport on the displayed offset, floor(viewportY). */
+  private syncViewport(): void {
+    this.wasmTerm?.setViewportOffset(Math.max(0, Math.floor(this.viewportY)));
   }
 
   /** The buffer line at the top of the viewport (xterm.js `buffer.active.viewportY`). */
@@ -1309,7 +1322,7 @@ export class Terminal implements ITerminalCore {
     const after = this.wasmTerm!.getViewportOffset();
     const delta = after - before;
     if (delta === 0) return;
-    this.viewportY = Math.max(0, this.viewportY + delta);
+    this.setViewportY(Math.max(0, this.viewportY + delta));
     this.targetViewportY = Math.max(0, this.targetViewportY + delta);
   }
 
@@ -1346,13 +1359,13 @@ export class Terminal implements ITerminalCore {
 
     if (Math.abs(distance) < 0.01) {
       // Close enough: snap to the target, animation complete
-      this.viewportY = this.targetViewportY;
+      this.setViewportY(this.targetViewportY);
     } else {
       // Move a fraction of the remaining distance each frame (ease-out over
       // about `duration` ms at 60fps)
       const framesForDuration = (duration / 1000) * 60;
       const moveRatio = 1 - (1 / framesForDuration) ** 2;
-      this.viewportY += distance * moveRatio;
+      this.setViewportY(this.viewportY + distance * moveRatio);
       this.scrollAnimationFrame = requestAnimationFrame(this.animateScroll);
     }
 

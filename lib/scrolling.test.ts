@@ -459,3 +459,31 @@ describe('scrollbar', () => {
     expect(thumbs()).toEqual([]);
   });
 });
+
+describe('viewport reads between frames', () => {
+  /** Viewport row 0 as libghostty reads it now, without drawing a frame first. */
+  const viewportTop = () =>
+    (internals(term).wasmTerm.getViewportLine(0) ?? [])
+      .map((c) => (c.codepoint ? String.fromCodePoint(c.codepoint) : ' '))
+      .join('')
+      .trimEnd();
+  const displayedTop = () =>
+    term.buffer.active.getLine(term.buffer.active.viewportY)?.translateToString(true) ?? '';
+
+  test('follow a scroll immediately', () => {
+    fill(50);
+    term.scrollLines(-5);
+    expect(viewportTop()).toBe(displayedTop());
+    term.scrollToTop();
+    expect(viewportTop()).toBe('Line 0');
+    term.scrollToBottom();
+    expect(viewportTop()).toBe(displayedTop());
+  });
+
+  test('stay on the displayed offset after a resize reflows the history', () => {
+    fill(50);
+    term.scrollLines(-10);
+    term.resize(40, 12);
+    expect(viewportTop()).toBe(displayedTop());
+  });
+});

@@ -81,13 +81,6 @@ export class SelectionManager {
     return this.gesture;
   }
 
-  /**
-   * Get current viewport Y position (how many lines scrolled into history)
-   */
-  private getViewportY(): number {
-    return Math.max(0, Math.floor(this.terminal.getViewportY()));
-  }
-
   /** Number of rows in the buffer: scrollback, then the screen. */
   private bufferLength(): number {
     return this.wasmTerm.getScrollbackLength() + this.wasmTerm.getDimensions().rows;
@@ -271,21 +264,12 @@ export class SelectionManager {
   }
 
   /**
-   * Point libghostty's viewport at what is displayed, so viewport cells under
-   * the pointer resolve to the content the user sees.
-   */
-  private syncViewport(): void {
-    this.wasmTerm.setViewportOffset(this.getViewportY());
-  }
-
-  /**
    * Feed a drag at canvas position (x, y), which may lie outside the canvas.
    * Holding Alt makes it a block (rectangular) selection, as in Ghostty.
    */
   private dragTo(x: number, y: number, altKey: boolean): void {
     this.lastPointer = { x, y };
     this.rectangle = altKey;
-    this.syncViewport();
     const cell = this.pixelToCell(x, y);
     this.getGesture().drag(cell.col, cell.row, x, y, this.geometry(), this.rectangle);
 
@@ -321,7 +305,6 @@ export class SelectionManager {
       // Keyboard input, IME composition included, goes to the textarea.
       this.textarea.focus();
 
-      this.syncViewport();
       const cell = this.pixelToCell(e.offsetX, e.offsetY);
       const time = e.timeStamp > 0 ? e.timeStamp : performance.now();
       const hadSelection = this.hasSelection();
@@ -476,7 +459,6 @@ export class SelectionManager {
         this.stopAutoScroll();
         return;
       }
-      this.syncViewport();
       const { x, y } = this.lastPointer;
       const cell = this.pixelToCell(x, y);
       const ok = this.getGesture().autoscrollTick(
