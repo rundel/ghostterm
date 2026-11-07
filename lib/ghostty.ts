@@ -3246,7 +3246,7 @@ export class GhosttyTerminal {
    */
   formatScreen(options: FormatScreenOptions): string {
     if (options.screen === 'primary' && this.isAlternateScreen()) {
-      return this.withPrimaryScreen(() => this.formatActiveScreen(options));
+      return this.readPrimary(() => this.formatActiveScreen(options));
     }
     return this.formatActiveScreen(options);
   }

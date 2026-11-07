@@ -864,6 +864,9 @@ describe('formatting the screen', () => {
 
     const primary = term.formatScreen({ format: 'plain', trim: true, screen: 'primary' });
     expect(primary).toBe('row 0\nrow 1\nrow 2\nrow 3');
+    // Reading the other screen leaves nothing to redraw.
+    expect(term.needsFullRedraw()).toBe(false);
+    expect([0, 1, 2].filter((y) => term.isRowDirty(y))).toEqual([]);
     expect(term.formatScreen({ format: 'plain', screen: 'primary', scrollback: 0 })).toBe(
       'row 2\nrow 3'
     );
