@@ -633,8 +633,7 @@ describe('terminal effects (library callbacks)', () => {
     const { term } = withEffects();
     try {
       term.write('\x1b]52;c;?\x07');
-      const reply = term.readResponse();
-      expect(reply === null || !reply.includes(btoa('x'))).toBe(true);
+      expect(term.readResponse()).toBeNull();
     } finally {
       term.free();
     }
