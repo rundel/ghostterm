@@ -153,6 +153,24 @@ describe('CanvasRenderer drawing', () => {
     expect(cursor?.w).toBe(2 * renderer.charWidth);
   });
 
+  test('a theme change after the first frames repaints with the new colors', () => {
+    term.write('x');
+    frame(true);
+    frame();
+    term.options.theme = { background: '#ffffff', foreground: '#000000', cursor: '#ff0000' };
+    // The option change redraws at once; check that frame's colors held.
+    expect((term as any).renderer.background).toBe('#ffffff');
+    const changed = frame(true);
+    expect(changed.fills.some((f) => f.style === '#ffffff' && f.x === 0 && f.y === 0)).toBe(true);
+    expect(changed.cursorColor).toBe('rgb(255, 0, 0)');
+
+    term.options.theme = {};
+    expect((term as any).renderer.background).toBe('#1e1e1e');
+    const back = frame(true);
+    expect(back.fills.some((f) => f.style === '#1e1e1e' && f.x === 0 && f.y === 0)).toBe(true);
+    expect(back.cursorColor).toBe('rgb(255, 255, 255)');
+  });
+
   test('cells with the default background use the color a program set (OSC 11)', () => {
     term.write('x');
     term.write('\x1b]11;#102030\x07');
