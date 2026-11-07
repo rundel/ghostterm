@@ -44,7 +44,7 @@ Put downloads in your scratchpad, not the repo.
 ./scripts/update-libghostty.sh NEW
 ```
 
-This takes the checksums of both WASM builds from the release's `SHA256SUMS`, verifies that file's minisign signature against Ghostty's key, rewrites `VERSION`, `SMALL_SHA256` and `FAST_SHA256` in `scripts/fetch-wasm.sh` and the `libghostty-vt` field in `package.json`, and downloads `ghostty-vt.wasm` and `ghostty-vt-fast.wasm`. If it warns that minisign is not installed, tell the user the signature was not checked. If the release lacks either WASM file, stop and report it; don't fall back to one build.
+This takes the checksums of both WASM builds from the release's `SHA256SUMS`, verifies that file's minisign signature against Ghostty's key, rewrites `VERSION`, `SMALL_SHA256` and `FAST_SHA256` in `scripts/fetch-wasm.sh` and the `libghostty-vt` field in `package.json`, and downloads `ghostty-vt.wasm` and `ghostty-vt-fast.wasm`. It stops if minisign is not installed: ask the user to install it (`brew install minisign`) rather than passing `--no-verify`, and if they choose `--no-verify` anyway, tell them the signature was not checked. If the release lacks either WASM file, stop and report it; don't fall back to one build.
 
 ## 4. Make the code right for the new release
 

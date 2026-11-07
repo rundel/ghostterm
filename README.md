@@ -117,9 +117,9 @@ These follow Ghostty rather than xterm.js:
 
 ## Development
 
-ghostterm runs on the official prebuilt WebAssembly module that Ghostty publishes with each [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI. `scripts/fetch-wasm.sh` downloads both builds of the pinned release and checks their SHA-256; `scripts/update-libghostty.sh` moves the pin to a newer release. The bundled release is also recorded in the `libghostty-vt` field of `package.json` and reported at runtime by `ghostty.version`.
+ghostterm runs on the official prebuilt WebAssembly module that Ghostty publishes with each [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI. `scripts/fetch-wasm.sh` downloads both builds of the pinned release and checks their SHA-256; `scripts/update-libghostty.sh` moves the pin to a newer release after checking the release's minisign signature. The bundled release is also recorded in the `libghostty-vt` field of `package.json` and reported at runtime by `ghostty.version`.
 
-Requires Bun and curl.
+Requires Bun and curl, and minisign to move the pin.
 
 ```bash
 bun install

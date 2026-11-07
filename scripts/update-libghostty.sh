@@ -6,10 +6,11 @@ set -euo pipefail
 #   ./scripts/update-libghostty.sh --check     print the pinned and latest versions, change nothing
 #   ./scripts/update-libghostty.sh             update to the latest release
 #   ./scripts/update-libghostty.sh 1.1.0       update to a specific release
+#   --no-verify                                 pin without checking the signature (not advised)
 #
 # Releases are the vt-X.Y.Z tags in ghostty-org/ghostty. The new checksums come from the release's
-# SHA256SUMS, whose minisign signature is checked against Ghostty's public key when minisign is
-# installed. The script then downloads both WASM builds through fetch-wasm.sh.
+# SHA256SUMS, whose minisign signature is checked against Ghostty's public key; without minisign the
+# script stops unless --no-verify is given. It then downloads both WASM builds through fetch-wasm.sh.
 
 REPO="ghostty-org/ghostty"
 RELEASE_URL="https://release.files.ghostty.org/libghostty-vt"
@@ -36,12 +37,25 @@ latest_release() {
 }
 
 check=false
+verify=true
 target=""
-case "${1:-}" in
-    --check) check=true ;;
-    "") ;;
-    *) target="$1" ;;
-esac
+for arg in "$@"; do
+    case "$arg" in
+        --check) check=true ;;
+        --no-verify) verify=false ;;
+        -*)
+            echo "❌ Unknown option $arg" >&2
+            exit 1
+            ;;
+        *) target="$arg" ;;
+    esac
+done
+
+if ! $check && $verify && ! command -v minisign &> /dev/null; then
+    echo "❌ minisign is needed to verify the release's SHA256SUMS (brew install minisign)." >&2
+    echo "   Pass --no-verify to pin unverified checksums anyway." >&2
+    exit 1
+fi
 
 if [ -z "$target" ]; then
     target="$(latest_release)"
@@ -82,11 +96,11 @@ curl --fail --silent --show-error --location -o "$tmp/SHA256SUMS" "$RELEASE_URL/
 curl --fail --silent --show-error --location -o "$tmp/SHA256SUMS.minisig" \
     "$RELEASE_URL/$target/SHA256SUMS.minisig"
 
-if command -v minisign &> /dev/null; then
+if $verify; then
     minisign -Vq -P "$MINISIGN_KEY" -m "$tmp/SHA256SUMS" -x "$tmp/SHA256SUMS.minisig"
     echo "✅ SHA256SUMS signature verified"
 else
-    echo "⚠️  minisign is not installed; SHA256SUMS signature NOT verified"
+    echo "⚠️  --no-verify: SHA256SUMS signature NOT verified"
 fi
 
 hash_of() {
