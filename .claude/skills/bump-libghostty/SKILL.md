@@ -57,6 +57,7 @@ bun run fmt && bun run lint && bun run typecheck && bun test && bun run build
 What failures usually mean:
 
 - `lib/abi-enums.test.ts`: an enum constant in `lib/types.ts` no longer matches the module. Fix the constant from the new header.
+- The Unicode version test: `UNICODE_VERSIONS` in `lib/unicode.ts` has no entry for the new release. Add one with the Unicode version the release's character data comes from (the UCD files in the `uucode` dependency pinned by its `build.zig.zon`).
 - `AbiLayout` throws while loading: a manifest field the bridge reads is missing or renamed. Fix the lookup in `lib/abi.ts`, using `ghostty_type_json()` from the new module as the source of truth.
 
 Then go through what passing tests don't prove:

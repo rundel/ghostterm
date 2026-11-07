@@ -125,7 +125,7 @@ Versions are ghostterm's own semver; `bun run release <version>` (`scripts/relea
 The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (what is downloaded) and the `libghostty-vt` field in `package.json` (what release notes name). A test in `lib/ghostty.test.ts` keeps both equal to the loaded module's version. To move to a new release, follow the `bump-libghostty` skill (`.claude/skills/bump-libghostty/`). In short:
 
 1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the minisign-verified `SHA256SUMS` (it refuses to run without minisign unless given `--no-verify`), rewrites the pin and the `package.json` field, and fetches the modules.
-2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields.
+2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields. Add the release's Unicode version to `UNICODE_VERSIONS` in `lib/unicode.ts` (a test fails until you do).
 3. Read the header diff and commits between the `vt-` tags for changed behavior in what the bridge relies on, and recheck the quirks below.
 
 Known libghostty-vt 1.0 quirks the code works around or documents:
