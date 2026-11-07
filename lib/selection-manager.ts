@@ -22,6 +22,7 @@ import {
   type SelectionGesture,
 } from './ghostty';
 import type { IEvent } from './interfaces';
+import type { PointerRouter } from './pointer-router';
 import type { CanvasRenderer } from './renderer';
 import type { Terminal } from './terminal';
 
@@ -64,7 +65,8 @@ export class SelectionManager {
     terminal: Terminal,
     renderer: CanvasRenderer,
     wasmTerm: GhosttyTerminal,
-    textarea: HTMLTextAreaElement
+    textarea: HTMLTextAreaElement,
+    private pointer: PointerRouter
   ) {
     this.terminal = terminal;
     this.renderer = renderer;
@@ -298,9 +300,9 @@ export class SelectionManager {
       }
       if (e.button !== 0) return;
 
-      // A program tracking the mouse gets plain clicks and drags (reported by
-      // the InputHandler); Shift+drag still selects, as in Ghostty.
-      if (this.wasmTerm.hasMouseTracking() && !e.shiftKey) return;
+      // Presses on the scrollbar, and ones reported to a program tracking the
+      // mouse, aren't selections (Shift+drag still selects, as in Ghostty).
+      if ((this.pointer.gestureTarget() ?? this.pointer.targetFor(e)) !== 'selection') return;
 
       // Keyboard input, IME composition included, goes to the textarea.
       this.textarea.focus();

@@ -54,6 +54,7 @@ import { LinkDetector } from './link-detector';
 import { MarkerRegistry } from './markers';
 import { DEFAULT_MODES, readModes } from './modes';
 import { Parser, countLineFeeds } from './parser';
+import { PointerRouter } from './pointer-router';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import {
@@ -127,6 +128,8 @@ export class Terminal implements ITerminalCore {
   public wasmTerm?: GhosttyTerminal;
   private renderer?: CanvasRenderer;
   private inputHandler?: InputHandler;
+  /** Decides whether presses and wheel events go to the scrollbar, the program or selection. */
+  private pointer?: PointerRouter;
   private selectionManager?: SelectionManager;
   private canvas?: HTMLCanvasElement;
 
@@ -600,6 +603,11 @@ export class Terminal implements ITerminalCore {
         },
       };
 
+      this.pointer = new PointerRouter({
+        overScrollbar: (e) => this.overScrollbar(e),
+        programTracksMouse: () => this.wasmTerm?.hasMouseTracking() ?? false,
+      });
+
       // Create input handler
       this.inputHandler = new InputHandler({
         ghostty: this.ghostty!,
@@ -626,6 +634,7 @@ export class Terminal implements ITerminalCore {
         // Copy shortcuts: returns true if there was a selection to copy
         onCopy: () => this.copySelection(),
         mouseConfig,
+        pointer: this.pointer,
       });
 
       this.syncCellPixelSize();
@@ -638,7 +647,8 @@ export class Terminal implements ITerminalCore {
         this,
         this.renderer,
         this.wasmTerm!,
-        this.textarea
+        this.textarea,
+        this.pointer
       );
 
       // Forward selection change events
@@ -646,8 +656,9 @@ export class Terminal implements ITerminalCore {
         this.selectionChangeEmitter.fire();
       });
 
-      // Setup mouse event handling for links and scrollbar
-      // Use capture phase to intercept scrollbar clicks before SelectionManager
+      // Mouse handling for links and the scrollbar. The capture-phase mousedown runs before every
+      // other mousedown listener and starts the gesture (PointerRouter.press), which the others
+      // then follow.
       this.listen(parent, 'mousedown', this.handleMouseDown, { capture: true });
       this.listen(parent, 'mousemove', this.handleMouseMove);
       this.listen(parent, 'mouseleave', this.handleMouseLeave);
@@ -1591,6 +1602,7 @@ export class Terminal implements ITerminalCore {
     }
 
     this.currentHoveredLink = undefined;
+    this.pointer = undefined;
     this.element = undefined;
     this.textarea = undefined;
   }
@@ -1761,6 +1773,8 @@ export class Terminal implements ITerminalCore {
     // so the link opens within the click's user gesture and the default action
     // can still be prevented; only custom asynchronous providers resolve later.
     if (!this.canvas || !this.renderer || !this.linkDetector || !this.wasmTerm) return;
+    // A press on the scrollbar never opens a link.
+    if (this.pointer?.gestureTarget() === 'scrollbar') return;
 
     const rect = this.canvas.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / this.renderer.charWidth);
@@ -1797,9 +1811,7 @@ export class Terminal implements ITerminalCore {
     // listener runs in the capture phase, so it must let the event through to
     // the InputHandler, which consults the custom handler, reports it and
     // prevents the page scrolling.
-    if (this.inputHandler?.isReportingMouse(e)) {
-      return;
-    }
+    if (!this.pointer || this.pointer.wheelTarget(e) === 'program') return;
 
     // As in xterm.js, a custom handler returning false stops all processing
     // (and the page may scroll).
@@ -1845,22 +1857,15 @@ export class Terminal implements ITerminalCore {
    * Handle mouse down for scrollbar interaction
    */
   private handleMouseDown = (e: MouseEvent): void => {
-    if (!this.canvas || !this.renderer || !this.wasmTerm) return;
+    if (!this.canvas || !this.renderer || !this.wasmTerm || !this.pointer) return;
+    // Every press starts a gesture here first; the other listeners follow the router.
+    if (this.pointer.press(e) !== 'scrollbar') return;
 
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    if (scrollbackLength === 0) return; // No scrollbar if no scrollback
-
-    const rect = this.canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const bar = this.scrollbarThumb();
-    if (mouseX < bar.x || mouseX > bar.x + bar.width) return;
-
-    // Keep the click from starting a text selection
+    // Keep the press from starting a native text selection
     e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation(); // Stop SelectionManager from seeing this event
-
+    const scrollbackLength = this.wasmTerm.getScrollbackLength();
+    const mouseY = e.clientY - this.canvas.getBoundingClientRect().top;
+    const bar = this.scrollbarThumb();
     if (mouseY >= bar.y && mouseY <= bar.y + bar.height) {
       // Start dragging the thumb
       this.isDraggingScrollbar = true;
@@ -1875,6 +1880,14 @@ export class Terminal implements ITerminalCore {
       this.scrollToViewportOffset(Math.round(fraction * scrollbackLength));
     }
   };
+
+  /** Whether a pointer event is over the scrollbar's gutter while there is history to scroll. */
+  private overScrollbar(e: MouseEvent): boolean {
+    if (!this.canvas || !this.renderer || this.getScrollbackLength() === 0) return false;
+    const mouseX = e.clientX - this.canvas.getBoundingClientRect().left;
+    const bar = this.scrollbarThumb();
+    return mouseX >= bar.x && mouseX <= bar.x + bar.width;
+  }
 
   /**
    * Handle mouse up for scrollbar drag

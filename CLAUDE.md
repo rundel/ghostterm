@@ -41,6 +41,7 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 ├─ GhosttyTerminal (lib/bridge/)      the only code that touches the WASM module
 ├─ CanvasRenderer (lib/renderer.ts)   draws the render state; cursor, scrollbar, highlights
 ├─ InputHandler (lib/input-handler.ts)    DOM keyboard/mouse/paste/focus → libghostty encoders
+├─ PointerRouter (lib/pointer-router.ts)  which of scrollbar, program, selection gets a press
 ├─ SelectionManager (lib/selection-manager.ts)  DOM mouse → libghostty selection gesture
 ├─ BufferNamespace (lib/buffer.ts)    xterm.js IBuffer over absolute screen rows
 ├─ LinkDetector + providers           OSC 8 (libghostty hyperlinks) and regex URLs
@@ -89,7 +90,8 @@ The renderer draws rows, then the cursor (shape, blink and color from the render
 ### Input
 
 - Keys: every mapped key goes through the key encoder after `syncFromTerminal()`, which copies the program's keyboard modes (Kitty flags, modifyOtherKeys, cursor/keypad modes). Option-as-Alt is re-applied after each sync. Releases (keyup) are sent only when the program asked for them. Dead keys and IME use composition events.
-- Mouse: `MouseEncoder` synced from the terminal, with geometry and button state. Shift bypasses reporting so Shift+drag selects. Wheel steps are one per notch (large pixel deltas, about 100 px each) or one per cell of accumulated trackpad movement.
+- Pointer routing: `PointerRouter` (`lib/pointer-router.ts`) decides who handles a press, once per gesture: the scrollbar (over its gutter, with history), else the program (when it tracks the mouse and Shift isn't held), else selection and links. `Terminal`'s capture-phase mousedown calls `press()` before any other listener; `SelectionManager`, `InputHandler` and the link click handler read `gestureTarget()`, and both wheel handlers read `wheelTarget()`. Don't stop propagation to keep another listener out; check the router.
+- Mouse: `MouseEncoder` synced from the terminal, with geometry and button state. Wheel steps are one per notch (large pixel deltas, about 100 px each) or one per cell of accumulated trackpad movement.
 - Paste: `GhosttyTerminal.encodePaste()` via `ghostty_terminal_paste` (bracketed paste, unsafe-byte stripping, Kitty paste events). Unsafe pastes are allowed, matching xterm.js.
 - Focus: reported only when the program enabled mode 1004.
 

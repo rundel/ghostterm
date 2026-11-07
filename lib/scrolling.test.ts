@@ -411,6 +411,29 @@ describe('scrollbar', () => {
     expect(term.buffer.active.viewportY).toBe(0);
   });
 
+  test('a press on the scrollbar goes to the scrollbar even while a program tracks the mouse', () => {
+    term.write('\x1b[?1000h');
+    sent.length = 0;
+    const b = bar();
+    const { canvas } = internals(term);
+    canvas.dispatchEvent(mouseEvent('mousedown', b.x + 1, b.trackY + b.trackHeight / 2));
+    document.dispatchEvent(mouseEvent('mouseup', b.x + 1, b.trackY + b.trackHeight / 2));
+    expect(sent).toEqual([]);
+    expect(term.getViewportY()).toBe(Math.round(term.buffer.active.baseY / 2));
+    expect(term.hasSelection()).toBe(false);
+
+    // Over the text, the program gets the press; Shift+press selects instead.
+    canvas.dispatchEvent(mouseEvent('mousedown', 5, 5));
+    document.dispatchEvent(mouseEvent('mouseup', 5, 5));
+    expect(sent.length).toBe(2);
+    sent.length = 0;
+    canvas.dispatchEvent(mouseEvent('mousedown', 5, 5, { shiftKey: true }));
+    canvas.dispatchEvent(mouseEvent('mousemove', 5, 50, { shiftKey: true }));
+    document.dispatchEvent(mouseEvent('mouseup', 5, 50, { shiftKey: true }));
+    expect(sent).toEqual([]);
+    expect(term.hasSelection()).toBe(true);
+  });
+
   test('clicks left of the scrollbar are not taken', () => {
     // They start a selection instead.
     const { canvas } = internals(term);
