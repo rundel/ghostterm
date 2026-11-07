@@ -248,3 +248,75 @@ describe('pointer shape (OSC 22)', () => {
     expect(canvas.style.cursor).toBe('text');
   });
 });
+
+describe('shell integration navigation', () => {
+  test('scrollToPrompt steps through prompts in both directions', async () => {
+    const t = await createIsolatedTerminal({ cols: 20, rows: 3 });
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    t.open(c);
+    try {
+      for (let i = 0; i < 4; i++) {
+        t.write(
+          `\x1b]133;A\x07$ cmd ${i}\r\n\x1b]133;C\x07out ${i}a\r\nout ${i}b\r\n\x1b]133;D;0\x07`
+        );
+      }
+      t.write('\x1b]133;A\x07$ ');
+      const top = () =>
+        t
+          .wasmTerm!.getViewportLine(0)!
+          .map((x) => String.fromCodePoint(x.codepoint || 32))
+          .join('')
+          .trimEnd();
+      const seen: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        expect(t.scrollToPrompt(-1)).toBe(true);
+        seen.push(top());
+      }
+      expect(seen).toEqual(['$ cmd 3', '$ cmd 2', '$ cmd 1', '$ cmd 0']);
+      expect(t.scrollToPrompt(-1)).toBe(false); // no older prompt
+      expect(t.scrollToPrompt(1)).toBe(true);
+      expect(top()).toBe('$ cmd 1');
+      expect(t.viewportY).toBe(t.wasmTerm!.getViewportOffset());
+    } finally {
+      t.dispose();
+      c.remove();
+    }
+  });
+});
+
+describe('keyboard selection', () => {
+  function key(code: string, shift = true) {
+    const e = new KeyboardEvent('keydown', {
+      code,
+      key: code,
+      shiftKey: shift,
+      bubbles: true,
+      cancelable: true,
+    });
+    container.dispatchEvent(e);
+    return e;
+  }
+
+  test('Shift+arrows extend an existing selection', () => {
+    term.write('hello world');
+    term.select(0, 0, 5);
+    let changes = 0;
+    term.onSelectionChange(() => changes++);
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+
+    key('ArrowRight');
+    key('ArrowRight');
+    expect(term.getSelection()).toBe('hello w');
+    expect(changes).toBe(2);
+    expect(sent).toEqual([]);
+  });
+
+  test('without a selection, Shift+arrows go to the program', () => {
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+    key('ArrowRight');
+    expect(sent).toEqual(['\x1b[1;2C']);
+  });
+});

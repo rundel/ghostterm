@@ -308,8 +308,36 @@ const RENDER_HOLD_TIMEOUT_MS = 1000;
 
 const ScrollViewport = {
   BOTTOM: 1,
+  DELTA: 2,
   ROW: 3,
+  DELTA_PROMPT: 4,
 } as const;
+
+/** How to extend a selection from the keyboard (GhosttySelectionAdjust). */
+export type SelectionAdjust =
+  | 'left'
+  | 'right'
+  | 'up'
+  | 'down'
+  | 'home'
+  | 'end'
+  | 'page-up'
+  | 'page-down'
+  | 'line-start'
+  | 'line-end';
+
+const SELECTION_ADJUST: Record<SelectionAdjust, number> = {
+  left: 0,
+  right: 1,
+  up: 2,
+  down: 3,
+  home: 4,
+  end: 5,
+  'page-up': 6,
+  'page-down': 7,
+  'line-start': 8,
+  'line-end': 9,
+};
 const SIZE_MAX = 0xffffffff;
 const SCREEN_ALTERNATE = 1;
 
@@ -2059,6 +2087,36 @@ export class GhosttyTerminal {
     this.pendingUpdate = true;
   }
 
+  private scrollBy(tag: number, amount: number): void {
+    const behaviorPtr = this.scratch + 480;
+    const view = this.mem.view();
+    for (let i = 0; i < 24; i += 4) view.setUint32(behaviorPtr + i, 0, true);
+    view.setInt32(behaviorPtr, tag, true);
+    view.setInt32(behaviorPtr + 8, amount, true);
+    this.exports.ghostty_terminal_scroll_viewport(this.handle, behaviorPtr);
+    this.atBottom = this.getViewportOffset() === 0;
+    this.pendingUpdate = true;
+  }
+
+  /**
+   * Scroll the viewport by `delta` shell prompts (negative = older), using the
+   * prompt marks shell integration (OSC 133) leaves. Returns whether it moved.
+   */
+  scrollToPrompt(delta: number): boolean {
+    if (delta === 0) return false;
+    const before = this.getViewportOffset();
+    this.scrollBy(ScrollViewport.DELTA_PROMPT, delta);
+    if (this.getViewportOffset() === before && delta < 0) {
+      // libghostty-vt 1.0 doesn't move back one prompt when a prompt is the
+      // top row; starting one row higher finds the one before it.
+      this.scrollBy(ScrollViewport.DELTA, -1);
+      this.scrollBy(ScrollViewport.DELTA_PROMPT, delta);
+    }
+    const moved = this.getViewportOffset() !== before;
+    if (!moved) this.setViewportOffset(before);
+    return moved;
+  }
+
   /** Rows the viewport is scrolled above the bottom (0 when pinned). */
   getViewportOffset(): number {
     const ptr = this.scratch + 448;
@@ -2434,6 +2492,23 @@ export class GhosttyTerminal {
       this.exports.ghostty_terminal_set(this.handle, SELECTION_OPT, ptr) === GHOSTTY_SUCCESS;
     this.pendingUpdate = true;
     return ok;
+  }
+
+  /**
+   * Move the selection's moving end the way keyboard selection does in
+   * Ghostty (Shift+arrows and friends). Returns false without a selection.
+   */
+  adjustSelection(how: SelectionAdjust): boolean {
+    const ex = this.exports;
+    const sel = this.selScratch + 128;
+    if (ex.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) return false;
+    if (
+      ex.ghostty_terminal_selection_adjust(this.handle, sel, SELECTION_ADJUST[how]) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return false;
+    }
+    return this.installSelection(sel);
   }
 
   clearSelection(): void {

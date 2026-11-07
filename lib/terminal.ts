@@ -505,6 +505,9 @@ export class Terminal implements ITerminalCore {
 
       this.syncCellPixelSize();
 
+      // Shift+arrow selection changes come from the input handler
+      this.inputHandler.onSelectionAdjusted = () => this.selectionChangeEmitter.fire();
+
       // Create selection manager (pass textarea for context menu positioning)
       this.selectionManager = new SelectionManager(
         this,
@@ -1010,6 +1013,18 @@ export class Terminal implements ITerminalCore {
    * Scroll viewport to a specific line in the buffer
    * @param line Line number (0 = top of scrollback, scrollbackLength = bottom)
    */
+  /**
+   * Scroll by `delta` shell prompts (negative = older, positive = newer).
+   * Needs shell integration (OSC 133 prompt marks). Returns whether it moved.
+   */
+  public scrollToPrompt(delta: number): boolean {
+    if (!this.wasmTerm) return false;
+    this.wasmTerm.setViewportOffset(Math.max(0, Math.floor(this.viewportY)));
+    if (!this.wasmTerm.scrollToPrompt(delta)) return false;
+    this.scrollToLine(this.wasmTerm.getViewportOffset());
+    return true;
+  }
+
   public scrollToLine(line: number): void {
     const scrollbackLength = this.getScrollbackLength();
     const newViewportY = Math.max(0, Math.min(scrollbackLength, line));

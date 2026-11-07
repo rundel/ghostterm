@@ -20,6 +20,7 @@ import {
   MouseAction,
   MouseButton,
   type MouseEncoder,
+  type SelectionAdjust,
 } from './ghostty';
 import type { IKeyEvent } from './interfaces';
 import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
@@ -28,6 +29,18 @@ import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
  * Map KeyboardEvent.code values to USB HID Key enum values
  * Based on: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
  */
+/** Keys that extend a selection when Shift is held (Ghostty's defaults). */
+const SELECTION_KEYS: Record<string, SelectionAdjust> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  Home: 'home',
+  End: 'end',
+  PageUp: 'page-up',
+  PageDown: 'page-down',
+};
+
 /** GhosttyOptionAsAlt: Option acts as Alt on both sides. */
 const OPTION_AS_ALT_TRUE = 1;
 
@@ -197,6 +210,8 @@ export class InputHandler {
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
   private getModeCallback?: (mode: number) => boolean;
   private getTerminal?: () => GhosttyTerminal | undefined;
+  /** Called after Shift+arrow keys moved the selection. */
+  onSelectionAdjusted?: () => void;
   private keyupListener: ((e: KeyboardEvent) => void) | null = null;
   private focusInListener: ((e: FocusEvent) => void) | null = null;
   private focusOutListener: ((e: FocusEvent) => void) | null = null;
@@ -503,6 +518,18 @@ export class InputHandler {
         event.preventDefault();
       }
       return;
+    }
+
+    // Shift+arrows (and Home/End/PageUp/PageDown) extend an existing
+    // selection, as in Ghostty; without a selection they go to the program.
+    const adjust = SELECTION_KEYS[event.code];
+    if (adjust && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const terminal = this.getTerminal?.();
+      if (terminal?.hasSelection() && terminal.adjustSelection(adjust)) {
+        event.preventDefault();
+        this.onSelectionAdjusted?.();
+        return;
+      }
     }
 
     // Dead keys start a composition; the composed text arrives through

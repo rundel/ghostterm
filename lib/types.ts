@@ -459,6 +459,11 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
     outSelection: number
   ): number;
   ghostty_terminal_select_all(terminal: TerminalHandle, outSelection: number): number;
+  ghostty_terminal_selection_adjust(
+    terminal: TerminalHandle,
+    selectionPtr: number,
+    adjustment: number
+  ): number;
   ghostty_selection_gesture_new(allocator: number, slot: number): number;
   ghostty_selection_gesture_free(gesture: number, terminal: TerminalHandle): void;
   ghostty_selection_gesture_reset(gesture: number, terminal: TerminalHandle): void;
