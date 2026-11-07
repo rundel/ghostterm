@@ -44,6 +44,7 @@ export {
   SelectionAutoscroll,
 } from './ghostty';
 export type {
+  FormatScreenOptions,
   MouseEncoder,
   MouseGeometry,
   SelectionAdjust,
@@ -76,7 +77,7 @@ export type { SelectionCoordinates } from './selection-manager';
 export { FitAddon } from './addons/fit';
 export { SearchAddon } from './addons/search';
 export { SerializeAddon } from './addons/serialize';
-export type { ISerializeOptions, IHTMLSerializeOptions } from './addons/serialize';
+export type { ISerializeOptions, ISerializeRange, IHTMLSerializeOptions } from './addons/serialize';
 export type {
   ISearchOptions,
   ISearchDecorationOptions,

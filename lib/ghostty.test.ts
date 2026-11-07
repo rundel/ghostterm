@@ -1000,6 +1000,57 @@ describe('formatting the screen', () => {
     }
   });
 
+  test('toRow ends the output and scrollback keeps the latest history lines', () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      for (let i = 0; i < 6; i++) term.write(`row ${i}\r\n`);
+      term.write('last');
+      const plain = (o: object) => term.formatScreen({ format: 'plain', trim: true, ...o });
+      expect(plain({ fromRow: 1, toRow: 2 })).toBe('row 1\nrow 2');
+      expect(plain({ toRow: 0 })).toBe('row 0');
+      expect(plain({ fromRow: 3, toRow: 2 })).toBe('');
+      expect(plain({ scrollback: 1 })).toBe('row 3\nrow 4\nrow 5\nlast');
+      expect(plain({ scrollback: 0 })).toBe('row 4\nrow 5\nlast');
+      expect(plain({ scrollback: 1, fromRow: 0 })).toContain('row 0');
+    } finally {
+      term.free();
+    }
+  });
+
+  test("screen: 'primary' reads the normal screen and leaves the alternate one active", () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      for (let i = 0; i < 4; i++) term.write(`row ${i}\r\n`);
+      term.write('\x1b[?1049h\x1b[2;3Happ');
+      term.setSelectionRange(2, 1, 4, 1);
+      const altText = term.formatScreen({ format: 'plain', trim: true });
+      term.getViewport();
+      term.markClean();
+
+      const primary = term.formatScreen({ format: 'plain', trim: true, screen: 'primary' });
+      expect(primary).toBe('row 0\nrow 1\nrow 2\nrow 3');
+      expect(term.formatScreen({ format: 'plain', screen: 'primary', scrollback: 0 })).toBe(
+        'row 2\nrow 3'
+      );
+      expect(term.formatScreen({ format: 'plain', trim: true, screen: 'active' })).toBe(altText);
+
+      expect(term.isAlternateScreen()).toBe(true);
+      expect(term.getMode(47)).toBe(false);
+      expect(term.getMode(1049)).toBe(true);
+      expect(term.getSelectionText()).toBe('app');
+      const row = term.getViewport().slice(20, 40);
+      expect(
+        row
+          .map((c) => String.fromCodePoint(c.codepoint || 32))
+          .join('')
+          .trim()
+      ).toBe('app');
+      expect(term.getCursor()).toMatchObject({ x: 5, y: 1 });
+    } finally {
+      term.free();
+    }
+  });
+
   test('VT extras restore the terminal state they name', () => {
     const term = ghostty.createTerminal(20, 3);
     try {

@@ -23,7 +23,15 @@
 import { FormatterExtras, type GhosttyTerminal } from '../ghostty';
 import type { ITerminalAddon, ITerminalCore } from '../interfaces';
 
+/** Absolute buffer lines (0 = oldest scrollback line), both included. */
+export interface ISerializeRange {
+  start: number;
+  end: number;
+}
+
 export interface ISerializeOptions {
+  /** Only these lines of the normal screen; takes precedence over scrollback. */
+  range?: ISerializeRange;
   /** Keep at most this many lines of scrollback (default: all). */
   scrollback?: number;
   /** Leave out terminal modes (cursor keys, bracketed paste, keyboard protocols, ...). */
@@ -49,11 +57,6 @@ export interface IHTMLSerializeOptions {
 /** What the addon uses from the Terminal. */
 interface SerializableTerminal extends ITerminalCore {
   wasmTerm?: GhosttyTerminal;
-}
-
-/** Mode setter GhosttyTerminal keeps private; see withNormalScreen(). */
-interface ModeSetter {
-  setMode(mode: number, ansi: boolean, value: boolean): void;
 }
 
 /** Mode sets that switch to the alternate screen (47, 1047, 1049). */
@@ -82,21 +85,23 @@ export class SerializeAddon implements ITerminalAddon {
     let extras = DEFAULT_EXTRAS;
     if (options.excludeModes) extras &= ~MODE_EXTRAS;
     if (options.includePalette) extras |= FormatterExtras.PALETTE;
-    const fromRow = this.fromRow(wasmTerm, options.scrollback);
-    if (!wasmTerm.isAlternateScreen()) {
-      return wasmTerm.formatScreen({ format: 'vt', extras, fromRow });
-    }
+    const normal = wasmTerm.formatScreen({
+      format: 'vt',
+      screen: 'primary',
+      extras,
+      scrollback: options.scrollback,
+      fromRow: options.range?.start,
+      toRow: options.range?.end,
+    });
+    if (!wasmTerm.isAlternateScreen()) return normal;
 
-    // libghostty's formatter only reads the active screen, so look at the
-    // normal screen by switching to it and back. Its modes are the terminal's,
-    // which include the switch to the alternate screen; drop that here.
+    // The normal screen's modes are the terminal's, which include the switch
+    // to the alternate screen; drop that here.
+    const primary = normal.replace(ALT_SCREEN_MODES, '');
+    if (options.excludeAltBuffer) return primary;
     const alt = wasmTerm.formatScreen({ format: 'vt', extras });
-    const normal = withNormalScreen(wasmTerm, () =>
-      wasmTerm.formatScreen({ format: 'vt', extras, fromRow })
-    ).replace(ALT_SCREEN_MODES, '');
-    if (options.excludeAltBuffer) return normal;
     // Without modes, the alternate screen part has no switch of its own.
-    return normal + (options.excludeModes ? '\x1b[?1049h' : '') + alt;
+    return primary + (options.excludeModes ? '\x1b[?1049h' : '') + alt;
   }
 
   /** The terminal (or its selection) as HTML with inline styles. */
@@ -106,38 +111,10 @@ export class SerializeAddon implements ITerminalAddon {
     const html = wasmTerm.formatScreen({
       format: 'html',
       onlySelection: options.onlySelection,
-      fromRow: options.onlySelection ? undefined : this.fromRow(wasmTerm, options.scrollback),
+      scrollback: options.scrollback,
     });
     if (!options.includeGlobalBackground) return html;
     const { r, g, b } = wasmTerm.getColors().background;
     return `<div style="background-color: rgb(${r}, ${g}, ${b})">${html}</div>`;
-  }
-
-  /** First absolute row to include for a scrollback limit. */
-  private fromRow(wasmTerm: GhosttyTerminal, scrollback?: number): number | undefined {
-    if (scrollback === undefined) return undefined;
-    const history = wasmTerm.getScrollbackLength();
-    return Math.max(0, history - Math.max(0, scrollback));
-  }
-}
-
-/**
- * Run fn with the normal screen active while the alternate screen is.
- * Mode 47 switches screens without clearing or saving the cursor; afterwards
- * the mode 47 flag and the selection (cleared by a switch) are put back.
- */
-function withNormalScreen<T>(wasmTerm: GhosttyTerminal, fn: () => T): T {
-  const selection = wasmTerm.getSelectionRange();
-  const mode47 = wasmTerm.getMode(47);
-  wasmTerm.write('\x1b[?47l');
-  try {
-    return fn();
-  } finally {
-    wasmTerm.write('\x1b[?47h');
-    if (!mode47) (wasmTerm as unknown as ModeSetter).setMode(47, false, false);
-    if (selection) {
-      const { startCol, startRow, endCol, endRow, rectangle } = selection;
-      wasmTerm.setSelectionRange(startCol, startRow, endCol, endRow, rectangle);
-    }
   }
 }

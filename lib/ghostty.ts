@@ -309,6 +309,25 @@ export interface SelectionRange {
   rectangle: boolean;
 }
 
+/** Options for GhosttyTerminal.formatScreen(). */
+export interface FormatScreenOptions {
+  format: 'plain' | 'vt' | 'html';
+  /** Which screen to format (default: the active one). */
+  screen?: 'active' | 'primary';
+  /** VT only: terminal state to restore (FormatterExtras bits). */
+  extras?: number;
+  unwrap?: boolean;
+  trim?: boolean;
+  /** First absolute row of the screen to include. */
+  fromRow?: number;
+  /** Last absolute row of the screen to include. */
+  toRow?: number;
+  /** Keep at most this many scrollback lines; ignored when fromRow is given. */
+  scrollback?: number;
+  /** Only the terminal's current selection ('' when there is none). */
+  onlySelection?: boolean;
+}
+
 /** Display geometry for selection drags, in CSS pixels. */
 export interface SelectionGeometry {
   columns: number;
@@ -2970,22 +2989,45 @@ export class GhosttyTerminal {
   }
 
   /**
-   * Format the active screen (scrollback included) with libghostty's
-   * formatter: plain text, VT sequences that recreate it when written to
-   * another terminal, or HTML. `fromRow` limits the output to absolute
-   * screen rows from there to the end.
+   * Format a screen (scrollback included) with libghostty's formatter: plain
+   * text, VT sequences that recreate it when written to another terminal, or
+   * HTML. `screen: 'primary'` formats the normal screen even while the
+   * alternate screen is active. `fromRow`/`toRow` (absolute rows of that
+   * screen, both included) or `scrollback` (most recent history lines to keep)
+   * limit the rows.
    */
-  formatScreen(options: {
-    format: 'plain' | 'vt' | 'html';
-    /** VT only: terminal state to restore (FormatterExtras bits). */
-    extras?: number;
-    unwrap?: boolean;
-    trim?: boolean;
-    fromRow?: number;
-    /** Only the terminal's current selection ('' when there is none). */
-    onlySelection?: boolean;
-  }): string {
-    let selectionPtr: number | undefined;
+  formatScreen(options: FormatScreenOptions): string {
+    if (options.screen === 'primary' && this.isAlternateScreen()) {
+      return this.withPrimaryScreen(() => this.formatActiveScreen(options));
+    }
+    return this.formatActiveScreen(options);
+  }
+
+  /**
+   * Run fn with the primary screen active while the alternate screen is.
+   * libghostty's formatter only reads the active screen, and grid references
+   * only reach the active screen, so this switches with mode 47 (no clearing,
+   * no cursor save) and back. The mode 47 flag and the selection, which a
+   * switch clears, are put back afterwards.
+   */
+  private withPrimaryScreen<T>(fn: () => T): T {
+    const selection = this.getSelectionRange();
+    const mode47 = this.getMode(47);
+    this.write('\x1b[?47l');
+    try {
+      return fn();
+    } finally {
+      this.write('\x1b[?47h');
+      if (!mode47) this.setMode(47, false, false);
+      if (selection) {
+        const { startCol, startRow, endCol, endRow, rectangle } = selection;
+        this.setSelectionRange(startCol, startRow, endCol, endRow, rectangle);
+      }
+      this.invalidate();
+    }
+  }
+
+  private formatActiveScreen(options: FormatScreenOptions): string {
     if (options.onlySelection) {
       const sel = this.selScratch;
       if (
@@ -2996,15 +3038,24 @@ export class GhosttyTerminal {
       }
       return this.format({ ...options, selectionPtr: sel });
     }
-    if (options.fromRow !== undefined && options.fromRow > 0) {
-      // A selection from fromRow to the last cell narrows the output.
+    const history = this.getScrollbackLength();
+    const lastRow = history + this._rows - 1;
+    let fromRow = options.fromRow ?? 0;
+    if (options.fromRow === undefined && options.scrollback !== undefined) {
+      fromRow = history - Math.max(0, Math.floor(options.scrollback));
+    }
+    fromRow = Math.max(0, fromRow);
+    const toRow = Math.min(lastRow, options.toRow ?? lastRow);
+    if (fromRow > toRow) return '';
+    let selectionPtr: number | undefined;
+    if (fromRow > 0 || toRow < lastRow) {
+      // A selection over whole rows narrows the output.
       const S = this.L.selection;
       const sel = this.selScratch + 128;
       for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
-      const lastRow = this.getScrollbackLength() + this._rows - 1;
       if (
-        this.gridRef(PointTag.SCREEN, 0, options.fromRow, sel + S.start) &&
-        this.gridRef(PointTag.SCREEN, this._cols - 1, lastRow, sel + S.end)
+        this.gridRef(PointTag.SCREEN, 0, fromRow, sel + S.start) &&
+        this.gridRef(PointTag.SCREEN, this._cols - 1, toRow, sel + S.end)
       ) {
         selectionPtr = sel;
       }

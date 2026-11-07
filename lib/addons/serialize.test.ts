@@ -59,6 +59,12 @@ describe('SerializeAddon', () => {
     expect(restored.wasmTerm!.hasBracketedPaste()).toBe(false);
   });
 
+  test('range keeps only those lines', async () => {
+    const restored = await make();
+    restored.write(serializer.serialize({ range: { start: 3, end: 4 }, excludeModes: true }));
+    expect(text(restored)).toBe('row 3\nrow 4');
+  });
+
   describe('with the alternate screen active', () => {
     let normalText: string;
     let scrollback: number;
@@ -91,6 +97,16 @@ describe('SerializeAddon', () => {
       expect(text(restored)).toBe(text(term));
       restored.write('\x1b[?1049l');
       expect(text(restored)).toBe(normalText);
+    });
+
+    test('scrollback and range limit the normal screen', async () => {
+      const limited = await make();
+      limited.write(serializer.serialize({ scrollback: 1, excludeAltBuffer: true }));
+      expect(text(limited).startsWith('row 2')).toBe(true);
+
+      const ranged = await make();
+      ranged.write(serializer.serialize({ range: { start: 1, end: 2 }, excludeAltBuffer: true }));
+      expect(text(ranged)).toBe('row 1\nrow 2');
     });
 
     test('excludeAltBuffer keeps only the normal screen', async () => {
