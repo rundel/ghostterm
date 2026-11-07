@@ -33,6 +33,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - Without focus the cursor is drawn as a hollow block, as in Ghostty and xterm.js.
 - Programs asking for the terminfo name (XTGETTCAP `TN`) are told `xterm-ghostty`, as Ghostty answers.
 - `clear()` is no longer limited by a scroll region or origin mode the program set, keeps the program's colors and margins, and erases with the default background.
+- `buffer.normal` can be read while a full-screen program uses the alternate screen.
 - `allowTransparency` works as in xterm.js: a theme background with alpha is drawn transparent only when it is true, and opaque otherwise (the default).
 - Underlines, strikethrough and overlines are drawn on whole device pixels and thicken with the font; double underlines show two lines and curly underlines a visible wave.
 - Buffer, selection and search types (`IBuffer`, `IBufferLine`, `IBufferCell`, `IBufferNamespace`, `SelectionRange`, `TerminalSearch`, ...) are exported.

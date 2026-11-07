@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { IBufferCell, IBufferLine } from './interfaces';
 import type { Terminal } from './terminal';
-import { terminalFixture } from './test-helpers';
+import { drawnText, internals, render, terminalFixture } from './test-helpers';
 
 const fixture = terminalFixture();
 let term: Terminal;
@@ -37,18 +37,91 @@ describe('buffers', () => {
     expect(term.buffer.active).toBe(term.buffer.normal);
   });
 
-  test('the inactive buffer is empty instead of showing the active screen', () => {
-    term.write('shell prompt');
+  test('the normal buffer reads the primary screen while the alternate screen is up', () => {
+    for (let i = 0; i < 30; i++) term.write(`history ${i}\r\n`);
+    term.write('\x1b[1mshell\x1b[0m prompt');
     term.write('\x1b[?1049h\x1b[Hfull screen');
     const { normal, alternate } = term.buffer;
+    expect(term.buffer.active).toBe(alternate);
     expect(alternate.getLine(0)?.translateToString(true)).toBe('full screen');
-    expect(normal.length).toBe(0);
-    expect(normal.getLine(0)).toBeUndefined();
+
+    expect(normal.baseY).toBe(7);
+    expect(normal.length).toBe(31);
+    expect(normal.viewportY).toBe(7);
+    expect(normal.getLine(0)?.translateToString(true)).toBe('history 0');
+    expect(normal.getLine(29)?.translateToString(true)).toBe('history 29');
+    expect(normal.getLine(30)?.translateToString(true)).toBe('shell prompt');
+    expect(normal.getLine(30)?.getCell(0)?.isBold()).toBe(1);
+    expect(normal.getLine(31)).toBeUndefined();
+    // Its cursor isn't known (libghostty keeps it as the saved cursor).
+    expect([normal.cursorX, normal.cursorY]).toEqual([0, 0]);
+
+    // A write may change the primary screen (here, by leaving and coming back).
+    term.write('\x1b[?1049l\r\nmore\x1b[?1049h');
+    expect(normal.getLine(31)?.translateToString(true)).toBe('more');
 
     term.write('\x1b[?1049l');
-    expect(normal.getLine(0)?.translateToString(true)).toBe('shell prompt');
+    expect(normal.getLine(31)?.translateToString(true)).toBe('more');
+    // The alternate buffer is empty while the normal screen is active, as in xterm.js.
     expect(alternate.length).toBe(0);
     expect(alternate.getLine(0)).toBeUndefined();
+  });
+
+  test('reading the normal buffer during the alternate screen leaves no trace', () => {
+    const { term: t, sent } = fixture.open({ cols: 20, rows: 5 });
+    for (let i = 0; i < 10; i++) t.write(`line ${i}\r\n`);
+    t.write('\x1b[?1049h\x1b[?1h\x1b[>1u\x1b[Hfull\r\nscreen\x1b[2;3H');
+    t.select(0, 1, 6);
+    const { renderer } = internals(t);
+    render(t);
+    const before = {
+      text: [0, 1].map((y) => t.buffer.active.getLine(y)?.translateToString(true)),
+      cursor: [t.buffer.active.cursorX, t.buffer.active.cursorY],
+      selection: t.getSelectionPosition(),
+      modes: [47, 1047, 1049, 1].map((m) => t.getMode(m)),
+      viewport: t.getViewportY(),
+    };
+
+    // Nothing is dirty, so a frame after the read draws nothing.
+    expect(t.buffer.normal.getLine(3)?.translateToString(true)).toBe('line 3');
+    expect(renderer.render(t.wasmTerm!, false, 0)).toBeNull();
+
+    // Rows that were dirty before the read are drawn after it, and only those.
+    const output = '\x1b[4;1Hdirty\x1b[2;3H';
+    t.write(output);
+    const drawn = renderer.render(t.wasmTerm!, false, 0);
+    expect(drawn).not.toBeNull();
+    t.write(output);
+    expect(t.buffer.normal.getLine(9)?.translateToString(true)).toBe('line 9');
+    expect(renderer.render(t.wasmTerm!, false, 0)).toEqual(drawn);
+
+    expect({
+      text: [0, 1].map((y) => t.buffer.active.getLine(y)?.translateToString(true)),
+      cursor: [t.buffer.active.cursorX, t.buffer.active.cursorY],
+      selection: t.getSelectionPosition(),
+      modes: [47, 1047, 1049, 1].map((m) => t.getMode(m)),
+      viewport: t.getViewportY(),
+    }).toEqual(before);
+    expect(t.buffer.active).toBe(t.buffer.alternate);
+    // The Kitty keyboard flags of the alternate screen still apply.
+    t.write('\x1b[?u');
+    expect(sent).toEqual(['\x1b[?1u']);
+    // Leaving the alternate screen restores the primary screen's cursor as usual.
+    t.write('\x1b[?1049l');
+    expect([t.buffer.active.cursorX, t.buffer.active.cursorY]).toEqual([0, 4]);
+  });
+
+  test('reading the normal buffer keeps a frame held by synchronized output', () => {
+    const { term: t } = fixture.open({ cols: 20, rows: 5 });
+    t.write('primary\x1b[?1049h\x1b[Hshown');
+    render(t);
+    t.write('\x1b[?2026h\x1b[Hhidden');
+    expect(t.buffer.normal.getLine(0)?.translateToString(true)).toBe('primary');
+    const text = drawnText(t)
+      .filter((d) => d.row === 0)
+      .map((d) => d.text)
+      .join('');
+    expect(text).toBe('shown');
   });
 
   test('cursor position, including the pending wrap at the last column', () => {

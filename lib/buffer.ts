@@ -16,7 +16,7 @@
  */
 
 import { EventEmitter } from './event-emitter';
-import type { GhosttyTerminal } from './ghostty';
+import type { GhosttyTerminal, PrimaryScreen } from './ghostty';
 import { CellFlags } from './ghostty';
 import type { IBuffer, IBufferCell, IBufferLine, IBufferNamespace, IEvent } from './interfaces';
 import type { Terminal } from './terminal';
@@ -84,9 +84,11 @@ export class BufferNamespace implements IBufferNamespace {
 // ============================================================================
 
 /**
- * A terminal buffer (normal or alternate screen). libghostty gives access to
- * the active screen only, so the inactive buffer reads as empty (length 0, no
- * lines) until the program switches to it.
+ * A terminal buffer (normal or alternate screen). While the alternate screen
+ * is active the normal buffer reads the primary screen's lines through the
+ * bridge (primaryScreen()); its cursor reads as 0, 0 then. The alternate
+ * buffer reads as empty (length 0, no lines) while the normal screen is
+ * active, as in xterm.js.
  */
 export class Buffer implements IBuffer {
   private terminal: Terminal;
@@ -114,6 +116,8 @@ export class Buffer implements IBuffer {
 
   /** Line index of the top of the viewport (xterm.js semantics). */
   get viewportY(): number {
+    const primary = this.inactivePrimary();
+    if (primary) return primary.scrollback;
     if (!this.activeTerm()) return 0;
     const offset = Math.max(0, Math.floor(this.terminal.viewportY ?? 0));
     return Math.max(0, this.baseY - offset);
@@ -121,18 +125,27 @@ export class Buffer implements IBuffer {
 
   /** Line index of the top of the active area: the scrollback length. */
   get baseY(): number {
+    const primary = this.inactivePrimary();
+    if (primary) return primary.scrollback;
     const wasmTerm = this.activeTerm();
     if (!wasmTerm || this.bufferType === 'alternate') return 0;
     return wasmTerm.getScrollbackLength();
   }
 
   get length(): number {
+    const primary = this.inactivePrimary();
+    if (primary) return primary.length;
     const wasmTerm = this.activeTerm();
     if (!wasmTerm) return 0;
     return this.baseY + wasmTerm.rows;
   }
 
   getLine(y: number): IBufferLine | undefined {
+    const primary = this.inactivePrimary();
+    if (primary) {
+      const line = primary.line(y);
+      return line ? new BufferLine(line.cells, line.wrapped, this.terminal.cols) : undefined;
+    }
     const wasmTerm = this.activeTerm();
     if (!wasmTerm) return undefined;
 
@@ -152,6 +165,12 @@ export class Buffer implements IBuffer {
 
   getNullCell(): IBufferCell {
     return this.nullCell;
+  }
+
+  /** The primary screen, when this is the normal buffer and the alternate screen is active. */
+  private inactivePrimary(): PrimaryScreen | null {
+    if (this.bufferType !== 'normal') return null;
+    return this.terminal.wasmTerm?.primaryScreen() ?? null;
   }
 
   /** The terminal, when this buffer is the screen it is showing. */

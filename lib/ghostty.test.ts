@@ -1059,6 +1059,43 @@ function frame(t: GhosttyTerminal) {
 }
 
 describe('screen conformance: alternate screen', () => {
+  test.each([47, 1047, 1049])(
+    'reading the primary screen during mode %i changes nothing leaving it restores',
+    (mode) => {
+      const result = (read: boolean) => {
+        const t = fixture.wasm(20, 5);
+        t.write(`a\r\nb\x1b[31mc\x1b[?${mode}h\x1b[3;7H\x1b[0;1mX`);
+        if (read) {
+          const primary = t.primaryScreen()!;
+          expect(primary.line(1)?.cells.map((c) => c.codepoint)[1]).toBe('c'.codePointAt(0));
+        }
+        t.write(`\x1b[?${mode}lY`);
+        const cells = [0, 1, 2].flatMap((y) => t.getLine(y)!);
+        return {
+          cursor: [t.getCursor().x, t.getCursor().y],
+          cells: cells.map((c) => [c.codepoint, c.flags, c.fg_r, c.fg_g, c.fg_b]),
+        };
+      };
+      expect(result(true)).toEqual(result(false));
+    }
+  );
+
+  test('the primary screen is only read while the alternate screen is active', () => {
+    const t = fixture.wasm(20, 5);
+    t.write('primary');
+    expect(t.primaryScreen()).toBeNull();
+    t.write('\x1b[?1049h');
+    const primary = t.primaryScreen()!;
+    expect(t.primaryScreen()).toBe(primary);
+    expect(primary.length).toBe(5);
+    expect(primary.line(5)).toBeNull();
+    // Writes, resizes and resets read it again.
+    t.write('x');
+    expect(t.primaryScreen()).not.toBe(primary);
+    t.resize(30, 5);
+    expect(t.primaryScreen()!.line(0)?.cells).toHaveLength(30);
+  });
+
   test('every switch asks for a full redraw until the frame is drawn', () => {
     const t = fixture.wasm(80, 24);
     t.write('Initial content\r\n');

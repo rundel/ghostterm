@@ -145,7 +145,7 @@ These follow Ghostty rather than xterm.js:
 
 Other differences from xterm.js:
 
-- `buffer.normal` and `buffer.alternate`: libghostty exposes only the active screen, so the inactive buffer reads as empty (length 0) until the program switches to it.
+- `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
 
 ## Development
 

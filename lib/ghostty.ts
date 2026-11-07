@@ -332,6 +332,16 @@ export interface FormatScreenOptions {
   onlySelection?: boolean;
 }
 
+/** The inactive primary screen, read while the alternate screen is active. */
+export interface PrimaryScreen {
+  /** Rows of history above its active area. */
+  scrollback: number;
+  /** Rows in all: scrollback and active area. */
+  length: number;
+  /** A line by absolute row (0 = oldest scrollback row), or null outside the screen. */
+  line(row: number): { cells: GhosttyCell[]; wrapped: boolean } | null;
+}
+
 /** Display geometry for selection drags, in CSS pixels. */
 export interface SelectionGeometry {
   columns: number;
@@ -1483,6 +1493,8 @@ export class MouseEncoder {
 
 /** Size of the per-terminal scratch area for out-parameters. */
 const SCRATCH_SIZE = 2048;
+/** Rows of the inactive primary screen read per screen switch (primaryScreen()). */
+const PRIMARY_BLOCK_ROWS = 64;
 /** The render state's own default colors, used when setColors() leaves one out. */
 const DEFAULT_FOREGROUND = 0xffffff;
 const DEFAULT_BACKGROUND = 0x000000;
@@ -1989,6 +2001,7 @@ export class GhosttyTerminal {
     this.mem.view().setUint32(this.scratch, Math.min(scrollback, SIZE_MAX), true);
     ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, this.scratch);
     this.pendingUpdate = true;
+    this.primary = null;
   }
 
   /**
@@ -2044,6 +2057,7 @@ export class GhosttyTerminal {
     this.mem.bytes().set(bytes, ptr);
     this.exports.ghostty_terminal_vt_write(this.handle, ptr, bytes.length);
     this.pendingUpdate = true;
+    this.primary = null;
     this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
 
@@ -2091,6 +2105,7 @@ export class GhosttyTerminal {
       this.cellPx.height
     );
     this.pendingUpdate = true;
+    this.primary = null;
     this.atBottom = this.getViewportOffset() === 0;
     this.rowDirty = new Uint8Array(rows).fill(1);
     this.rowStale = new Uint8Array(rows).fill(1);
@@ -2273,6 +2288,7 @@ export class GhosttyTerminal {
    */
   reset(): void {
     this.exports.ghostty_terminal_reset(this.handle);
+    this.primary = null;
     this.holdStarted = null;
     this.responses = [];
     this.atBottom = true;
@@ -3103,6 +3119,68 @@ export class GhosttyTerminal {
       return this.withPrimaryScreen(() => this.formatActiveScreen(options));
     }
     return this.formatActiveScreen(options);
+  }
+
+  /** What primaryScreen() read, until the terminal changes (write, resize, reset). */
+  private primary: PrimaryScreen | null = null;
+
+  /**
+   * The primary screen while the alternate screen is active (null otherwise), for
+   * buffer.normal: its size, and its lines read on demand, a block at a time. Its cursor isn't
+   * known: switching screens with mode 47 moves it, and 1049 keeps it as the saved cursor. Each
+   * read switches screens and back (withPrimaryScreen) without visible effects: the render
+   * state, its dirty state, the selection and the viewport stay as they were. Kept until the
+   * terminal changes.
+   */
+  primaryScreen(): PrimaryScreen | null {
+    if (!this.isAlternateScreen()) return null;
+    if (this.primary) return this.primary;
+    const lines = new Map<number, { cells: GhosttyCell[]; wrapped: boolean }>();
+    const scrollback = this.readPrimary(() => this.getScrollbackLength());
+    const length = scrollback + this._rows;
+    const snapshot: PrimaryScreen = {
+      scrollback,
+      length,
+      line: (row) => {
+        if (row < 0 || row >= length) return null;
+        if (!lines.has(row) && this.primary === snapshot) {
+          const start = row - (row % PRIMARY_BLOCK_ROWS);
+          this.readPrimary(() => {
+            for (let y = start; y < Math.min(length, start + PRIMARY_BLOCK_ROWS); y++) {
+              const cells = this.getScreenLine(y);
+              if (cells) lines.set(y, { cells, wrapped: this.isScreenRowWrapped(y) });
+            }
+          });
+        }
+        return lines.get(row) ?? null;
+      },
+    };
+    this.primary = snapshot;
+    return snapshot;
+  }
+
+  /**
+   * Run fn on the primary screen (withPrimaryScreen), leaving no trace: the render state isn't
+   * refreshed from the primary screen, and the dirty state the switches cause is dropped (what
+   * was dirty before is kept), unless a render hold keeps the render state as it is.
+   */
+  private readPrimary<T>(fn: () => T): T {
+    if (this.pendingUpdate) this.update();
+    this.loadColors();
+    const primary = this.primary;
+    try {
+      return this.withPrimaryScreen(() => {
+        this.pendingUpdate = false;
+        return fn();
+      });
+    } finally {
+      this.primary = primary;
+      if (!this.isRenderHeld()) {
+        this.exports.ghostty_render_state_update(this.renderState, this.handle);
+        this.exports.ghostty_render_state_clean(this.renderState);
+        this.pendingUpdate = false;
+      }
+    }
   }
 
   /**
