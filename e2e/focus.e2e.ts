@@ -17,42 +17,48 @@ test.beforeEach(async ({ page }) => {
   await openFixture(page);
 });
 
-test('clicking the canvas focuses the textarea and typing sends the text', async ({ page }) => {
-  await page.locator('#before').focus();
-  const p = cellPoint(await geometry(page), 5, 2);
-  await page.mouse.click(p.x, p.y);
-  expect(await page.evaluate(textareaFocused)).toBe(true);
+test(
+  'clicking the canvas focuses the textarea and typing sends the text',
+  { tag: '@cross' },
+  async ({ page }) => {
+    await page.locator('#before').focus();
+    const p = cellPoint(await geometry(page), 5, 2);
+    await page.mouse.click(p.x, p.y);
+    expect(await page.evaluate(textareaFocused)).toBe(true);
 
-  await page.keyboard.type('ls -la');
-  await page.keyboard.press('Enter');
-  expect(await sent(page)).toBe('ls -la\r');
-});
+    await page.keyboard.type('ls -la');
+    await page.keyboard.press('Enter');
+    expect(await sent(page)).toBe('ls -la\r');
+  }
+);
 
-test('Tab or a click on the padding reaches the textarea, not the editable parent', async ({
-  page,
-}) => {
-  await page.locator('#before').focus();
-  await page.keyboard.press('Tab');
-  expect(await page.evaluate(textareaFocused)).toBe(true);
-  await page.keyboard.type('ab');
-  await page.keyboard.press('Enter');
+test(
+  'Tab or a click on the padding reaches the textarea, not the editable parent',
+  { tag: '@cross' },
+  async ({ page }) => {
+    await page.locator('#before').focus();
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(textareaFocused)).toBe(true);
+    await page.keyboard.type('ab');
+    await page.keyboard.press('Enter');
 
-  // The parent's padding is outside the canvas: the parent itself gets the click.
-  await page.locator('#before').focus();
-  const box = (await page.locator('#terminal').boundingBox())!;
-  await page.mouse.click(box.x + 3, box.y + 3);
-  expect(await page.evaluate(textareaFocused)).toBe(true);
-  await page.keyboard.type('cd');
+    // The parent's padding is outside the canvas: the parent itself gets the click.
+    await page.locator('#before').focus();
+    const box = (await page.locator('#terminal').boundingBox())!;
+    await page.mouse.click(box.x + 3, box.y + 3);
+    expect(await page.evaluate(textareaFocused)).toBe(true);
+    await page.keyboard.type('cd');
 
-  // Focus given to the parent from script is passed on too.
-  await page.locator('#before').focus();
-  await page.evaluate(() => window.term.element!.focus());
-  expect(await page.evaluate(textareaFocused)).toBe(true);
-  await page.keyboard.type('e');
+    // Focus given to the parent from script is passed on too.
+    await page.locator('#before').focus();
+    await page.evaluate(() => window.term.element!.focus());
+    expect(await page.evaluate(textareaFocused)).toBe(true);
+    await page.keyboard.type('e');
 
-  expect(await sent(page)).toBe('ab\rcde');
-  expect(await page.evaluate(strayText)).toEqual({ text: '', children: ['CANVAS', 'TEXTAREA'] });
-});
+    expect(await sent(page)).toBe('ab\rcde');
+    expect(await page.evaluate(strayText)).toEqual({ text: '', children: ['CANVAS', 'TEXTAREA'] });
+  }
+);
 
 test('text dropped onto the terminal is neither sent nor inserted', async ({ page }) => {
   // Watch the browser's own editing of the parent: it asks with a beforeinput first.

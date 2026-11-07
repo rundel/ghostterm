@@ -15,8 +15,14 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'retain-on-failure',
   },
-  // More browsers can be added here; specs that rely on Chromium-only features (CDP) skip others.
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Chromium runs every spec. Firefox and WebKit run only tests tagged @cross: the ones whose
+  // behavior differs between browsers (clipboard, keyboard, wheel, focus, selection basics).
+  // Specs that rely on the Chrome DevTools Protocol stay untagged.
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] }, grep: /@cross/ },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] }, grep: /@cross/ },
+  ],
   webServer: {
     command: `bunx vite --config e2e/vite.config.js --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}/e2e/fixture.html`,

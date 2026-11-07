@@ -30,7 +30,7 @@
     "release": "bun scripts/release.ts",
     "test": "bun test",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install chromium",
+    "test:e2e:install": "playwright install chromium firefox webkit",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "fmt": "prettier --check .",
     "fmt:fix": "prettier --write --cache .",

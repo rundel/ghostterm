@@ -34,7 +34,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: ./scripts/fetch-wasm.sh
-      - run: bunx playwright install --with-deps chromium
+      - run: bunx playwright install --with-deps chromium firefox webkit
       - run: bun run test:e2e
 
       - if: failure()
