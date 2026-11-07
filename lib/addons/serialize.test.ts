@@ -62,6 +62,27 @@ describe('SerializeAddon', () => {
     expect(text(restored)).toBe('row 3\nrow 4');
   });
 
+  test('range takes markers', () => {
+    // The cursor is on line 6 (the 'green link' row).
+    const start = term.registerMarker(-4);
+    const end = term.registerMarker(-3);
+    expect([start.line, end.line]).toEqual([2, 3]);
+    term.write('\r\nmore\r\nmore');
+    const restored = make();
+    restored.write(serializer.serialize({ range: { start, end }, excludeModes: true }));
+    expect(text(restored)).toBe('row 2\nrow 3');
+    // A marker may be mixed with a number.
+    const mixed = make();
+    mixed.write(serializer.serialize({ range: { start: 1, end }, excludeModes: true }));
+    expect(text(mixed)).toBe('row 1\nrow 2\nrow 3');
+  });
+
+  test('a range with a disposed marker serializes nothing', () => {
+    const start = term.registerMarker(-1);
+    start.dispose();
+    expect(serializer.serialize({ range: { start, end: 4 } })).toBe('');
+  });
+
   describe('with the alternate screen active', () => {
     let normalText: string;
     let scrollback: number;

@@ -21,12 +21,16 @@
  */
 
 import { FormatterExtras } from '../ghostty';
-import type { IAddonTerminal, ITerminalAddon, ITerminalCore } from '../interfaces';
+import type { IAddonTerminal, IMarker, ITerminalAddon, ITerminalCore } from '../interfaces';
 
-/** Absolute buffer lines (0 = oldest scrollback line), both included. */
+/**
+ * Lines to serialize, both included: absolute buffer lines (0 = oldest
+ * scrollback line) or markers on them (term.registerMarker()), as in
+ * xterm.js. A range with a disposed marker serializes nothing.
+ */
 export interface ISerializeRange {
-  start: number;
-  end: number;
+  start: IMarker | number;
+  end: IMarker | number;
 }
 
 export interface ISerializeOptions {
@@ -81,13 +85,18 @@ export class SerializeAddon implements ITerminalAddon {
     let extras = DEFAULT_EXTRAS;
     if (options.excludeModes) extras &= ~MODE_EXTRAS;
     if (options.includePalette) extras |= FormatterExtras.PALETTE;
+    const lineOf = (end: IMarker | number | undefined) =>
+      typeof end === 'object' ? (end.isDisposed ? -1 : end.line) : end;
+    const fromRow = lineOf(options.range?.start);
+    const toRow = lineOf(options.range?.end);
+    if (fromRow === -1 || toRow === -1) return '';
     const normal = wasmTerm.formatScreen({
       format: 'vt',
       screen: 'primary',
       extras,
       scrollback: options.scrollback,
-      fromRow: options.range?.start,
-      toRow: options.range?.end,
+      fromRow,
+      toRow,
     });
     if (!wasmTerm.isAlternateScreen()) return normal;
 

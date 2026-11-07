@@ -102,7 +102,7 @@ newTerm.write(saved);
 const html = serializer.serializeAsHTML({ onlySelection: true });
 ```
 
-`SearchAddon` follows [`@xterm/addon-search`](https://www.npmjs.com/package/@xterm/addon-search) and `SerializeAddon` follows [`@xterm/addon-serialize`](https://www.npmjs.com/package/@xterm/addon-serialize). While a full-screen program has the alternate screen up, `serialize()` saves the normal screen and its scrollback first, then the alternate screen, so leaving the program after a restore shows the shell again; `excludeAltBuffer: true` keeps only the normal screen.
+`SearchAddon` follows [`@xterm/addon-search`](https://www.npmjs.com/package/@xterm/addon-search) and `SerializeAddon` follows [`@xterm/addon-serialize`](https://www.npmjs.com/package/@xterm/addon-serialize). While a full-screen program has the alternate screen up, `serialize()` saves the normal screen and its scrollback first, then the alternate screen, so leaving the program after a restore shows the shell again; `excludeAltBuffer: true` keeps only the normal screen. `range: { start, end }` limits it to those lines, given as buffer lines or as markers (see [Markers and decorations](#markers-and-decorations)).
 
 Some xterm.js addons aren't needed: links (OSC 8 hyperlinks and plain URLs) are detected without `@xterm/addon-web-links`, character widths come from libghostty rather than `@xterm/addon-unicode11`, and OSC 52 clipboard writes arrive through `onClipboardWrite` instead of `@xterm/addon-clipboard`.
 

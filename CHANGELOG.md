@@ -12,6 +12,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - `unicode` follows xterm.js's `IUnicodeHandling` and reports libghostty's Unicode version (18) instead of a fixed 15.1; `IUnicodeVersionProvider` is now xterm.js's provider type.
 - `parser.registerOscHandler()` sees and can consume any OSC sequence; the CSI, DCS and ESC registrations are accepted but not called.
 - SearchAddon supports the `regex`, `wholeWord` and `caseSensitive` options.
+- SerializeAddon's `range` accepts markers, as in xterm.js.
 - `attachCustomKeyEventHandler` and `attachCustomWheelEventHandler` follow xterm.js: returning false stops the terminal handling the event. The key handler also runs for keyup, and the wheel handler also sees wheel events reported to a program.
 - `onKey` reports the data sent for the key (`"\r"` for Enter) and fires only when something is sent.
 - `select()`, `selectLines()`, `getSelectionPosition()` and `scrollToLine()` use buffer rows including the scrollback, and `onScroll` reports the top line, as in xterm.js. The end column of `getSelectionPosition()` is exclusive.
