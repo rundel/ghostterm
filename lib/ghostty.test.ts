@@ -239,9 +239,9 @@ describe('viewport cells', () => {
       const fillText = renderer.ctx.fillText;
       renderer.ctx.fillText = (s: string) => drawn.push(s);
       try {
-        renderer.render(term.wasmTerm, true, 0, term);
+        renderer.render(term.wasmTerm, true, 0);
         expect(drawn).not.toContain(family);
-        renderer.render(term.wasmTerm, true, 2, term); // the cluster's row scrolled into view
+        renderer.render(term.wasmTerm, true, 2); // the cluster's row scrolled into view
         expect(drawn).toContain(family);
       } finally {
         renderer.ctx.fillText = fillText;

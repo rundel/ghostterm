@@ -139,7 +139,7 @@ describe('SearchAddon', () => {
       decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
     });
     const renderer = (term as any).renderer;
-    renderer.render(term.wasmTerm, true, term.viewportY, term);
+    renderer.render(term.wasmTerm, true, term.viewportY);
     const rows = renderer.highlightRows as Map<
       number,
       { start: number; end: number; color: string }[]
@@ -150,7 +150,7 @@ describe('SearchAddon', () => {
     expect(all.filter((r) => r.color === '#ff8800')).toHaveLength(1);
 
     search.clearDecorations();
-    renderer.render(term.wasmTerm, true, term.viewportY, term);
+    renderer.render(term.wasmTerm, true, term.viewportY);
     expect(renderer.highlightRows.size).toBe(0);
   });
 
@@ -187,7 +187,7 @@ describe('SearchAddon active match', () => {
       return fillText.call(ctx, t, x, y);
     };
     try {
-      renderer.render(term.wasmTerm, true, term.viewportY, term);
+      renderer.render(term.wasmTerm, true, term.viewportY);
     } finally {
       ctx.fillRect = fillRect;
       ctx.fillText = fillText;
