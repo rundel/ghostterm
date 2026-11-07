@@ -2,16 +2,23 @@
  * Cut a release: bun run release <version> [--push]
  *
  * A plain version (0.2.0) becomes a GitHub release; one with a suffix (0.2.0-rc.1) becomes a
- * prerelease. The script checks the version, the working tree and that CHANGELOG.md has entries under
- * Unreleased, runs the checks and the build, sets the version in package.json, moves the Unreleased entries under the
- * version (a release only; see scripts/changelog.ts), commits and creates the tag. Pushing the tag starts .github/workflows/release.yml,
- * which builds and publishes the GitHub release. Without --push it prints the push command instead.
+ * prerelease. The script checks the version, the working tree and that CHANGELOG.md has entries
+ * under Unreleased, runs the checks and the build, sets the version in package.json, moves the
+ * Unreleased entries under the version (a release only; see scripts/changelog.ts), commits and
+ * creates the tag. Pushing the tag starts .github/workflows/release.yml, which builds and
+ * publishes the GitHub release. Without --push it prints the push command instead.
+ *
+ * `release()` does the work through injected `ReleaseDeps` (commands, files, date, output), so
+ * scripts/release.test.ts can run it against a scripted git without a repository or a remote.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { CHANGELOG, cutRelease, unreleasedNotes } from './changelog';
 
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+/** The package scripts a release runs, in order, before it changes anything. */
+export const CHECKS = ['fmt', 'lint', 'typecheck', 'test', 'build'] as const;
 
 /** Why `next` can't be released given the existing tags, or null if it can. */
 export function versionProblem(next: string, tags: string[]): string | null {
@@ -29,59 +36,103 @@ export function isPrerelease(version: string): boolean {
   return version.includes('-');
 }
 
-function run(cmd: string[], quiet = false): string {
-  const proc = Bun.spawnSync(cmd, { stdout: quiet ? 'pipe' : 'inherit', stderr: 'inherit' });
-  if (proc.exitCode !== 0) throw new Error(`${cmd.join(' ')} failed`);
-  return quiet ? (proc.stdout?.toString() ?? '').trim() : '';
+/** A release that can't go ahead; main() prints the message and exits with status 1. */
+export class ReleaseError extends Error {}
+
+export interface ReleaseArgs {
+  version: string;
+  push: boolean;
 }
 
-function fail(message: string): never {
-  console.error(`❌ ${message}`);
-  process.exit(1);
+/** The version and --push flag from the command line. */
+export function parseArgs(argv: string[]): ReleaseArgs {
+  const version = argv.find((a) => !a.startsWith('--'));
+  if (!version) throw new ReleaseError('Usage: bun run release <version> [--push]');
+  return { version, push: argv.includes('--push') };
 }
 
-function main(): void {
-  const args = process.argv.slice(2);
-  const push = args.includes('--push');
-  const version = args.find((a) => !a.startsWith('--'));
-  if (!version) fail('Usage: bun run release <version> [--push]');
+export interface ReleaseDeps {
+  /** Run a command with its output shown; throws if it fails. */
+  run(cmd: string[]): void;
+  /** Run a command and return its trimmed stdout; throws if it fails. */
+  read(cmd: string[]): string;
+  readFile(path: string): string;
+  writeFile(path: string, text: string): void;
+  /** Today's date as YYYY-MM-DD. */
+  today(): string;
+  log(message: string): void;
+}
 
-  if (run(['git', 'status', '--porcelain'], true)) fail('The working tree has uncommitted changes');
-  if (run(['git', 'branch', '--show-current'], true) !== 'main') fail('Releases are cut from main');
-  run(['git', 'fetch', '--quiet', '--tags', 'origin']);
-  if (run(['git', 'rev-parse', 'HEAD'], true) !== run(['git', 'rev-parse', 'origin/main'], true)) {
-    fail('main is not the same as origin/main; pull or push first');
+/**
+ * Why the repository isn't ready to release `version`, or null: the tree must be clean, on main,
+ * equal to origin/main after fetching its tags, and the version newer than every v* tag.
+ */
+export function repoProblem(deps: ReleaseDeps, version: string): string | null {
+  if (deps.read(['git', 'status', '--porcelain']))
+    return 'The working tree has uncommitted changes';
+  if (deps.read(['git', 'branch', '--show-current']) !== 'main')
+    return 'Releases are cut from main';
+  deps.run(['git', 'fetch', '--quiet', '--tags', 'origin']);
+  if (deps.read(['git', 'rev-parse', 'HEAD']) !== deps.read(['git', 'rev-parse', 'origin/main'])) {
+    return 'main is not the same as origin/main; pull or push first';
+  }
+  return versionProblem(version, deps.read(['git', 'tag', '--list']).split('\n'));
+}
+
+/** Check, build, then commit and tag `version` (and push it with `push`). */
+export function release({ version, push }: ReleaseArgs, deps: ReleaseDeps): void {
+  const problem = repoProblem(deps, version);
+  if (problem) throw new ReleaseError(problem);
+
+  const changelog = deps.readFile(CHANGELOG);
+  if (!unreleasedNotes(changelog)) {
+    throw new ReleaseError(`Add the changes to ${CHANGELOG} under "## Unreleased" first`);
   }
 
-  const problem = versionProblem(version, run(['git', 'tag', '--list'], true).split('\n'));
-  if (problem) fail(problem);
+  for (const script of CHECKS) deps.run(['bun', 'run', script]);
 
-  const changelog = readFileSync(CHANGELOG, 'utf8');
-  if (!unreleasedNotes(changelog))
-    fail(`Add the changes to ${CHANGELOG} under "## Unreleased" first`);
-
-  for (const script of ['fmt', 'lint', 'typecheck', 'test', 'build']) run(['bun', 'run', script]);
-
-  const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+  const pkg = JSON.parse(deps.readFile('package.json'));
   pkg.version = version;
-  writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
+  deps.writeFile('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
   if (!isPrerelease(version)) {
-    const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
-    writeFileSync(CHANGELOG, cutRelease(changelog, version, today));
+    deps.writeFile(CHANGELOG, cutRelease(changelog, version, deps.today()));
   }
 
   const tag = `v${version}`;
-  run(['git', 'commit', '--quiet', '-m', `Release ${tag}`, 'package.json', CHANGELOG]);
-  run(['git', 'tag', '-a', tag, '-m', tag]);
+  deps.run(['git', 'commit', '--quiet', '-m', `Release ${tag}`, 'package.json', CHANGELOG]);
+  deps.run(['git', 'tag', '-a', tag, '-m', tag]);
   const kind = isPrerelease(version) ? 'prerelease' : 'release';
-  console.log(`✅ Tagged ${tag} (${kind}, libghostty-vt ${pkg['libghostty-vt']})`);
+  deps.log(`✅ Tagged ${tag} (${kind}, libghostty-vt ${pkg['libghostty-vt']})`);
 
   if (push) {
-    run(['git', 'push', '--atomic', 'origin', 'main', tag]);
-    console.log('🚀 Pushed; .github/workflows/release.yml will publish it');
+    deps.run(['git', 'push', '--atomic', 'origin', 'main', tag]);
+    deps.log('🚀 Pushed; .github/workflows/release.yml will publish it');
   } else {
-    console.log(`Push to publish: git push --atomic origin main ${tag}`);
+    deps.log(`Push to publish: git push --atomic origin main ${tag}`);
   }
 }
 
-if (import.meta.main) main();
+function spawn(cmd: string[], quiet: boolean): string {
+  const proc = Bun.spawnSync(cmd, { stdout: quiet ? 'pipe' : 'inherit', stderr: 'inherit' });
+  if (proc.exitCode !== 0) throw new ReleaseError(`${cmd.join(' ')} failed`);
+  return quiet ? (proc.stdout?.toString() ?? '').trim() : '';
+}
+
+/** The real commands, files and clock. */
+export const systemDeps: ReleaseDeps = {
+  run: (cmd) => void spawn(cmd, false),
+  read: (cmd) => spawn(cmd, true),
+  readFile: (path) => readFileSync(path, 'utf8'),
+  writeFile: (path, text) => writeFileSync(path, text),
+  today: () => new Date().toLocaleDateString('en-CA'), // YYYY-MM-DD, local time
+  log: (message) => console.log(message),
+};
+
+if (import.meta.main) {
+  try {
+    release(parseArgs(process.argv.slice(2)), systemDeps);
+  } catch (error) {
+    console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}

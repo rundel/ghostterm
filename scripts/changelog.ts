@@ -67,16 +67,28 @@ export function releaseNotes(changelog: string, version: string): string {
   return notes;
 }
 
-if (import.meta.main) {
-  const [command, version] = process.argv.slice(2);
+export interface CliResult {
+  code: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+/** `notes <version>`: what the command prints and its exit status. */
+export function cli(argv: string[], readChangelog: () => string): CliResult {
+  const [command, version] = argv;
   if (command !== 'notes' || !version) {
-    console.error('Usage: bun scripts/changelog.ts notes <version>');
-    process.exit(1);
+    return { code: 1, stderr: 'Usage: bun scripts/changelog.ts notes <version>' };
   }
   try {
-    console.log(releaseNotes(readFileSync(CHANGELOG, 'utf8'), version));
+    return { code: 0, stdout: releaseNotes(readChangelog(), version) };
   } catch (error) {
-    console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    return { code: 1, stderr: `❌ ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+if (import.meta.main) {
+  const result = cli(process.argv.slice(2), () => readFileSync(CHANGELOG, 'utf8'));
+  if (result.stdout !== undefined) console.log(result.stdout);
+  if (result.stderr !== undefined) console.error(result.stderr);
+  if (result.code !== 0) process.exit(result.code);
 }
