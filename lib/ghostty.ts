@@ -61,6 +61,7 @@ const TerminalData = {
   CURSOR_Y: 4,
   ACTIVE_SCREEN: 6,
   MOUSE_TRACKING: 11,
+  SCROLLBAR: 9,
   SCROLLBACK_ROWS: 15,
   COLOR_PALETTE_DEFAULT: 25,
   MODE: 37,
@@ -91,6 +92,11 @@ const PointTag = {
 } as const;
 
 const ROW_DATA_WRAP_CONTINUATION = 2;
+
+const ScrollViewport = {
+  BOTTOM: 1,
+  ROW: 3,
+} as const;
 const SIZE_MAX = 0xffffffff;
 const SCREEN_ALTERNATE = 1;
 
@@ -618,6 +624,9 @@ export class GhosttyTerminal {
   private bgDefault: RGB = { r: 0, g: 0, b: 0 };
   private palette = new Uint8Array(256 * 3);
   private colorsFresh = false;
+  /** Whether libghostty's viewport is pinned to the active area. */
+  private atBottom = true;
+
   /** Set by write()/resize(); getViewport() updates the render state first. */
   private pendingUpdate = true;
 
@@ -765,6 +774,7 @@ export class GhosttyTerminal {
     this._rows = rows;
     this.exports.ghostty_terminal_resize(this.handle, cols, rows, 0, 0);
     this.pendingUpdate = true;
+    this.atBottom = this.getViewportOffset() === 0;
     this.rowDirty = new Uint8Array(rows).fill(1);
     this.rowStale = new Uint8Array(rows).fill(1);
     this.dirty = DirtyState.FULL;
@@ -858,25 +868,20 @@ export class GhosttyTerminal {
     view.setUint32(ptr, c.size, true);
     this.exports.ghostty_render_state_get(this.renderState, RenderData.CURSOR, ptr);
 
+    // x and y are in the active area; viewportX/Y place the cursor in the
+    // (possibly scrolled) viewport, or are -1 when it is scrolled out of view.
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_X, ptr + 64);
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_Y, ptr + 68);
     const v = this.mem.view();
+    const x = v.getUint16(ptr + 64, true);
+    const y = v.getUint16(ptr + 68, true);
     const hasValue = v.getUint8(ptr + c.hasValue) !== 0;
-    let x: number;
-    let y: number;
-    if (hasValue) {
-      x = v.getUint16(ptr + c.x, true);
-      y = v.getUint16(ptr + c.y, true);
-    } else {
-      this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_X, ptr + 64);
-      this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_Y, ptr + 68);
-      x = this.mem.view().getUint16(ptr + 64, true);
-      y = this.mem.view().getUint16(ptr + 68, true);
-    }
     const style = v.getInt32(ptr + c.style, true);
     return {
       x,
       y,
-      viewportX: hasValue ? x : -1,
-      viewportY: hasValue ? y : -1,
+      viewportX: hasValue ? v.getUint16(ptr + c.x, true) : -1,
+      viewportY: hasValue ? v.getUint16(ptr + c.y, true) : -1,
       visible: v.getUint8(ptr + c.visible) !== 0,
       blinking: v.getUint8(ptr + c.blinking) !== 0,
       style:
@@ -1109,16 +1114,69 @@ export class GhosttyTerminal {
   // ==========================================================================
 
   /**
-   * Get line - for compatibility, extracts from viewport.
-   * Ensures render state is fresh by calling update().
-   * Returns a COPY of the cells to avoid pool reference issues.
+   * Get a row of the active area (the screen without scrollback), whatever the
+   * viewport is scrolled to. Returns a COPY of the cells.
    */
   getLine(y: number): GhosttyCell[] | null {
+    if (y < 0 || y >= this._rows) return null;
+    if (this.atBottom) return this.getViewportLine(y);
+    return this.readGridLine(PointTag.ACTIVE, y);
+  }
+
+  /**
+   * Get a row of the viewport as it is displayed, which includes scrollback
+   * rows when scrolled up (see setViewportOffset). Read from the render state.
+   * Returns a COPY of the cells to avoid pool reference issues.
+   */
+  getViewportLine(y: number): GhosttyCell[] | null {
     if (y < 0 || y >= this._rows) return null;
     this.update();
     const viewport = this.getViewport();
     const start = y * this._cols;
     return viewport.slice(start, start + this._cols).map((cell) => ({ ...cell }));
+  }
+
+  /**
+   * Scroll libghostty's viewport to `offset` rows above the bottom of the
+   * scrollback (0 = pinned to the active area, following new output).
+   * The offset is clamped to the scrollback length.
+   */
+  setViewportOffset(offset: number): void {
+    const ex = this.exports;
+    const ptr = this.scratch + 448;
+    ex.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
+    let view = this.mem.view();
+    const total = Number(view.getBigUint64(ptr, true));
+    const top = Number(view.getBigUint64(ptr + 8, true));
+    const len = Number(view.getBigUint64(ptr + 16, true));
+    const maxOffset = Math.max(0, total - len);
+    const target = Math.max(0, Math.min(maxOffset, Math.floor(offset)));
+    const current = maxOffset - top;
+    if (target === current && this.atBottom === (target === 0)) return;
+
+    const behaviorPtr = this.scratch + 480;
+    view = this.mem.view();
+    for (let i = 0; i < 24; i += 4) view.setUint32(behaviorPtr + i, 0, true);
+    if (target === 0) {
+      view.setInt32(behaviorPtr, ScrollViewport.BOTTOM, true);
+    } else {
+      view.setInt32(behaviorPtr, ScrollViewport.ROW, true);
+      view.setUint32(behaviorPtr + 8, maxOffset - target, true);
+    }
+    ex.ghostty_terminal_scroll_viewport(this.handle, behaviorPtr);
+    this.atBottom = target === 0;
+    this.pendingUpdate = true;
+  }
+
+  /** Rows the viewport is scrolled above the bottom (0 when pinned). */
+  getViewportOffset(): number {
+    const ptr = this.scratch + 448;
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
+    const view = this.mem.view();
+    const total = Number(view.getBigUint64(ptr, true));
+    const top = Number(view.getBigUint64(ptr + 8, true));
+    const len = Number(view.getBigUint64(ptr + 16, true));
+    return Math.max(0, total - len - top);
   }
 
   /** For compatibility with old API */
@@ -1216,6 +1274,14 @@ export class GhosttyTerminal {
    */
   getScrollbackLine(offset: number): GhosttyCell[] | null {
     if (offset < 0 || offset >= this.getScrollbackLength()) return null;
+    return this.readGridLine(PointTag.HISTORY, offset);
+  }
+
+  /**
+   * Read one row cell by cell through grid references. Used for rows that are
+   * not in the render state's viewport.
+   */
+  private readGridLine(tag: number, row: number): GhosttyCell[] | null {
     this.update();
     this.loadColors();
 
@@ -1229,7 +1295,7 @@ export class GhosttyTerminal {
     for (let x = 0; x < this._cols; x++) {
       const cell = {} as GhosttyCell;
       if (
-        !this.gridRef(PointTag.HISTORY, x, offset, refPtr) ||
+        !this.gridRef(tag, x, row, refPtr) ||
         ex.ghostty_grid_ref_cell(refPtr, rawPtr) !== GHOSTTY_SUCCESS
       ) {
         if (x === 0) return null;
@@ -1300,12 +1366,12 @@ export class GhosttyTerminal {
 
   /**
    * Get the hyperlink URI for a cell at the given position.
-   * @param row Row index (0-based, in active viewport)
+   * @param row Row index (0-based, in the active area)
    * @param col Column index (0-based)
    * @returns The URI string, or null if no hyperlink at that position
    */
   getHyperlinkUri(row: number, col: number): string | null {
-    return this.hyperlinkAt(PointTag.VIEWPORT, col, row);
+    return this.hyperlinkAt(PointTag.ACTIVE, col, row);
   }
 
   /**
@@ -1405,7 +1471,14 @@ export class GhosttyTerminal {
    * @returns Array of codepoints, or null on error
    */
   getGrapheme(row: number, col: number): number[] | null {
-    return this.graphemeAt(PointTag.VIEWPORT, col, row);
+    return this.graphemeAt(PointTag.ACTIVE, col, row);
+  }
+
+  /** Grapheme string at a row of the displayed (possibly scrolled) viewport. */
+  getViewportGraphemeString(row: number, col: number): string {
+    const codepoints = this.graphemeAt(PointTag.VIEWPORT, col, row);
+    if (!codepoints || codepoints.length === 0) return ' ';
+    return String.fromCodePoint(...codepoints);
   }
 
   /**

@@ -252,3 +252,86 @@ describe('key encoder', () => {
     }
   });
 });
+
+describe('library-owned viewport', () => {
+  const rowText = (cells: { codepoint: number }[] | null) =>
+    cells ? text(cells.map((c) => c.codepoint)).trimEnd() : null;
+
+  function filled() {
+    const term = ghostty.createTerminal(20, 3);
+    for (let i = 0; i < 10; i++) term.write(`line ${i}\r\n`);
+    term.write('prompt');
+    return term;
+  }
+
+  test('shows scrollback rows in the viewport when scrolled', () => {
+    const term = filled();
+    try {
+      // Active area: "line 8", "line 9", "prompt"; 8 rows of history.
+      expect(term.getScrollbackLength()).toBe(8);
+      expect(rowText(term.getViewportLine(0))).toBe('line 8');
+
+      term.setViewportOffset(2);
+      expect(term.getViewportOffset()).toBe(2);
+      expect(rowText(term.getViewportLine(0))).toBe('line 6');
+      expect(rowText(term.getViewportLine(2))).toBe('line 8');
+
+      term.setViewportOffset(0);
+      expect(rowText(term.getViewportLine(2))).toBe('prompt');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('clamps the offset to the scrollback length', () => {
+    const term = filled();
+    try {
+      term.setViewportOffset(1000);
+      expect(term.getViewportOffset()).toBe(8);
+      expect(rowText(term.getViewportLine(0))).toBe('line 0');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('active-area accessors ignore the scroll position', () => {
+    const term = filled();
+    try {
+      term.setViewportOffset(5);
+      expect(rowText(term.getLine(2))).toBe('prompt');
+      const cursor = term.getCursor();
+      expect([cursor.x, cursor.y]).toEqual([6, 2]);
+      expect(cursor.viewportY).toBe(-1); // scrolled out of view
+      expect(term.getGraphemeString(2, 0)).toBe('p');
+      expect(term.getViewportGraphemeString(0, 5)).toBe('3');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('scrolling marks the whole viewport for redraw', () => {
+    const term = filled();
+    try {
+      term.update();
+      term.getViewport();
+      term.markClean();
+      term.setViewportOffset(1);
+      term.update();
+      for (let y = 0; y < 3; y++) expect(term.isRowDirty(y)).toBe(true);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('new output while pinned keeps following the bottom', () => {
+    const term = filled();
+    try {
+      term.setViewportOffset(0);
+      term.write('\r\nmore');
+      expect(term.getViewportOffset()).toBe(0);
+      expect(rowText(term.getViewportLine(2))).toBe('more');
+    } finally {
+      term.free();
+    }
+  });
+});

@@ -90,6 +90,58 @@ describe('Terminal Scrolling', () => {
     });
   });
 
+  describe('Rendering While Scrolled', () => {
+    /** Render a full frame and return the text drawn on each row. */
+    function drawnRows(): string[] {
+      const renderer = (terminal as any).renderer;
+      const ctx = renderer.ctx;
+      const height = renderer.charHeight;
+      const rows: string[][] = [];
+      const original = ctx.fillText;
+      ctx.fillText = (char: string, x: number, y: number) => {
+        const row = Math.floor(y / height);
+        rows[row] ??= [];
+        rows[row][Math.round(x / renderer.charWidth)] = char;
+      };
+      try {
+        renderer.render(terminal.wasmTerm, true, terminal.viewportY, terminal);
+      } finally {
+        ctx.fillText = original;
+      }
+      return Array.from(rows, (r) =>
+        Array.from(r ?? [], (c) => c ?? ' ')
+          .join('')
+          .trimEnd()
+      );
+    }
+
+    test('draws scrollback rows read from the library viewport', () => {
+      for (let i = 0; i < 50; i++) terminal.write(`Line ${i}\r\n`);
+      // 24 rows: Line 27..Line 49 plus the empty cursor row.
+      expect(drawnRows()[0]).toBe('Line 27');
+
+      terminal.scrollLines(-10);
+      expect(terminal.viewportY).toBe(10);
+      const rows = drawnRows();
+      expect(rows[0]).toBe('Line 17');
+      expect(rows[23]).toBe('Line 40');
+      expect(terminal.wasmTerm!.getViewportOffset()).toBe(10);
+
+      terminal.scrollToBottom();
+      expect(drawnRows()[22]).toBe('Line 49');
+      expect(terminal.wasmTerm!.getViewportOffset()).toBe(0);
+    });
+
+    test('output while scrolled returns to the bottom', () => {
+      for (let i = 0; i < 50; i++) terminal.write(`Line ${i}\r\n`);
+      terminal.scrollLines(-5);
+      drawnRows();
+      terminal.write('fresh');
+      expect(terminal.viewportY).toBe(0);
+      expect(drawnRows()[23]).toBe('fresh');
+    });
+  });
+
   describe('Alternate Screen Mode', () => {
     beforeEach(async () => {
       // Enter alternate screen mode (vim, less, htop, etc.)
