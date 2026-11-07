@@ -782,6 +782,90 @@ describe('terminal effects (library callbacks)', () => {
     }
   });
 
+  test('a denied OSC 52 clipboard write is reported and answered', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const requests: string[] = [];
+    term.setEffects({
+      clipboardWrite: (req) => {
+        requests.push(new TextDecoder().decode(req.contents[0].data));
+        return false;
+      },
+    });
+    try {
+      term.write(`\x1b]52;c;${btoa('first')}\x07`);
+      term.write(`\x1b]52;p;${btoa('second')}\x07ok`);
+      // Each write reached the handler; denying sends nothing to the program.
+      expect(requests).toEqual(['first', 'second']);
+      expect(term.readResponse()).toBeNull();
+      expect(text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd()).toBe('ok');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('program status reports (OSC 7501)', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const reports: unknown[] = [];
+    term.setEffects({ programStatus: (s) => reports.push(s) });
+    try {
+      const title = btoa('Build');
+      const msg = btoa('Allow rm?');
+      term.write(
+        `\x1b]7501;state=blocked:kind=permission:id=job-1:app=make:progress=42:title=${title}:msg=${msg}\x07`
+      );
+      term.write('\x1b]7501;state=working\x1b\\');
+      term.write('\x1b]7501;state=clear\x07');
+      expect(reports).toEqual([
+        {
+          state: 'blocked',
+          kind: 'permission',
+          progress: 42,
+          id: 'job-1',
+          app: 'make',
+          title: 'Build',
+          message: 'Allow rm?',
+        },
+        { state: 'working', kind: 'none', progress: null, id: '', app: '', title: '', message: '' },
+        { state: 'clear', kind: 'none', progress: null, id: '', app: '', title: '', message: '' },
+      ]);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('a full reset (RIS) is reported', () => {
+    const term = ghostty.createTerminal(40, 5);
+    let resets = 0;
+    term.setEffects({ reset: () => resets++ });
+    try {
+      term.write('text\x1b[?2004h');
+      expect(resets).toBe(0);
+      term.write('\x1bc');
+      expect(resets).toBe(1);
+      expect(term.hasBracketedPaste()).toBe(false);
+      expect(text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd()).toBe('');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('the pointer shape a program asks for (OSC 22)', () => {
+    const term = ghostty.createTerminal(40, 5);
+    try {
+      expect(term.getMouseShape()).toBe('text');
+      term.write('\x1b]22;pointer\x07');
+      expect(term.getMouseShape()).toBe('pointer');
+      term.write('\x1b]22;nwse-resize\x1b\\');
+      expect(term.getMouseShape()).toBe('nwse-resize');
+      term.write('\x1b]22;default\x07'); // the arrow
+      expect(term.getMouseShape()).toBe('default');
+      term.write('\x1b]22;\x07');
+      expect(term.getMouseShape()).toBe('text');
+    } finally {
+      term.free();
+    }
+  });
+
   test('clipboard reads are denied (no response)', () => {
     const { term } = withEffects();
     try {

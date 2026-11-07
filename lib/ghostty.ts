@@ -1603,8 +1603,8 @@ export class GhosttyTerminal {
   }
 
   /**
-   * The pointer shape the program asked for (OSC 22), as a CSS cursor name,
-   * or null when it hasn't asked (or reset it).
+   * The pointer shape in effect, as a CSS cursor name: what the program asked
+   * for (OSC 22), else libghostty's default, 'text'. Null if it can't be read.
    */
   getMouseShape(): string | null {
     const out = this.selScratch + 240;
@@ -1615,7 +1615,7 @@ export class GhosttyTerminal {
       return null;
     }
     const shape = this.mem.view().getUint32(out, true);
-    return shape === 0 ? null : (MOUSE_SHAPES[shape] ?? null);
+    return MOUSE_SHAPES[shape] ?? null;
   }
 
   /** The working directory the program reported (OSC 7). */
