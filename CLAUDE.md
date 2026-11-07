@@ -59,7 +59,7 @@ Conventions in the bridge:
 - Enum values are part of libghostty's ABI promise and are written as constants. Bit positions inside packed values (`GhosttyCell`, `GhosttyStyleFlags`) are not covered by the promise and are read from the module's manifest (`ghostty_type_json()`) by `AbiLayout` in `lib/abi.ts`. Struct offsets also come from the manifest.
 - Structs passed by value in C are passed by pointer from JS (wasm32 C ABI); check an export's arity (`exports.fn.length`) when in doubt.
 - Any export can grow memory, which detaches old `ArrayBuffer` views. Always get views through `this.mem.view()` / `this.mem.bytes()` right before use, after any call into the module.
-- Out-parameters go through two per-terminal scratch areas (`scratch`, 2 KB, and `selScratch`, 256 B) at fixed offsets. When adding a method, pick offsets that don't overlap anything that can be live at the same time.
+- Out-parameters and small arguments go through named slots in a `Scratch` (one allocation per object, slots laid end to end so none overlap; `terminalSlots()` lists `GhosttyTerminal`'s, sized from the manifest where a struct is involved). Use `scratch.at('name')`, never a numeric offset; when adding a method, reuse a slot only for a value that isn't live at the same time as the slot's other uses, otherwise add one.
 - Opaque handles are created through `ghostty_wasm_alloc_opaque` + `ghostty_wasm_take_opaque`.
 - JS callbacks (write_pty, bell, clipboard, ...) need a function-table entry. `wasmCallback()` builds a tiny module that re-exports a JS function as a WASM function; `Ghostty.installEffects()` registers one entry per callback type and routes calls by the terminal handle (always the first argument). Callbacks run synchronously inside `vt_write` and friends.
 

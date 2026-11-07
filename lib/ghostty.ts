@@ -543,12 +543,18 @@ interface Layout {
   };
   point: { size: number; value: number; x: number; y: number };
   gridRef: number;
-  cellsView: { ptr: number; len: number };
+  cellsView: { size: number; ptr: number; len: number };
   modeConfig: { size: number; value: number };
   selection: { size: number; start: number; end: number; rectangle: number };
   coordinate: { size: number; x: number; y: number };
-  geometry: { columns: number; cellWidth: number; paddingLeft: number; screenHeight: number };
-  surface: { x: number; y: number };
+  geometry: {
+    size: number;
+    columns: number;
+    cellWidth: number;
+    paddingLeft: number;
+    screenHeight: number;
+  };
+  surface: { size: number; x: number; y: number };
   writeStop: { size: number; consumed: number; reached: number };
   string: { size: number; ptr: number; len: number };
   rgb: { size: number; r: number; g: number; b: number };
@@ -593,12 +599,12 @@ interface Layout {
     cellWidth: number;
     cellHeight: number;
   };
-  mousePosition: { x: number; y: number };
+  mousePosition: { size: number; x: number; y: number };
   scrollbar: { size: number; total: number; offset: number; len: number };
   scrollViewport: { size: number; tag: number; delta: number; row: number };
   rowSelection: { size: number; startX: number; endX: number };
   selectionBuffer: { size: number; ptr: number; cap: number; len: number };
-  codepointBuffer: { ptr: number; cap: number; len: number };
+  codepointBuffer: { size: number; ptr: number; cap: number; len: number };
 }
 
 function buildLayout(abi: AbiLayout): Layout {
@@ -681,6 +687,7 @@ function buildLayout(abi: AbiLayout): Layout {
     },
     gridRef: abi.size('GhosttyGridRef'),
     cellsView: {
+      size: abi.size('GhosttyCellsView'),
       ptr: abi.offset('GhosttyCellsView', 'ptr'),
       len: abi.offset('GhosttyCellsView', 'len'),
     },
@@ -700,12 +707,14 @@ function buildLayout(abi: AbiLayout): Layout {
       y: abi.offset('GhosttyPointCoordinate', 'y'),
     },
     geometry: {
+      size: abi.size('GhosttySelectionGestureGeometry'),
       columns: abi.offset('GhosttySelectionGestureGeometry', 'columns'),
       cellWidth: abi.offset('GhosttySelectionGestureGeometry', 'cell_width'),
       paddingLeft: abi.offset('GhosttySelectionGestureGeometry', 'padding_left'),
       screenHeight: abi.offset('GhosttySelectionGestureGeometry', 'screen_height'),
     },
     surface: {
+      size: abi.size('GhosttySurfacePosition'),
       x: abi.offset('GhosttySurfacePosition', 'x'),
       y: abi.offset('GhosttySurfacePosition', 'y'),
     },
@@ -797,6 +806,7 @@ function buildLayout(abi: AbiLayout): Layout {
       cellHeight: mouseSize('cell_height'),
     },
     mousePosition: {
+      size: abi.size('GhosttyMousePosition'),
       x: abi.offset('GhosttyMousePosition', 'x'),
       y: abi.offset('GhosttyMousePosition', 'y'),
     },
@@ -824,6 +834,7 @@ function buildLayout(abi: AbiLayout): Layout {
       len: abi.offset('GhosttySelectionBuffer', 'len'),
     },
     codepointBuffer: {
+      size: abi.size('GhosttyCodepointBuffer'),
       ptr: abi.offset('GhosttyCodepointBuffer', 'ptr'),
       cap: abi.offset('GhosttyCodepointBuffer', 'cap'),
       len: abi.offset('GhosttyCodepointBuffer', 'len'),
@@ -863,6 +874,60 @@ class Memory {
   bytes(): Uint8Array {
     this.refresh();
     return this.u8;
+  }
+}
+
+/**
+ * Named out-parameter and argument slots in one allocation, laid out end to end so no two overlap.
+ * Each kind of value passed to or read back from libghostty gets its own slot, so values that are
+ * live at the same time (a selection being built while a point is resolved, say) can't clobber
+ * each other. Slot sizes come from the module's manifest where a struct is involved.
+ *
+ * @internal
+ */
+export class Scratch<K extends string> {
+  private base: number;
+  private readonly offsets: Record<K, number>;
+  private readonly sizes: Record<K, number>;
+  readonly size: number;
+
+  constructor(
+    private exports: GhosttyWasmExports,
+    slots: Record<K, number>
+  ) {
+    const offsets = {} as Record<K, number>;
+    let at = 0;
+    for (const name of Object.keys(slots) as K[]) {
+      offsets[name] = at;
+      at += (slots[name] + 7) & ~7;
+    }
+    this.offsets = offsets;
+    this.sizes = { ...slots };
+    this.size = at;
+    this.base = exports.ghostty_wasm_alloc(at);
+    if (!this.base) throw new Error('libghostty-vt: failed to allocate scratch memory');
+  }
+
+  /** The address of slot `name`. */
+  at(name: K): number {
+    return this.base + this.offsets[name];
+  }
+
+  /** The size of slot `name` in bytes. */
+  sizeOf(name: K): number {
+    return this.sizes[name];
+  }
+
+  /** Zero slot `name` and return its address. */
+  zero(name: K, bytes: Uint8Array): number {
+    const at = this.at(name);
+    bytes.fill(0, at, at + this.sizes[name]);
+    return at;
+  }
+
+  free(): void {
+    if (this.base) this.exports.ghostty_wasm_free(this.base, this.size);
+    this.base = 0;
   }
 }
 
@@ -1393,12 +1458,15 @@ export const MouseEncoderOpt = {
  * that turned on mouse tracking, in whichever mode and format (X10, UTF-8,
  * SGR, URxvt, SGR-Pixels) they asked for.
  */
+/** Room for one encoded mouse report (bytes). */
+const MOUSE_REPORT_SIZE = 128;
+
 export class MouseEncoder {
   private exports: GhosttyWasmExports;
   private mem: Memory;
   private encoder = 0;
   private event = 0;
-  private scratch = 0;
+  private scratch!: Scratch<'flag' | 'size' | 'position' | 'written' | 'out'>;
   private L: Layout;
 
   constructor(exports: GhosttyWasmExports, mem: Memory, layout: Layout) {
@@ -1419,10 +1487,17 @@ export class MouseEncoder {
     } finally {
       ex.ghostty_wasm_free_opaque(slot);
     }
-    this.scratch = ex.ghostty_wasm_alloc(256);
+    this.scratch = new Scratch(ex, {
+      flag: 4,
+      size: layout.mouseSize.size,
+      position: layout.mousePosition.size,
+      written: 4,
+      out: MOUSE_REPORT_SIZE,
+    });
     // Report motion only when the pointer moves to another cell.
-    this.mem.view().setUint8(this.scratch, 1);
-    ex.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.TRACK_LAST_CELL, this.scratch);
+    const flag = this.scratch.at('flag');
+    this.mem.view().setUint8(flag, 1);
+    ex.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.TRACK_LAST_CELL, flag);
   }
 
   /** Copy the terminal's mouse tracking mode and report format. */
@@ -1432,11 +1507,10 @@ export class MouseEncoder {
 
   /** Surface size and cell size; the encoder turns positions into cells. */
   setGeometry(g: MouseGeometry): void {
-    const p = this.scratch;
+    const p = this.scratch.zero('size', this.mem.bytes());
     const S = this.L.mouseSize;
     const view = this.mem.view();
     const u32 = (offset: number, v: number) => view.setUint32(p + offset, v, true);
-    this.mem.bytes().fill(0, p, p + S.size);
     u32(0, S.size); // sized struct: the size field comes first
     u32(S.screenWidth, Math.max(1, Math.round(g.screenWidth)));
     u32(S.screenHeight, Math.max(1, Math.round(g.screenHeight)));
@@ -1447,12 +1521,9 @@ export class MouseEncoder {
 
   /** Whether any button is held, which decides motion reporting in button mode. */
   setAnyButtonPressed(pressed: boolean): void {
-    this.mem.view().setUint8(this.scratch, pressed ? 1 : 0);
-    this.exports.ghostty_mouse_encoder_set(
-      this.encoder,
-      MouseEncoderOpt.ANY_BUTTON_PRESSED,
-      this.scratch
-    );
+    const flag = this.scratch.at('flag');
+    this.mem.view().setUint8(flag, pressed ? 1 : 0);
+    this.exports.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.ANY_BUTTON_PRESSED, flag);
   }
 
   /** Forget the last reported cell, so the next motion is reported. */
@@ -1477,15 +1548,16 @@ export class MouseEncoder {
     if (button === null) ex.ghostty_mouse_event_clear_button(ev);
     else ex.ghostty_mouse_event_set_button(ev, button);
     ex.ghostty_mouse_event_set_mods(ev, mods);
-    const pos = this.scratch + 64;
+    const pos = this.scratch.at('position');
     const view = this.mem.view();
     view.setFloat32(pos + this.L.mousePosition.x, x, true);
     view.setFloat32(pos + this.L.mousePosition.y, y, true);
     ex.ghostty_mouse_event_set_position(ev, pos);
 
-    const buf = this.scratch + 96;
-    const written = this.scratch + 88;
-    if (ex.ghostty_mouse_encoder_encode(this.encoder, ev, buf, 128, written) !== GHOSTTY_SUCCESS) {
+    const buf = this.scratch.at('out');
+    const written = this.scratch.at('written');
+    const cap = MOUSE_REPORT_SIZE;
+    if (ex.ghostty_mouse_encoder_encode(this.encoder, ev, buf, cap, written) !== GHOSTTY_SUCCESS) {
       return '';
     }
     const len = this.mem.view().getUint32(written, true);
@@ -1503,8 +1575,8 @@ export class MouseEncoder {
     const ex = this.exports;
     if (this.event) ex.ghostty_mouse_event_free(this.event);
     if (this.encoder) ex.ghostty_mouse_encoder_free(this.encoder);
-    if (this.scratch) ex.ghostty_wasm_free(this.scratch, 256);
-    this.event = this.encoder = this.scratch = 0;
+    this.scratch.free();
+    this.event = this.encoder = 0;
   }
 }
 
@@ -1513,7 +1585,6 @@ export class MouseEncoder {
 // ============================================================================
 
 /** Size of the per-terminal scratch area for out-parameters. */
-const SCRATCH_SIZE = 2048;
 /** Rows of the inactive primary screen read per screen switch (primaryScreen()). */
 const PRIMARY_BLOCK_ROWS = 64;
 /** The render state's own default colors, used when setColors() leaves one out. */
@@ -1526,13 +1597,54 @@ const DEFAULT_BACKGROUND = 0x000000;
 const DEFAULT_TERMINFO_NAME = 'xterm-ghostty';
 /** Longest terminfo name libghostty accepts (bytes). */
 const MAX_TERMINFO_NAME = 128;
-const SELECTION_SCRATCH_SIZE = 256;
 /** How many hyperlink URIs a terminal remembers IDs for. */
 const MAX_LINK_IDS = 4096;
-/** Where in the scratch area grapheme codepoints are read, and how much room they have. */
-const GRAPHEME_BUFFER = 1008; // the GhosttyCodepointBuffer describing them
-const GRAPHEME_SCRATCH = 1024;
-const GRAPHEME_SCRATCH_SIZE = SCRATCH_SIZE - GRAPHEME_SCRATCH;
+/** Room for a grapheme cluster's codepoints before a larger buffer is allocated (bytes). */
+const GRAPHEME_SCRATCH_SIZE = 1024;
+
+/** GhosttyTerminal's scratch slots (see Scratch). */
+function terminalSlots(L: Layout) {
+  return {
+    /** Small values read or written by one call: dirty state, flags, modes, row numbers. */
+    value: Math.max(8, L.modeConfig.size),
+    rgb: L.rgb.size,
+    palette: 256 * L.rgb.size,
+    terminfoString: L.string.size,
+    terminfoName: MAX_TERMINFO_NAME,
+    cursor: L.cursor.size,
+    cursorX: 4,
+    cursorY: 4,
+    colors: L.colors.size,
+    cellsView: L.cellsView.size,
+    rowSelection: L.rowSelection.size,
+    style: L.style.size,
+    graphemeBuffer: L.codepointBuffer.size,
+    graphemes: GRAPHEME_SCRATCH_SIZE,
+    point: L.point.size,
+    ref: L.gridRef,
+    /** What a grid reference call writes: a raw cell or row (8 bytes), a length or a count. */
+    refOut: 8,
+    rowFlag: 8,
+    trackedRef: 4,
+    scrollbar: L.scrollbar.size,
+    scrollViewport: L.scrollViewport.size,
+    /** The terminal's selection as read. */
+    selection: L.selection.size,
+    orderedSelection: L.selection.size,
+    selectionPoint: L.coordinate.size,
+    /** A selection being built to install or to narrow the formatter. */
+    newSelection: L.selection.size,
+    clipboardReply: L.clipboardReply.size,
+    focus: 16,
+    focusWritten: 4,
+    formatterOption: 4,
+    formatterOutPtr: 4,
+    formatterOutLen: 4,
+    dataString: L.string.size,
+    mouseShape: 4,
+  };
+}
+type TerminalSlot = keyof ReturnType<typeof terminalSlots>;
 
 /**
  * GhosttyTerminal - terminal emulator backed by libghostty-vt
@@ -1552,9 +1664,7 @@ export class GhosttyTerminal {
   private renderState = 0;
   private rowIterSlot = 0;
   private rowCellsSlot = 0;
-  private scratch = 0;
-  /** Separate scratch for selection and formatter calls (see selectionScratch). */
-  private selScratch = 0;
+  private scratch: Scratch<TerminalSlot>;
   private onFree: (() => void) | null = null;
   private freed = false;
 
@@ -1598,9 +1708,7 @@ export class GhosttyTerminal {
     this._rows = rows;
 
     const ex = this.exports;
-    this.scratch = ex.ghostty_wasm_alloc(SCRATCH_SIZE);
-    this.selScratch = ex.ghostty_wasm_alloc(SELECTION_SCRATCH_SIZE);
-    if (!this.scratch) throw new Error('Failed to allocate terminal scratch memory');
+    this.scratch = new Scratch(ex, terminalSlots(layout));
 
     const slot = ex.ghostty_wasm_alloc_opaque();
     try {
@@ -1675,7 +1783,7 @@ export class GhosttyTerminal {
 
   /** Read a GhosttyString-valued terminal data field (title, pwd). */
   private readDataString(data: number): string {
-    const out = this.selScratch + 240;
+    const out = this.scratch.at('dataString');
     if (this.exports.ghostty_terminal_get(this.handle, data, out) !== GHOSTTY_SUCCESS) return '';
     return this.readString(out);
   }
@@ -1690,7 +1798,7 @@ export class GhosttyTerminal {
    * for (OSC 22), else libghostty's default, 'text'. Null if it can't be read.
    */
   getMouseShape(): string | null {
-    const out = this.selScratch + 240;
+    const out = this.scratch.at('mouseShape');
     if (
       this.exports.ghostty_terminal_get(this.handle, TerminalData.MOUSE_SHAPE, out) !==
       GHOSTTY_SUCCESS
@@ -1739,8 +1847,7 @@ export class GhosttyTerminal {
     const ok = handler({ location: location ?? 'standard', contents });
 
     const R = this.L.clipboardReply;
-    const reply = this.selScratch + 160;
-    this.mem.bytes().fill(0, reply, reply + R.size);
+    const reply = this.scratch.zero('clipboardReply', this.mem.bytes());
     const v = this.mem.view();
     v.setUint32(reply, R.size, true); // sized struct: the size field comes first
     v.setUint32(
@@ -1947,10 +2054,11 @@ export class GhosttyTerminal {
   encodeFocus(focused: boolean): string {
     if (!this.getMode(1004, false)) return '';
     const ex = this.exports;
-    const buf = this.selScratch + 192;
-    const written = this.selScratch + 224;
+    const buf = this.scratch.at('focus');
+    const written = this.scratch.at('focusWritten');
+    const cap = this.scratch.sizeOf('focus');
     if (
-      ex.ghostty_focus_encode(focused ? FocusEvent.GAINED : FocusEvent.LOST, buf, 16, written) !==
+      ex.ghostty_focus_encode(focused ? FocusEvent.GAINED : FocusEvent.LOST, buf, cap, written) !==
       GHOSTTY_SUCCESS
     )
       return '';
@@ -1959,7 +2067,7 @@ export class GhosttyTerminal {
   }
 
   private setMode(mode: number, ansi: boolean, value: boolean, keepDefault = false): void {
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('value');
     const view = this.mem.view();
     view.setUint16(ptr, packMode(mode, ansi), true);
     view.setUint8(ptr + this.L.modeConfig.value, value ? 1 : 0);
@@ -1984,8 +2092,9 @@ export class GhosttyTerminal {
   }
 
   private setColor(option: number, hex: number): void {
-    this.writeRgb(this.scratch, hex);
-    this.exports.ghostty_terminal_set(this.handle, option, this.scratch);
+    const ptr = this.scratch.at('rgb');
+    this.writeRgb(ptr, hex);
+    this.exports.ghostty_terminal_set(this.handle, option, ptr);
   }
 
   /** Apply ghostterm's config: the scrollback limit and terminfo name. */
@@ -1998,8 +2107,8 @@ export class GhosttyTerminal {
   private setTerminfoName(name: string): void {
     const bytes = new TextEncoder().encode(name);
     if (bytes.length > MAX_TERMINFO_NAME) throw new Error(`terminfo name too long: ${name}`);
-    const str = this.scratch;
-    const data = this.scratch + 16;
+    const str = this.scratch.at('terminfoString');
+    const data = this.scratch.at('terminfoName');
     this.mem.bytes().set(bytes, data);
     const view = this.mem.view();
     view.setUint32(str + this.L.string.ptr, data, true);
@@ -2017,10 +2126,11 @@ export class GhosttyTerminal {
     // otherwise win, so that cap is lifted. A line limit alone can't turn
     // history off (a page of rows is always kept), but a byte limit of 0 does.
     const scrollback = Math.max(0, Math.floor(lines));
-    this.mem.view().setUint32(this.scratch, scrollback === 0 ? 0 : SIZE_MAX, true);
-    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_BYTES, this.scratch);
-    this.mem.view().setUint32(this.scratch, Math.min(scrollback, SIZE_MAX), true);
-    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, this.scratch);
+    const ptr = this.scratch.at('value');
+    this.mem.view().setUint32(ptr, scrollback === 0 ? 0 : SIZE_MAX, true);
+    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_BYTES, ptr);
+    this.mem.view().setUint32(ptr, Math.min(scrollback, SIZE_MAX), true);
+    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, ptr);
     this.pendingUpdate = true;
     this.primary = null;
   }
@@ -2047,7 +2157,7 @@ export class GhosttyTerminal {
     // Start from the built-in palette, then apply the overrides.
     ex.ghostty_terminal_set(this.handle, TerminalOpt.COLOR_PALETTE, 0);
     if (colors.palette?.some((c) => c !== undefined)) {
-      const ptr = this.scratch;
+      const ptr = this.scratch.at('palette');
       this.check(
         ex.ghostty_terminal_get(this.handle, TerminalData.COLOR_PALETTE_DEFAULT, ptr),
         'read default palette'
@@ -2172,7 +2282,7 @@ export class GhosttyTerminal {
    * what is in effect.
    */
   setDefaultCursor(style: 'block' | 'underline' | 'bar', blink: boolean): void {
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('value');
     const value =
       style === 'bar'
         ? CursorStyle.BAR
@@ -2244,11 +2354,7 @@ export class GhosttyTerminal {
       ex.ghostty_wasm_free(this.answerbackBuf, this.answerbackSize);
       this.answerbackBuf = 0;
     }
-    if (this.scratch) {
-      ex.ghostty_wasm_free(this.scratch, SCRATCH_SIZE);
-      ex.ghostty_wasm_free(this.selScratch, SELECTION_SCRATCH_SIZE);
-      this.scratch = 0;
-    }
+    this.scratch.free();
   }
 
   // ==========================================================================
@@ -2271,8 +2377,9 @@ export class GhosttyTerminal {
     this.colorsFresh = false;
     this.pendingUpdate = false;
 
-    ex.ghostty_render_state_get(this.renderState, RenderData.DIRTY, this.scratch);
-    const dirty = this.mem.view().getInt32(this.scratch, true) as DirtyState;
+    const dirtyPtr = this.scratch.at('value');
+    ex.ghostty_render_state_get(this.renderState, RenderData.DIRTY, dirtyPtr);
+    const dirty = this.mem.view().getInt32(dirtyPtr, true) as DirtyState;
     if (dirty === DirtyState.NONE) return this.dirty;
     if (dirty > this.dirty) this.dirty = dirty;
 
@@ -2284,7 +2391,7 @@ export class GhosttyTerminal {
 
     // Partial: record exactly which rows changed.
     const iter = this.rowIterator();
-    const yPtr = this.scratch;
+    const yPtr = this.scratch.at('value');
     while (ex.ghostty_render_state_row_iterator_next_dirty(iter, yPtr)) {
       const y = this.mem.view().getUint16(yPtr, true);
       if (y < this._rows) {
@@ -2311,7 +2418,9 @@ export class GhosttyTerminal {
    */
   getCursor(): RenderStateCursor {
     if (this.pendingUpdate) this.update();
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('cursor');
+    const xPtr = this.scratch.at('cursorX');
+    const yPtr = this.scratch.at('cursorY');
     const c = this.L.cursor;
     const view = this.mem.view();
     view.setUint32(ptr, c.size, true);
@@ -2319,11 +2428,11 @@ export class GhosttyTerminal {
 
     // x and y are in the active area; viewportX/Y place the cursor in the
     // (possibly scrolled) viewport, or are -1 when it is scrolled out of view.
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_X, ptr + 64);
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_Y, ptr + 68);
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_X, xPtr);
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_Y, yPtr);
     const v = this.mem.view();
-    const x = v.getUint16(ptr + 64, true);
-    const y = v.getUint16(ptr + 68, true);
+    const x = v.getUint16(xPtr, true);
+    const y = v.getUint16(yPtr, true);
     const hasValue = v.getUint8(ptr + c.hasValue) !== 0;
     const style = v.getInt32(ptr + c.style, true);
     return {
@@ -2341,7 +2450,7 @@ export class GhosttyTerminal {
   /** Refresh the default colors and palette used to resolve cell colors. */
   private loadColors(force = false): void {
     if (this.colorsFresh && !force) return;
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('colors');
     const c = this.L.colors;
     this.mem.view().setUint32(ptr, c.size, true);
     this.exports.ghostty_render_state_get(this.renderState, RenderData.COLORS, ptr);
@@ -2359,7 +2468,7 @@ export class GhosttyTerminal {
     if (this.pendingUpdate) this.update();
     // Forced so the cursor color below is read from a fresh copy in scratch.
     this.loadColors(true);
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('colors');
     const c = this.L.colors;
     const b = this.mem.bytes();
     const hasCursor = b[ptr + c.hasCursor] !== 0;
@@ -2417,7 +2526,7 @@ export class GhosttyTerminal {
 
     const ex = this.exports;
     const iter = this.rowIterator();
-    const viewPtr = this.scratch;
+    const viewPtr = this.scratch.at('cellsView');
     const cellsHandle = () => this.mem.view().getUint32(this.rowCellsSlot, true);
     let y = 0;
     while (y < this._rows && ex.ghostty_render_state_row_iterator_next(iter)) {
@@ -2435,7 +2544,7 @@ export class GhosttyTerminal {
           };
           // The row's selected columns (inclusive), from the terminal's selection.
           const RS = this.L.rowSelection;
-          const selPtr = this.scratch + 192;
+          const selPtr = this.scratch.at('rowSelection');
           this.mem.view().setUint32(selPtr, RS.size, true);
           const selected =
             ex.ghostty_render_state_row_get(iter, RowData.SELECTION, selPtr) === GHOSTTY_SUCCESS
@@ -2466,7 +2575,7 @@ export class GhosttyTerminal {
     const cellsPtr = view.getUint32(viewPtr + L.cellsView.ptr, true);
     const len = Math.min(view.getUint32(viewPtr + L.cellsView.len, true), this._cols);
     const base = y * this._cols;
-    const stylePtr = this.scratch + 64;
+    const stylePtr = this.scratch.at('style');
 
     // Copy the raw row out first: style lookups below may grow memory.
     const cellSize = L.cellSize;
@@ -2518,7 +2627,7 @@ export class GhosttyTerminal {
   private rowCellGrapheme(cells: number): number[] {
     const ex = this.exports;
     const B = this.L.codepointBuffer;
-    const desc = this.scratch + GRAPHEME_BUFFER;
+    const desc = this.scratch.at('graphemeBuffer');
     /** Read into buf (cap codepoints); the codepoints, or a result code on failure. */
     const read = (buf: number, cap: number): number[] | number => {
       const view = this.mem.view();
@@ -2531,7 +2640,7 @@ export class GhosttyTerminal {
       return Array.from(new Uint32Array(this.mem.bytes().slice(buf, buf + len * 4).buffer));
     };
 
-    const first = read(this.scratch + GRAPHEME_SCRATCH, GRAPHEME_SCRATCH_SIZE / 4);
+    const first = read(this.scratch.at('graphemes'), GRAPHEME_SCRATCH_SIZE / 4);
     if (typeof first !== 'number') return first;
     if (first !== GHOSTTY_OUT_OF_SPACE) return [];
     // Too long for the scratch area: size a buffer to fit.
@@ -2717,7 +2826,7 @@ export class GhosttyTerminal {
   /** The terminal's GhosttyTerminalScrollbar: rows in total, top of the viewport, its height. */
   private scrollbar(): { total: number; offset: number; len: number } {
     const S = this.L.scrollbar;
-    const ptr = this.scratch + 448;
+    const ptr = this.scratch.at('scrollbar');
     this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
     const view = this.mem.view();
     return {
@@ -2733,8 +2842,7 @@ export class GhosttyTerminal {
    */
   private scrollViewport(tag: number, value: number): void {
     const S = this.L.scrollViewport;
-    const ptr = this.scratch + 480;
-    this.mem.bytes().fill(0, ptr, ptr + S.size);
+    const ptr = this.scratch.zero('scrollViewport', this.mem.bytes());
     const view = this.mem.view();
     view.setInt32(ptr + S.tag, tag, true);
     if (tag === ScrollViewport.ROW) view.setUint32(ptr + S.row, value, true);
@@ -2791,8 +2899,9 @@ export class GhosttyTerminal {
   // ==========================================================================
 
   isAlternateScreen(): boolean {
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.ACTIVE_SCREEN, this.scratch);
-    return this.mem.view().getInt32(this.scratch, true) === TerminalScreen.ALTERNATE;
+    const ptr = this.scratch.at('value');
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.ACTIVE_SCREEN, ptr);
+    return this.mem.view().getInt32(ptr, true) === TerminalScreen.ALTERNATE;
   }
 
   hasBracketedPaste(): boolean {
@@ -2806,8 +2915,9 @@ export class GhosttyTerminal {
   }
 
   hasMouseTracking(): boolean {
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.MOUSE_TRACKING, this.scratch);
-    return this.mem.view().getUint8(this.scratch) !== 0;
+    const ptr = this.scratch.at('value');
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.MOUSE_TRACKING, ptr);
+    return this.mem.view().getUint8(ptr) !== 0;
   }
 
   /**
@@ -2816,7 +2926,7 @@ export class GhosttyTerminal {
    * @param isAnsi True for ANSI modes, false for DEC modes (default: false)
    */
   getMode(mode: number, isAnsi: boolean = false): boolean {
-    const ptr = this.scratch;
+    const ptr = this.scratch.at('value');
     const view = this.mem.view();
     view.setUint16(ptr, packMode(mode, isAnsi), true);
     view.setUint8(ptr + this.L.modeConfig.value, 0);
@@ -2836,8 +2946,9 @@ export class GhosttyTerminal {
 
   /** Get number of scrollback lines (history, not including active screen) */
   getScrollbackLength(): number {
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBACK_ROWS, this.scratch);
-    return this.mem.view().getUint32(this.scratch, true);
+    const ptr = this.scratch.at('value');
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBACK_ROWS, ptr);
+    return this.mem.view().getUint32(ptr, true);
   }
 
   /** @internal Write the grid reference for a viewport cell to refPtr. */
@@ -2859,7 +2970,7 @@ export class GhosttyTerminal {
   /** Write a GhosttyPoint to the scratch area and return its address. */
   private writePoint(tag: number, x: number, y: number): number {
     const P = this.L.point;
-    const pointPtr = this.scratch + 256;
+    const pointPtr = this.scratch.at('point');
     const view = this.mem.view();
     for (let i = 0; i < P.size; i += 4) view.setUint32(pointPtr + i, 0, true);
     view.setInt32(pointPtr, tag, true);
@@ -2878,7 +2989,7 @@ export class GhosttyTerminal {
   trackRow(row: number): TrackedRow | null {
     if (row < 0 || !Number.isInteger(row)) return null;
     const pointPtr = this.writePoint(PointTag.SCREEN, 0, row);
-    const out = this.scratch + 320;
+    const out = this.scratch.at('trackedRef');
     this.mem.view().setUint32(out, 0, true);
     if (
       this.exports.ghostty_terminal_grid_ref_track(this.handle, pointPtr, out) !== GHOSTTY_SUCCESS
@@ -2908,9 +3019,9 @@ export class GhosttyTerminal {
     this.loadColors();
 
     const ex = this.exports;
-    const refPtr = this.scratch + 320;
-    const rawPtr = this.scratch + 336;
-    const stylePtr = this.scratch + 352;
+    const refPtr = this.scratch.at('ref');
+    const rawPtr = this.scratch.at('refOut');
+    const stylePtr = this.scratch.at('style');
     const L = this.L;
     const cells: GhosttyCell[] = [];
 
@@ -2996,9 +3107,9 @@ export class GhosttyTerminal {
   }
 
   private rowWraps(tag: number, row: number): boolean {
-    const refPtr = this.scratch + 320;
-    const rowPtr = this.scratch + 336;
-    const outPtr = this.scratch + 352;
+    const refPtr = this.scratch.at('ref');
+    const rowPtr = this.scratch.at('refOut');
+    const outPtr = this.scratch.at('rowFlag');
     if (!this.gridRef(tag, 0, row, refPtr)) return false;
     if (this.exports.ghostty_grid_ref_row(refPtr, rowPtr) !== GHOSTTY_SUCCESS) return false;
     const rowValue = this.mem.view().getBigUint64(rowPtr, true);
@@ -3014,8 +3125,8 @@ export class GhosttyTerminal {
   /** Read a grid reference's hyperlink URI, or null if the cell has none. */
   private hyperlinkAt(tag: number, x: number, y: number): string | null {
     const ex = this.exports;
-    const refPtr = this.scratch + 320;
-    const lenPtr = this.scratch + 336;
+    const refPtr = this.scratch.at('ref');
+    const lenPtr = this.scratch.at('refOut');
     if (!this.gridRef(tag, x, y, refPtr)) return null;
     const sizeResult = ex.ghostty_grid_ref_hyperlink_uri(refPtr, 0, 0, lenPtr);
     if (sizeResult !== GHOSTTY_OUT_OF_SPACE) return null;
@@ -3061,14 +3172,17 @@ export class GhosttyTerminal {
   /** Whether the terminal has an active selection. */
   hasSelection(): boolean {
     return (
-      this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, this.selScratch) ===
-      GHOSTTY_SUCCESS
+      this.exports.ghostty_terminal_get(
+        this.handle,
+        TerminalData.SELECTION,
+        this.scratch.at('selection')
+      ) === GHOSTTY_SUCCESS
     );
   }
 
   /** The active selection in absolute screen rows, start before end. */
   getSelectionRange(): SelectionRange | null {
-    const sel = this.selScratch;
+    const sel = this.scratch.at('selection');
     if (
       this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
       GHOSTTY_SUCCESS
@@ -3082,7 +3196,7 @@ export class GhosttyTerminal {
   selectionRangeAt(sel: number): SelectionRange | null {
     const ex = this.exports;
     const S = this.L.selection;
-    const ordered = this.selScratch + 32;
+    const ordered = this.scratch.at('orderedSelection');
     if (
       ex.ghostty_terminal_selection_ordered(this.handle, sel, SelectionOrder.FORWARD, ordered) !==
       GHOSTTY_SUCCESS
@@ -3102,7 +3216,7 @@ export class GhosttyTerminal {
   }
 
   private screenPoint(refPtr: number): { x: number; y: number } | null {
-    const out = this.selScratch + 64;
+    const out = this.scratch.at('selectionPoint');
     if (
       this.exports.ghostty_terminal_point_from_grid_ref(
         this.handle,
@@ -3132,7 +3246,7 @@ export class GhosttyTerminal {
     rectangle = false
   ): boolean {
     const S = this.L.selection;
-    const sel = this.selScratch + 128;
+    const sel = this.scratch.at('newSelection');
     for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
     if (
       !this.gridRef(PointTag.SCREEN, startCol, startRow, sel + S.start) ||
@@ -3199,7 +3313,7 @@ export class GhosttyTerminal {
    */
   adjustSelection(how: SelectionAdjust): boolean {
     const ex = this.exports;
-    const sel = this.selScratch + 128;
+    const sel = this.scratch.at('newSelection');
     if (ex.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !== GHOSTTY_SUCCESS)
       return false;
     if (
@@ -3218,7 +3332,7 @@ export class GhosttyTerminal {
 
   /** Select all selectable content, scrollback included. */
   selectAll(): boolean {
-    const sel = this.selScratch + 128;
+    const sel = this.scratch.at('newSelection');
     if (this.exports.ghostty_terminal_select_all(this.handle, sel) !== GHOSTTY_SUCCESS)
       return false;
     return this.installSelection(sel);
@@ -3229,7 +3343,7 @@ export class GhosttyTerminal {
    * joined and trailing spaces trimmed.
    */
   getSelectionText(): string {
-    const sel = this.selScratch;
+    const sel = this.scratch.at('selection');
     if (
       this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
       GHOSTTY_SUCCESS
@@ -3342,7 +3456,7 @@ export class GhosttyTerminal {
 
   private formatActiveScreen(options: FormatScreenOptions): string {
     if (options.onlySelection) {
-      const sel = this.selScratch;
+      const sel = this.scratch.at('selection');
       if (
         this.exports.ghostty_terminal_get(this.handle, TerminalData.SELECTION, sel) !==
         GHOSTTY_SUCCESS
@@ -3364,7 +3478,7 @@ export class GhosttyTerminal {
     if (fromRow > 0 || toRow < lastRow) {
       // A selection over whole rows narrows the output.
       const S = this.L.selection;
-      const sel = this.selScratch + 128;
+      const sel = this.scratch.at('newSelection');
       for (let i = 0; i < S.size; i++) this.mem.view().setUint8(sel + i, 0);
       if (
         this.gridRef(PointTag.SCREEN, 0, fromRow, sel + S.start) &&
@@ -3390,7 +3504,7 @@ export class GhosttyTerminal {
     ex.ghostty_wasm_free_opaque(slot);
     if (created !== GHOSTTY_SUCCESS) return '';
 
-    const opt = this.selScratch + 192;
+    const opt = this.scratch.at('formatterOption');
     try {
       const emit =
         options.format === 'vt'
@@ -3412,8 +3526,8 @@ export class GhosttyTerminal {
         ex.ghostty_formatter_set(formatter, FormatterOpt.SELECTION, options.selectionPtr);
       }
 
-      const outPtr = opt + 16;
-      const outLen = opt + 20;
+      const outPtr = this.scratch.at('formatterOutPtr');
+      const outLen = this.scratch.at('formatterOutLen');
       if (ex.ghostty_formatter_format_alloc(formatter, 0, outPtr, outLen) !== GHOSTTY_SUCCESS) {
         return '';
       }
@@ -3466,11 +3580,11 @@ export class GhosttyTerminal {
   /** Read the grapheme codepoints at a grid point. */
   private graphemeAt(tag: number, x: number, y: number): number[] | null {
     const ex = this.exports;
-    const refPtr = this.scratch + 320;
-    const countPtr = this.scratch + 336;
+    const refPtr = this.scratch.at('ref');
+    const countPtr = this.scratch.at('refOut');
     if (!this.gridRef(tag, x, y, refPtr)) return null;
     const cap = GRAPHEME_SCRATCH_SIZE / 4;
-    const buf = this.scratch + GRAPHEME_SCRATCH;
+    const buf = this.scratch.at('graphemes');
     let result = ex.ghostty_grid_ref_graphemes(refPtr, buf, cap, countPtr);
     if (result === GHOSTTY_SUCCESS) {
       const count = this.mem.view().getUint32(countPtr, true);
@@ -3548,7 +3662,18 @@ const DOUBLE_CLICK_DISTANCE_PX = 10;
 export class SelectionGesture {
   private gesture = 0;
   private events: Record<number, number> = {};
-  private scratch = 0;
+  private scratch: Scratch<
+    | 'ref'
+    | 'position'
+    | 'geometry'
+    | 'time'
+    | 'selection'
+    | 'viewport'
+    | 'autoscroll'
+    | 'rectangle'
+    | 'repeatInterval'
+    | 'repeatDistance'
+  >;
 
   constructor(
     private exports: GhosttyWasmExports,
@@ -3577,7 +3702,18 @@ export class SelectionGesture {
     } finally {
       ex.ghostty_wasm_free_opaque(slot);
     }
-    this.scratch = ex.ghostty_wasm_alloc(256);
+    this.scratch = new Scratch(ex, {
+      ref: L.gridRef,
+      position: L.surface.size,
+      geometry: L.geometry.size,
+      time: 8,
+      selection: L.selection.size,
+      viewport: L.coordinate.size,
+      autoscroll: 4,
+      rectangle: 4,
+      repeatInterval: 8,
+      repeatDistance: 8,
+    });
     this.setRepeat(DOUBLE_CLICK_INTERVAL_MS, DOUBLE_CLICK_DISTANCE_PX);
   }
 
@@ -3589,15 +3725,16 @@ export class SelectionGesture {
   setRepeat(intervalMs: number, distancePx: number): void {
     const ex = this.exports;
     const press = this.events[GestureEventType.PRESS];
-    const p = this.scratch + 112;
-    this.mem.view().setBigUint64(p, BigInt(Math.round(intervalMs * 1e6)), true);
-    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_INTERVAL_NS, p);
-    this.mem.view().setFloat64(p + 8, distancePx, true);
-    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_DISTANCE, p + 8);
+    const interval = this.scratch.at('repeatInterval');
+    const distance = this.scratch.at('repeatDistance');
+    this.mem.view().setBigUint64(interval, BigInt(Math.round(intervalMs * 1e6)), true);
+    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_INTERVAL_NS, interval);
+    this.mem.view().setFloat64(distance, distancePx, true);
+    ex.ghostty_selection_gesture_event_set(press, GestureEventOpt.REPEAT_DISTANCE, distance);
   }
 
   private setRef(event: number, col: number, row: number): void {
-    const ref = this.scratch;
+    const ref = this.scratch.at('ref');
     if (this.term.viewportRef(col, row, ref)) {
       this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.REF, ref);
     } else {
@@ -3606,7 +3743,7 @@ export class SelectionGesture {
   }
 
   private setPosition(event: number, x: number, y: number): void {
-    const p = this.scratch + 16;
+    const p = this.scratch.at('position');
     const view = this.mem.view();
     view.setFloat64(p + this.L.surface.x, x, true);
     view.setFloat64(p + this.L.surface.y, y, true);
@@ -3614,13 +3751,13 @@ export class SelectionGesture {
   }
 
   private setRectangle(event: number, rectangle: boolean): void {
-    const p = this.scratch + 104;
+    const p = this.scratch.at('rectangle');
     this.mem.view().setUint8(p, rectangle ? 1 : 0);
     this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.RECTANGLE, p);
   }
 
   private setGeometry(event: number, g: SelectionGeometry): void {
-    const p = this.scratch + 32;
+    const p = this.scratch.at('geometry');
     const G = this.L.geometry;
     const view = this.mem.view();
     view.setUint32(p + G.columns, Math.max(1, g.columns), true);
@@ -3632,7 +3769,7 @@ export class SelectionGesture {
 
   /** Apply an event; install its selection, or clear when it yields none. */
   private apply(event: number, clearOnNone: boolean): boolean {
-    const out = this.scratch + 64;
+    const out = this.scratch.at('selection');
     const result = this.exports.ghostty_selection_gesture_event(
       this.gesture,
       this.term.handle,
@@ -3658,7 +3795,7 @@ export class SelectionGesture {
     const event = this.events[GestureEventType.PRESS];
     this.setRef(event, col, row);
     this.setPosition(event, x, y);
-    const t = this.scratch + 48;
+    const t = this.scratch.at('time');
     this.mem.view().setBigUint64(t, BigInt(Math.max(0, Math.round(timeMs * 1e6))), true);
     this.exports.ghostty_selection_gesture_event_set(event, GestureEventOpt.TIME_NS, t);
     return this.apply(event, true);
@@ -3704,9 +3841,8 @@ export class SelectionGesture {
     const ex = this.exports;
     const event = this.events[GestureEventType.AUTOSCROLL_TICK];
     this.setRectangle(event, rectangle);
-    const coord = this.scratch + 80;
+    const coord = this.scratch.zero('viewport', this.mem.bytes());
     const view = this.mem.view();
-    this.mem.bytes().fill(0, coord, coord + this.L.coordinate.size);
     view.setUint16(coord + this.L.coordinate.x, col, true);
     view.setUint32(coord + this.L.coordinate.y, row, true);
     ex.ghostty_selection_gesture_event_set(event, GestureEventOpt.VIEWPORT, coord);
@@ -3717,7 +3853,7 @@ export class SelectionGesture {
 
   /** The autoscroll the current drag asks for. */
   autoscroll(): SelectionAutoscroll {
-    const out = this.scratch + 96;
+    const out = this.scratch.at('autoscroll');
     this.mem.view().setUint32(out, 0, true);
     this.exports.ghostty_selection_gesture_get(
       this.gesture,
@@ -3741,7 +3877,7 @@ export class SelectionGesture {
     this.events = {};
     ex.ghostty_selection_gesture_free(this.gesture, terminalAlive ? this.term.handle : 0);
     this.gesture = 0;
-    ex.ghostty_wasm_free(this.scratch, 256);
+    this.scratch.free();
   }
 }
 
@@ -3768,7 +3904,7 @@ export const SearchData = {
  */
 export class TerminalSearch {
   private search = 0;
-  private scratch = 0;
+  private scratch: Scratch<'needle' | 'value' | 'selection' | 'matches'>;
   private needle = '';
 
   constructor(
@@ -3787,7 +3923,12 @@ export class TerminalSearch {
     } finally {
       ex.ghostty_wasm_free_opaque(slot);
     }
-    this.scratch = ex.ghostty_wasm_alloc(64);
+    this.scratch = new Scratch(ex, {
+      needle: L.string.size,
+      value: 8,
+      selection: L.selection.size,
+      matches: L.selectionBuffer.size,
+    });
   }
 
   /** Set what to search for; '' clears the search. Same text keeps results. */
@@ -3801,7 +3942,7 @@ export class TerminalSearch {
     const bytes = new TextEncoder().encode(text);
     const ptr = ex.ghostty_wasm_alloc(bytes.length);
     this.mem.bytes().set(bytes, ptr);
-    const str = this.scratch;
+    const str = this.scratch.at('needle');
     const view = this.mem.view();
     view.setUint32(str, ptr, true);
     view.setUint32(str + 4, bytes.length, true);
@@ -3834,7 +3975,7 @@ export class TerminalSearch {
   }
 
   private getU32(data: number): number | null {
-    const out = this.scratch;
+    const out = this.scratch.at('value');
     if (this.exports.ghostty_search_get(this.search, data, out) !== GHOSTTY_SUCCESS) return null;
     return this.mem.view().getUint32(out, true);
   }
@@ -3851,7 +3992,7 @@ export class TerminalSearch {
 
   /** The selected match in absolute screen rows, or null. */
   selectedMatch(): SelectionRange | null {
-    const sel = this.scratch + 32;
+    const sel = this.scratch.at('selection');
     if (
       this.exports.ghostty_search_get(this.search, SearchData.SELECTED_MATCH, sel) !==
       GHOSTTY_SUCCESS
@@ -3863,7 +4004,7 @@ export class TerminalSearch {
 
   /** Make the selected match the terminal's selection. */
   selectMatchAsSelection(): boolean {
-    const sel = this.scratch + 32;
+    const sel = this.scratch.at('selection');
     if (
       this.exports.ghostty_search_get(this.search, SearchData.SELECTED_MATCH, sel) !==
       GHOSTTY_SUCCESS
@@ -3884,7 +4025,7 @@ export class TerminalSearch {
     // A first call with no buffer reports how many matches there are.
     const B = this.L.selectionBuffer;
     const selectionSize = this.L.selection.size;
-    const buf = this.scratch + 16;
+    const buf = this.scratch.at('matches');
     this.mem.bytes().fill(0, buf, buf + B.size);
     ex.ghostty_search_get(this.search, SearchData.VIEWPORT_MATCHES, buf);
     const count = this.mem.view().getUint32(buf + B.len, true);
@@ -3914,7 +4055,7 @@ export class TerminalSearch {
 
   dispose(): void {
     if (this.search) this.exports.ghostty_search_free(this.search);
-    if (this.scratch) this.exports.ghostty_wasm_free(this.scratch, 64);
-    this.search = this.scratch = 0;
+    this.scratch.free();
+    this.search = 0;
   }
 }
