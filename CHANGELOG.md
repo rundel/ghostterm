@@ -4,6 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- Large writes are processed a slice at a time (at most about 12 ms per task, as in xterm.js), so they no longer block the page; later writes wait their turn. `write()` callbacks run once their data has been processed instead of on the next animation frame, and `onWriteParsed` fires after each slice.
 - An idle terminal no longer draws every animation frame: frames are drawn only when something changed.
 - The package exports only the xterm.js-style API (`Terminal`, `init`, the interfaces and event types), the addons and `Ghostty`. The renderer, input handler, selection manager, link detector, encoders, `GhosttyTerminal` and the libghostty enums are no longer exported, and `Terminal.renderer` and `Terminal.viewportY` are private (`getViewportY()` remains).
 - `input(data)` sends the data to the program (`onData`) by default, as in xterm.js; with `wasUserInput` false it is still sent but doesn't scroll to the bottom. It no longer writes to the screen.

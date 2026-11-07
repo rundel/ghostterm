@@ -71,6 +71,33 @@ import { UnicodeHandling } from './unicode';
 // Terminal Class
 // ============================================================================
 
+/**
+ * How long one batch of writes may run before the rest waits for the next task, so a large write
+ * doesn't block the page (and frames are drawn in between). xterm.js uses the same budget.
+ */
+const WRITE_TIME_BUDGET_MS = 12;
+/** The most of one write handed to libghostty at a time (bytes, or UTF-16 code units). */
+const WRITE_CHUNK_SIZE = 64 * 1024;
+
+/**
+ * The first `max` units of a write and the rest, cut where libghostty can resume: never inside a
+ * surrogate pair or a UTF-8 sequence (escape sequences may be cut; the parser streams).
+ */
+export function splitWrite(
+  data: string | Uint8Array,
+  max: number
+): [string | Uint8Array, string | Uint8Array | null] {
+  if (data.length <= max) return [data, null];
+  let cut = max;
+  if (typeof data === 'string') {
+    const unit = data.charCodeAt(cut - 1);
+    if (unit >= 0xd800 && unit <= 0xdbff) cut--;
+    return [data.slice(0, cut), data.slice(cut)];
+  }
+  while (cut > max - 3 && (data[cut] & 0xc0) === 0x80) cut--;
+  return [data.subarray(0, cut), data.subarray(cut)];
+}
+
 export class Terminal implements ITerminalCore {
   // Public properties (xterm.js compatibility)
   public cols: number;
@@ -144,7 +171,10 @@ export class Terminal implements ITerminalCore {
    * processed. Counted from the bytes written (see countLineFeeds).
    */
   public readonly onLineFeed: IEvent<void> = this.lineFeedEmitter.event;
-  /** Fires once the queued writes have been processed (once per batch, as in xterm.js). */
+  /**
+   * Fires after each batch of queued writes is processed, as in xterm.js. A large write is
+   * processed in several batches, one per task.
+   */
   public readonly onWriteParsed: IEvent<void> = this.writeParsedEmitter.event;
 
   // Requests from the running program, reported by libghostty
@@ -175,6 +205,8 @@ export class Terminal implements ITerminalCore {
   private pendingWrites: Array<{ data: string | Uint8Array; callback?: () => void }> = [];
   /** Set while writes are being processed (listeners may write re-entrantly). */
   private writing = false;
+  /** The task that continues writing after a batch ran out of time. */
+  private writeContinuation?: number;
   private awaitingEcho = false;
   /** Remove the listeners open() added (see listen()); run by dispose(). */
   private listenerRemovers: Array<() => void> = [];
@@ -688,9 +720,11 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Write data to terminal. Before open(), and while a write is being
-   * processed (e.g. from an event listener), data is queued and written
-   * afterwards, in order.
+   * Write data to terminal. Small writes are processed at once. Before open(), while a write is
+   * being processed (e.g. from an event listener) and while a large write is still being
+   * processed, data is queued and written afterwards, in order. Writes are processed for at most
+   * WRITE_TIME_BUDGET_MS at a time; the rest continues in the next task. The callback runs (in a
+   * microtask) once its data has been processed, as in xterm.js.
    */
   write(data: string | Uint8Array, callback?: () => void): void {
     if (this.isDisposed) {
@@ -703,34 +737,64 @@ export class Terminal implements ITerminalCore {
     }
 
     this.pendingWrites.push({ data, callback });
-    if (this.isOpen && !this.writing) this.flushPendingWrites();
+    if (this.isOpen && !this.writing && this.writeContinuation === undefined) {
+      this.flushPendingWrites();
+    }
   }
 
-  /** Write queued data. Listeners that write while this runs append to the queue. */
+  /**
+   * Write queued data, a chunk at a time, until the queue is empty or the time budget is spent;
+   * then the rest continues in the next task. Listeners that write while this runs append to the
+   * queue.
+   */
   private flushPendingWrites(): void {
-    if (this.writing) return;
+    if (this.writing || this.isDisposed) return;
+    this.cancelWriteContinuation();
     this.writing = true;
+    const start = performance.now();
     let wrote = false;
+    let outOfTime = false;
     try {
       while (this.pendingWrites.length > 0 && this.isOpen) {
-        const { data, callback } = this.pendingWrites.shift()!;
-        this.writeInternal(data, callback);
+        if (wrote && performance.now() - start >= WRITE_TIME_BUDGET_MS) {
+          outOfTime = true;
+          break;
+        }
+        const entry = this.pendingWrites[0];
+        const [chunk, rest] = splitWrite(entry.data, WRITE_CHUNK_SIZE);
+        if (rest === null) this.pendingWrites.shift();
+        else entry.data = rest;
+        this.writeInternal(chunk);
         wrote = true;
+        if (rest === null && entry.callback) queueMicrotask(entry.callback);
       }
     } finally {
       this.writing = false;
     }
-    if (wrote && !this.isDisposed) {
-      this.writeParsedEmitter.fire();
-      // Listeners may have written; those writes were queued.
-      if (this.pendingWrites.length > 0 && this.isOpen) this.flushPendingWrites();
+    if (!wrote || this.isDisposed) return;
+    this.writeParsedEmitter.fire();
+    if (this.pendingWrites.length === 0 || !this.isOpen) return;
+    if (outOfTime) {
+      this.writeContinuation = window.setTimeout(() => {
+        this.writeContinuation = undefined;
+        this.flushPendingWrites();
+      }, 0);
+    } else {
+      // Listeners wrote; those writes were queued.
+      this.flushPendingWrites();
     }
+  }
+
+  private cancelWriteContinuation(): void {
+    if (this.writeContinuation === undefined) return;
+    clearTimeout(this.writeContinuation);
+    this.writeContinuation = undefined;
   }
 
   /**
    * Internal write implementation (extracted from write())
    */
-  private writeInternal(data: string | Uint8Array, callback?: () => void): void {
+  private writeInternal(data: string | Uint8Array): void {
     // Note: We intentionally do NOT clear selection on write - most modern terminals
     // preserve selection when new data arrives. Selection is cleared by user actions
     // like clicking or typing, not by incoming data.
@@ -776,12 +840,6 @@ export class Terminal implements ITerminalCore {
         this.canvas.style.cursor = shape;
         if (this.element) this.element.style.cursor = shape;
       }
-    }
-
-    // Call callback if provided
-    if (callback) {
-      // Queue callback after next render
-      requestAnimationFrame(callback);
     }
 
     if (this.awaitingEcho) {
@@ -1388,6 +1446,7 @@ export class Terminal implements ITerminalCore {
 
     // Stop rendering and clear write queue
     this.cancelRender();
+    this.cancelWriteContinuation();
     this.pendingWrites.length = 0;
 
     this.cancelScrollAnimation();

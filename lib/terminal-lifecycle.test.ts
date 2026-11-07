@@ -6,7 +6,7 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { RecordingContext } from '../happydom';
 import type { ITerminalAddon } from './interfaces';
-import type { Terminal } from './terminal';
+import { type Terminal, splitWrite } from './terminal';
 import { internals, nextFrame, stub, terminalFixture } from './test-helpers';
 import { UNICODE_VERSIONS } from './unicode';
 
@@ -150,15 +150,90 @@ describe('writing', () => {
     expect([bufferLine(term, 0), bufferLine(term, 1)]).toEqual(['one', 'two']);
   });
 
-  test('write callbacks run in order after the next frame', async () => {
+  test('write callbacks run in order once their data is processed, never inside write()', async () => {
     const { term } = fixture.open();
     const order: number[] = [];
     term.write('First', () => order.push(1));
     term.write('Second', () => order.push(2));
     term.write('Third', () => order.push(3));
     expect(order).toEqual([]);
-    await nextFrame();
+    await Promise.resolve();
     expect(order).toEqual([1, 2, 3]);
+  });
+
+  describe('large writes', () => {
+    /** Make performance.now() advance by `step` ms on every call, so each batch runs out of time. */
+    function slowClock(step: number): () => void {
+      let t = 0;
+      const now = spyOn(performance, 'now').mockImplementation(() => {
+        t += step;
+        return t;
+      });
+      return () => now.mockRestore();
+    }
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `row ${i}\r\n`).join('');
+
+    test('are processed over several tasks, in order, with callbacks after their data', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5, scrollback: 100000 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      const big = lines(30000); // several chunks
+      const order: string[] = [];
+      let parsed = 0;
+      term.onWriteParsed(() => parsed++);
+      term.write(big, () => order.push('big'));
+      term.write('tail', () => order.push('tail'));
+      // Only the first chunk ran; 'tail' waits behind the rest of the big write.
+      expect(parsed).toBe(1);
+      expect(term.buffer.active.length).toBeLessThan(30000);
+      await Promise.resolve();
+      expect(order).toEqual([]);
+      while (order.length < 2) await new Promise((r) => setTimeout(r, 0));
+      restore();
+      expect(order).toEqual(['big', 'tail']);
+      expect(parsed).toBeGreaterThan(2);
+      const last = term.buffer.active.getLine(term.buffer.active.length - 1);
+      expect(last?.translateToString(true)).toBe('tail');
+      const above = term.buffer.active.getLine(term.buffer.active.length - 2);
+      expect(above?.translateToString(true)).toBe('row 29999');
+    });
+
+    test('a write while a large one continues is queued behind it', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5, scrollback: 100000 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      term.write(lines(30000));
+      term.write('after');
+      restore();
+      await new Promise((r) => setTimeout(r, 0));
+      while (term['pendingWrites'].length > 0) await new Promise((r) => setTimeout(r, 0));
+      const last = term.buffer.active.getLine(term.buffer.active.length - 1);
+      expect(last?.translateToString(true)).toBe('after');
+    });
+
+    test('dispose() drops what is left', async () => {
+      const { term } = fixture.open({ cols: 20, rows: 5 });
+      const restore = slowClock(20);
+      fixture.defer(restore);
+      let called = false;
+      term.write(lines(30000), () => {
+        called = true;
+      });
+      term.dispose();
+      restore();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(called).toBe(false);
+    });
+  });
+
+  test('splitWrite() never cuts a surrogate pair or a UTF-8 sequence', () => {
+    expect(splitWrite('ab\u{1F600}cd', 3)).toEqual(['ab', '\u{1F600}cd']);
+    expect(splitWrite('abcd', 2)).toEqual(['ab', 'cd']);
+    expect(splitWrite('ab', 5)).toEqual(['ab', null]);
+    const bytes = new TextEncoder().encode('a\u{1F600}b'); // 1 + 4 + 1 bytes
+    const [head, rest] = splitWrite(bytes, 3);
+    expect([...(head as Uint8Array)]).toEqual([0x61]);
+    expect(new TextDecoder().decode(rest as Uint8Array)).toBe('\u{1F600}b');
   });
 
   test('cursor movement sequences are applied', () => {
