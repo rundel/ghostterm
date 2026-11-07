@@ -1,15 +1,13 @@
 /**
- * Test environment, preloaded by Bun (bunfig.toml).
+ * Browser-like environment for tests and the benchmark, preloaded by Bun for tests (bunfig.toml).
  *
  * - Registers happy-dom's globals (window, document, HTMLElement, ...).
  * - Replaces the 2D canvas context, which happy-dom lacks, with one that records
  *   every drawing call; lib/test-helpers.ts reads the record (drawnText, paintedRects).
- * - After each test, fails if the test left a Terminal open, elements in
- *   document.body or output on the console. Tests that expect a warning spy on
- *   console.warn and assert it.
+ *
+ * The checks run after each test are in test-cleanup.ts, which only the test runner loads.
  */
 
-import { afterEach, beforeEach } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 GlobalRegistrator.register();
@@ -142,52 +140,3 @@ HTMLCanvasElement.prototype.getContext = function (
   }
   return ctx as unknown as CanvasRenderingContext2D;
 } as typeof HTMLCanvasElement.prototype.getContext;
-
-// Track open terminals. Imported once the globals exist; loading the module
-// neither loads the WASM module nor initializes anything.
-const { Terminal } = await import('./lib/terminal');
-const openTerminals = new Set<InstanceType<typeof Terminal>>();
-const { open, dispose } = Terminal.prototype;
-Terminal.prototype.open = function (parent: HTMLElement) {
-  open.call(this, parent);
-  openTerminals.add(this);
-};
-Terminal.prototype.dispose = function () {
-  openTerminals.delete(this);
-  dispose.call(this);
-};
-
-const consoleMethods = ['log', 'info', 'warn', 'error', 'debug'] as const;
-type ConsoleMethod = (typeof consoleMethods)[number];
-const realConsole = Object.fromEntries(consoleMethods.map((m) => [m, console[m]])) as Record<
-  ConsoleMethod,
-  (...args: unknown[]) => void
->;
-let consoleOutput: string[] = [];
-
-beforeEach(() => {
-  consoleOutput = [];
-  for (const m of consoleMethods) {
-    console[m] = (...args: unknown[]) => {
-      consoleOutput.push(`console.${m}: ${args.map(String).join(' ')}`);
-      realConsole[m](...args);
-    };
-  }
-});
-
-afterEach(() => {
-  for (const m of consoleMethods) console[m] = realConsole[m];
-  const problems: string[] = [];
-  if (openTerminals.size > 0) {
-    problems.push(`${openTerminals.size} Terminal(s) left open`);
-    for (const term of [...openTerminals]) term.dispose();
-  }
-  if (document.body.childElementCount > 0) {
-    problems.push(`${document.body.childElementCount} element(s) left in document.body`);
-    document.body.replaceChildren();
-  }
-  if (consoleOutput.length > 0) {
-    problems.push(`unexpected console output:\n  ${consoleOutput.join('\n  ')}`);
-  }
-  if (problems.length > 0) throw new Error(`Test cleanup: ${problems.join('; ')}`);
-});
