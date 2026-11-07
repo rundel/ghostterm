@@ -205,6 +205,28 @@ describe('grid access', () => {
     }
   });
 
+  test('a scrollback limit of 0 keeps no history', () => {
+    const term = ghostty.createTerminal(20, 3, { scrollbackLimit: 0 });
+    try {
+      for (let i = 0; i < 2000; i++) term.write(`line ${i}\r\n`);
+      expect(term.getScrollbackLength()).toBe(0);
+      expect(text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd()).toBe('line 1998');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('the scrollback limit counts lines, not bytes', () => {
+    const term = ghostty.createTerminal(80, 3, { scrollbackLimit: 5000 });
+    try {
+      // Far more than libghostty's default 10,000-byte history cap.
+      for (let i = 0; i < 3000; i++) term.write(`${'x'.repeat(70)} ${i}\r\n`);
+      expect(term.getScrollbackLength()).toBeGreaterThan(2900);
+    } finally {
+      term.free();
+    }
+  });
+
   test('finds OSC 8 hyperlinks in the viewport and scrollback', () => {
     const term = ghostty.createTerminal(30, 3);
     try {
