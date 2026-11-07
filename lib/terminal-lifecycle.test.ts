@@ -68,6 +68,15 @@ describe('construction and open()', () => {
     });
     container.dispatchEvent(drop);
     expect(drop.defaultPrevented).toBe(true);
+    // Text dropped onto the canvas would land in the parent too.
+    const onCanvas = new InputEvent('beforeinput', {
+      inputType: 'insertFromDrop',
+      data: 'dropped',
+      bubbles: true,
+      cancelable: true,
+    });
+    container.querySelector('canvas')!.dispatchEvent(onCanvas);
+    expect(onCanvas.defaultPrevented).toBe(true);
     expect(sent).toEqual([]);
 
     const typed = new InputEvent('beforeinput', {

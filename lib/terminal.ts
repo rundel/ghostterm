@@ -414,10 +414,11 @@ export class Terminal implements IAddonTerminal {
       // Never let the browser edit the parent itself. Clicks on the canvas
       // focus the textarea, but the parent can still be the editing host:
       // focused with Tab (it has a tabindex), clicked outside the canvas (its
-      // padding), or the target of text dropped onto the terminal. Input on
-      // the textarea has the textarea as target and is handled there.
+      // padding), or the target of text dropped onto the terminal (onto the
+      // canvas, the event's target is the canvas). Input on the textarea has
+      // the textarea as target and is handled there.
       this.listen(parent, 'beforeinput', (e) => {
-        if (e.target === parent) {
+        if (e.target !== this.textarea) {
           e.preventDefault();
         }
       });
