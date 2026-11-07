@@ -1,0 +1,78 @@
+name: release
+
+# Pushed by `bun run release <version>`. A tag with a suffix (v0.2.0-rc.1) is published as a
+# prerelease; a plain tag (v0.2.0) as a release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$TAG is not a vX.Y.Z or vX.Y.Z-suffix tag"; exit 1
+          fi
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::package.json version $PKG_VERSION does not match $TAG"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$TAG is not on main"; exit 1
+          fi
+          [[ "$VERSION" == *-* ]] && PRERELEASE=true || PRERELEASE=false
+          {
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "libghostty=$(node -p "require('./package.json')['libghostty-vt']")"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+      - run: ./scripts/fetch-wasm.sh
+      - run: bun run fmt
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          npm pack --pack-destination release
+          (cd dist && zip -qr "../release/ghostterm-$VERSION-dist.zip" .)
+          (cd release && sha256sum * > SHA256SUMS)
+          ls -l release
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+          LIBGHOSTTY: ${{ steps.tag.outputs.libghostty }}
+        run: |
+          set -euo pipefail
+          FLAGS=(--latest)
+          [ "$PRERELEASE" = true ] && FLAGS=(--prerelease --latest=false)
+          gh release create "$TAG" release/* \
+            --title "$TAG" \
+            --notes "Built on libghostty-vt $LIBGHOSTTY." \
+            --generate-notes \
+            "${FLAGS[@]}"

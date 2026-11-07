@@ -1,63 +1,36 @@
-# ghostty-web
+# ghostterm
 
-[![NPM Version](https://img.shields.io/npm/v/ghostty-web)](https://npmjs.com/package/ghostty-web) [![NPM Downloads](https://img.shields.io/npm/dw/ghostty-web)](https://npmjs.com/package/ghostty-web) [![npm bundle size](https://img.shields.io/bundlephobia/minzip/ghostty-web)](https://npmjs.com/package/ghostty-web) [![license](https://img.shields.io/github/license/coder/ghostty-web)](./LICENSE)
+A terminal emulator for the browser, built on [libghostty-vt](https://lib.ghostty.org/), with an
+[xterm.js](https://github.com/xtermjs/xterm.js)-compatible API. The terminal emulation is Ghostty's own, from the
+official libghostty-vt WebAssembly release: parsing, screen and scrollback, keyboard and mouse encoding,
+selection, search and serialization. ghostterm draws it to a canvas and handles the DOM.
 
-[Ghostty](https://github.com/ghostty-org/ghostty) for the web with [xterm.js](https://github.com/xtermjs/xterm.js) API compatibility: a proper terminal emulator in the browser, built on [libghostty-vt](https://lib.ghostty.org/).
+This is a personal, experimental project. It is not published to npm; releases are on GitHub.
 
-- Migrate from xterm.js by changing your import: `@xterm/xterm` → `ghostty-web`
-- The terminal emulation is Ghostty's own, from the official libghostty-vt WebAssembly release: parsing, screen and scrollback, keyboard and mouse encoding, selection, search and serialization
-- Zero runtime dependencies; the WebAssembly module is about 830 KB (300 KB gzipped)
+## Origins
 
-Originally created for [Mux](https://github.com/coder/mux) (a desktop app for isolated, parallel agentic development), but designed to be used anywhere.
+ghostterm started as a fork of [ghostty-web](https://github.com/coder/ghostty-web) by [Coder](https://coder.com),
+published on npm as `ghostty-web`. It was forked after ghostty-web 0.4.0 (at
+[`640db46`](https://github.com/coder/ghostty-web/commit/640db46)) and has since been largely rewritten around
+Ghostty's official libghostty-vt WebAssembly module and its C API. The git history before the fork is ghostty-web's.
 
-## Try It
-
-- [Live Demo](https://ghostty.ondis.co) on an ephemeral VM (thank you to Greg from [disco.cloud](https://disco.cloud) for hosting).
-
-- On your computer:
-
-  ```bash
-  npx @ghostty-web/demo@next
-  ```
-
-  This starts a loopback-only HTTP server with a real shell on `http://127.0.0.1:8080`. The demo protects `/ws` with a per-run same-origin token and rejects cross-origin WebSocket handshakes. Works best on Linux and macOS.
-
-  To intentionally bind somewhere else, set `HOST=<host>`. If you serve the demo through extra hostnames or a wildcard bind such as `HOST=0.0.0.0`, also set `GHOSTTY_ALLOWED_HOSTS=host1,host2`. Avoid remote exposure unless you understand the risk: the demo starts a real local shell.
-
-![ghostty](https://github.com/user-attachments/assets/aceee7eb-d57b-4d89-ac3d-ee1885d0187a)
-
-## Comparison with xterm.js
-
-xterm.js is everywhere: VS Code, Hyper, countless web terminals. But it reimplements terminal emulation in JavaScript, with every escape sequence, edge case and Unicode quirk hand-coded. ghostty-web hands all of that to libghostty, the same code that runs the native Ghostty app.
-
-| Issue                                | xterm.js                                                         | ghostty-web              |
-| ------------------------------------ | ---------------------------------------------------------------- | ------------------------ |
-| Complex scripts (Devanagari, Arabic) | Rendering issues                                                 | Proper grapheme handling |
-| XTPUSHSGR/XTPOPSGR                   | [Not supported](https://github.com/xtermjs/xterm.js/issues/2570) | Supported                |
-
-From libghostty, ghostty-web also gets the Kitty keyboard protocol and modifyOtherKeys, every mouse report
-format (X10, UTF-8, SGR, URxvt, SGR-Pixels), synchronized output, curly, double, dotted and dashed underlines with
-underline colors, and a scrollback search whose results stay correct while output keeps arriving.
+[Ghostty](https://github.com/ghostty-org/ghostty) and libghostty are by Mitchell Hashimoto and the Ghostty
+contributors.
 
 ## Installation
 
+Install a release's package tarball from GitHub:
+
 ```bash
-npm install ghostty-web
+npm install https://github.com/rundel/ghostterm/releases/download/v0.1.0/ghostterm-0.1.0.tgz
 ```
 
-### Versioning
-
-ghostty-web uses semantic versioning for its own API, independent of libghostty-vt's version numbers. The
-libghostty-vt release a version bundles is in its `package.json` (the `libghostty-vt` field), at the top of its
-release notes, and at runtime in `ghostty.version`. Moving to a new libghostty-vt release is a minor release
-when it brings new capabilities and a patch release otherwise.
+or build it from a checkout (`bun run build`) and depend on the directory (`"ghostterm": "file:../ghostterm"`).
 
 ## Usage
 
-ghostty-web aims to be API-compatible with the xterm.js API.
-
 ```javascript
-import { init, Terminal } from 'ghostty-web';
+import { init, Terminal } from 'ghostterm';
 
 await init();
 
@@ -74,7 +47,7 @@ term.onData((data) => websocket.send(data));
 websocket.onmessage = (e) => term.write(e.data);
 ```
 
-For a comprehensive client <-> server example, refer to the [demo](./demo/index.html#L141).
+See [`demo/index.html`](./demo/index.html) for a complete client connected to a shell.
 
 ### Faster WebAssembly build
 
@@ -84,8 +57,8 @@ ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same releas
 use it, pass its URL to `init()`:
 
 ```javascript
-import { init } from 'ghostty-web';
-import fastWasm from 'ghostty-web/ghostty-vt-fast.wasm?url'; // Vite; other bundlers have their own asset imports
+import { init } from 'ghostterm';
+import fastWasm from 'ghostterm/ghostty-vt-fast.wasm?url'; // Vite; other bundlers have their own asset imports
 
 await init({ wasmPath: fastWasm });
 ```
@@ -95,7 +68,7 @@ await init({ wasmPath: fastWasm });
 ### Addons
 
 ```javascript
-import { FitAddon, SearchAddon, SerializeAddon } from 'ghostty-web';
+import { FitAddon, SearchAddon, SerializeAddon } from 'ghostterm';
 
 // Size the terminal to its container
 const fit = new FitAddon();
@@ -138,7 +111,7 @@ Besides the xterm.js events (`onData`, `onResize`, `onTitleChange`, `onBell`, `o
 
 With shell integration, `term.scrollToPrompt(-1)` and `term.scrollToPrompt(1)` jump between prompts.
 
-Programs can also query the terminal's light or dark color scheme and its cell size in pixels, change the cursor shape, blink and color, set the mouse pointer shape (OSC 22) and use synchronized output (mode 2026). ghostty-web answers and applies all of these.
+Programs can also query the terminal's light or dark color scheme and its cell size in pixels, change the cursor shape, blink and color, set the mouse pointer shape (OSC 22) and use synchronized output (mode 2026). ghostterm answers and applies all of these.
 
 ### Behavior worth knowing
 
@@ -156,29 +129,39 @@ These follow Ghostty rather than xterm.js:
 
 ## Development
 
-ghostty-web runs on the official prebuilt WebAssembly module that Ghostty publishes with each
+ghostterm runs on the official prebuilt WebAssembly module that Ghostty publishes with each
 [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI.
-`scripts/fetch-wasm.sh` downloads both builds of the pinned release (`ghostty-vt.wasm`, size-optimized, and
-`ghostty-vt-fast.wasm`, speed-optimized) and checks their SHA-256. `scripts/update-libghostty.sh` moves the pin
-to the latest libghostty-vt release.
+`scripts/fetch-wasm.sh` downloads both builds of the pinned release and checks their SHA-256;
+`scripts/update-libghostty.sh` moves the pin to a newer release. The bundled release is also recorded in the
+`libghostty-vt` field of `package.json` and reported at runtime by `ghostty.version`.
 
-> Requires Bun and curl.
+Requires Bun and curl.
 
 ```bash
 bun install
-bun run build            # fetch the WASM module and build dist/
-bun test                 # run the test suite
-bun run demo:dev         # demo with a real shell at http://127.0.0.1:8000/demo/ (run `npm install` in demo/ first)
+./scripts/fetch-wasm.sh
+bun test
+bun run build            # dist/
+bun run demo             # a real shell at http://127.0.0.1:8000/demo/ (see demo/README.md)
 ```
 
 Before committing, run `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
 [CLAUDE.md](./CLAUDE.md) describes the architecture for contributors and coding agents.
 
-Mitchell Hashimoto (author of Ghostty) built `libghostty`, which makes this all possible. ghostty-web provides an
-xterm.js compatible API on top of it.
+## Releases
 
-At Coder we're big fans of Ghostty, so kudos to that team for all the amazing work.
+Versions are ghostterm's own semver. To release from an up-to-date, clean `main`:
+
+```bash
+bun run release 0.2.0-rc.1        # a prerelease: any suffix after the patch number
+bun run release 0.2.0 --push      # a release, pushed straight away
+```
+
+This runs the checks, sets the version in `package.json`, commits and tags. Pushing the tag runs
+`.github/workflows/release.yml`, which builds and creates the GitHub release, marked as a prerelease when the
+version has a suffix. Each release carries the package tarball, a zip of `dist/` and `SHA256SUMS`, and its notes
+name the libghostty-vt release it is built on.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE). The original ghostty-web code is © Coder.

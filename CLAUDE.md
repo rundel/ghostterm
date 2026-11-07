@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## What this is
 
-ghostty-web is a browser terminal with an xterm.js-compatible API. The terminal emulation comes from
-[libghostty-vt](https://lib.ghostty.org/), Ghostty's terminal library, through the official prebuilt WebAssembly
-module that Ghostty publishes with each release. ghostty-web supplies what the library doesn't: drawing to a
-canvas, DOM event plumbing, layout, the xterm.js API and addons.
+ghostterm is a browser terminal with an xterm.js-compatible API, for personal and experimental use (not
+published to npm; releases are on GitHub). It began as a fork of Coder's ghostty-web and has been largely
+rewritten. The terminal emulation comes from [libghostty-vt](https://lib.ghostty.org/), Ghostty's terminal
+library, through the official prebuilt WebAssembly module that Ghostty publishes with each release. ghostterm
+supplies what the library doesn't: drawing to a canvas, DOM event plumbing, layout, the xterm.js API and addons.
 
 The guiding rule: terminal behavior belongs to libghostty. Before writing terminal logic in TypeScript (parsing
 sequences, encoding keys or mouse events, word boundaries, text extraction, color resolution, row arithmetic),
@@ -26,8 +27,10 @@ bun test -t "pattern"            # matching tests
 bun run typecheck
 bun run lint                     # Biome; `bun run lint:fix` to fix
 bun run fmt                      # Prettier check; `bun run fmt:fix` to fix
-bun run build                    # fetch WASM + vite build into dist/
-bun run demo:dev                 # Vite + PTY server: http://127.0.0.1:8000/demo/ (needs `npm install` in demo/)
+bun run build                    # fetch WASM + vite build into dist/ (ES module + both .wasm files)
+bun run demo                     # Vite + PTY server: http://127.0.0.1:8000/demo/
+bun run bench                    # throughput against xterm.js
+bun run release <version>        # see "Releases" below
 ```
 
 Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
@@ -136,18 +139,23 @@ happy-dom quirks: `WheelEvent` ignores `clientX`/`clientY`; set `offsetX`/`offse
 with `Object.defineProperty`; synthetic events need `cancelable: true` for `defaultPrevented` to mean anything.
 
 Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be checked in a browser with
-`bun run demo:dev`.
+`bun run demo`.
 
-## Versioning and upgrading libghostty-vt
+## Releases
 
-The package version is ghostty-web's own semver, set by release-please from conventional commits; never set it
-by hand. The bundled libghostty-vt release is recorded separately: `VERSION` in `scripts/fetch-wasm.sh` (what is
-downloaded) and the `libghostty-vt` field in `package.json` (what users and the release notes see, via
-`readLibghosttyVersion()` in `scripts/release-please-ai/changelog-notes.ts`). A test in `lib/ghostty.test.ts`
-keeps both equal to the loaded module's version.
+Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that
+changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every
+`v*` tag, runs the checks, commits `Release vX.Y.Z` and creates an annotated tag; `--push` pushes both. The tag
+starts `.github/workflows/release.yml`, which checks the tag against `package.json`, builds, and creates the GitHub
+release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`. A version with a suffix (`0.2.0-rc.1`) becomes a
+prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests.
 
-To move to a new libghostty-vt release, follow the `bump-libghostty` skill (`.claude/skills/bump-libghostty/`).
-In short:
+## Upgrading libghostty-vt
+
+The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (what is downloaded) and the
+`libghostty-vt` field in `package.json` (what release notes name). A test in `lib/ghostty.test.ts` keeps both equal
+to the loaded module's version. To move to a new release, follow the `bump-libghostty` skill
+(`.claude/skills/bump-libghostty/`). In short:
 
 1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the
    minisign-verified `SHA256SUMS`, rewrites the pin and the `package.json` field, and fetches the modules.

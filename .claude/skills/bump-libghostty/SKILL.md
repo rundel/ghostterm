@@ -1,19 +1,17 @@
 ---
 name: bump-libghostty
-description: Check for a new libghostty-vt release and move ghostty-web onto it - repin and verify the WASM builds, review upstream ABI and behavior changes against what the bridge relies on, update code, tests and docs, record the new release in package.json, and choose the commit type that sets the next semver bump. Use when asked to bump, upgrade or update libghostty / libghostty-vt / ghostty-vt.wasm, check whether a new libghostty release is out, or do a "version bump" for this project.
+description: Check for a new libghostty-vt release and move ghostterm onto it - repin and verify the WASM builds, review upstream ABI and behavior changes against what the bridge relies on, update code, tests and docs, record the new release in package.json, and recommend the next ghostterm version. Use when asked to bump, upgrade or update libghostty / libghostty-vt / ghostty-vt.wasm, check whether a new libghostty release is out, or do a "version bump" for this project.
 ---
 
 # Bump libghostty-vt
 
-ghostty-web's version is its own semver, independent of libghostty-vt's numbers. The bundled libghostty-vt
+ghostterm's version is its own semver, independent of libghostty-vt's numbers. The bundled libghostty-vt
 release is recorded in two places that must agree (a test in `lib/ghostty.test.ts` checks them against the loaded
 module): `VERSION` in `scripts/fetch-wasm.sh`, which decides what is downloaded, and the `libghostty-vt` field in
-`package.json`, which users see and which release-please puts at the top of the release notes ("Built on
-libghostty-vt X.Y.Z.").
+`package.json`, which the GitHub release notes name ("Built on libghostty-vt X.Y.Z.").
 
-So bumping libghostty means changing those two, making the code correct for the new release, and picking the
-commit type. Do not edit `version` in `package.json`, `demo/package.json`, `flake.nix` or
-`.release-please-manifest.json`; release-please sets those from the commit types in its release PR.
+So bumping libghostty means changing those two and making the code correct for the new release. Do not edit
+`version` in `package.json`; only `bun run release` changes it, when the user cuts a release.
 
 ## 1. Check for a release
 
@@ -81,8 +79,6 @@ What failures usually mean:
   from the new header.
 - `AbiLayout` throws while loading: a manifest field the bridge reads is missing or renamed. Fix the lookup in
   `lib/abi.ts`, using `ghostty_type_json()` from the new module as the source of truth.
-- WASM size check in CI (1 MiB on `ghostty-vt.wasm`): report the new size to the user rather than raising the
-  limit yourself.
 
 Then go through what passing tests don't prove:
 
@@ -94,35 +90,29 @@ Then go through what passing tests don't prove:
   List them for the user; adopt one in this bump only if the user asks or it is a small direct swap.
 - Behavior changes the README's "Behavior worth knowing" should mention.
 
-Check `bun run demo:dev` in a browser if the change touches rendering, input or selection, or tell the user
+Check `bun run demo` in a browser if the change touches rendering, input or selection, or tell the user
 that only the test suite was run.
 
 ## 5. Update the docs
 
 - CLAUDE.md: the version in the "Known libghostty-vt X.Y quirks" heading and the quirks list itself.
 - README.md: anything from step 4 that users would notice.
-- Leave CHANGELOG.md alone; release-please writes it.
 
 ## 6. Commit (only when the user asks)
 
-Work on a branch, never `main`, in one commit. The subject's type sets the next release's semver bump, so pick
-it from what users get:
+Work on a branch, never `main`, in one commit:
 
-| The bump ...                                                         | Subject                                    |
-| -------------------------------------------------------------------- | ------------------------------------------ |
-| brings behavior or API users can use (usually a libghostty minor)    | `feat(deps): update libghostty-vt to NEW`  |
-| fixes things or changes nothing visible (usually a libghostty patch) | `deps: update libghostty-vt to NEW`        |
-| forces a breaking change in ghostty-web's own API                    | `feat(deps)!: update libghostty-vt to NEW` |
-
-`feat` lists the change under Features and `deps` under Dependencies; both pass the PR title check. When it isn't
-obvious, ask the user which applies. A libghostty-vt major version does not by itself mean a ghostty-web major:
-only a breaking change to ghostty-web's API does.
+```
+Update libghostty-vt to NEW
+```
 
 Don't commit `ghostty-vt.wasm` or `ghostty-vt-fast.wasm` (they are gitignored), and don't commit `bun.lock`
 unless dependencies changed.
 
 ## 7. Report
 
-Tell the user: OLD → NEW, whether the signature was verified, the new WASM sizes, what upstream changed that
-matters here, what you changed (code, tests, quirks removed or kept), what you didn't verify, and the commit type you chose
-or recommend and the semver bump it leads to.
+Tell the user: OLD → NEW, whether the signature was verified, the new WASM sizes (flag growth, since
+`ghostty-vt.wasm` is inlined into the bundle), what upstream changed that matters here, what you changed (code,
+tests, quirks removed or kept), what you didn't verify, and the release you'd suggest: a minor version when the
+new libghostty-vt brings behavior or API users can use, a patch otherwise, a major only if ghostterm's own API had
+to break, and a prerelease (`bun run release X.Y.Z-rc.1`) when the change needs trying in a real project first.

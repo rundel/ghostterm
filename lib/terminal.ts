@@ -5,7 +5,7 @@
  *
  * Usage:
  * ```typescript
- * import { init, Terminal } from 'ghostty-web';
+ * import { init, Terminal } from 'ghostterm';
  *
  * await init();
  * const term = new Terminal();
@@ -982,7 +982,7 @@ export class Terminal implements ITerminalCore {
    * Scroll viewport to the bottom (current output)
    */
   /**
-   * After output arrived while scrolled up, move ghostty-web's offset by as
+   * After output arrived while scrolled up, move ghostterm's offset by as
    * many rows as libghostty's viewport moved, so the same content stays on
    * screen. libghostty clamps the viewport when history is pruned under it.
    */

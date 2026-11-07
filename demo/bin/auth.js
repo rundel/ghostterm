@@ -287,7 +287,7 @@ export function createAuthConfig(options = {}) {
   assert(LOOPBACK_HOSTS.length > 0, 'Loopback host allowlist must not be empty');
 
   const allowedHosts = new Set(LOOPBACK_HOSTS);
-  for (const host of options.allowedHosts ?? parseAllowedHosts(env.GHOSTTY_ALLOWED_HOSTS)) {
+  for (const host of options.allowedHosts ?? parseAllowedHosts(env.GHOSTTERM_ALLOWED_HOSTS)) {
     addAllowedHost(allowedHosts, host);
   }
 

@@ -2,10 +2,6 @@ import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
 
 export default defineConfig({
-  server: {
-    port: 8000,
-    allowedHosts: ['.coder'],
-  },
   plugins: [
     dts({
       include: ['lib/**/*.ts'],
@@ -17,18 +13,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: 'lib/index.ts',
-      name: 'GhosttyWeb',
-      fileName: (format) => {
-        return format === 'es' ? 'ghostty-web.js' : 'ghostty-web.umd.cjs';
-      },
-      formats: ['es', 'umd'],
-    },
-    rollupOptions: {
-      external: [], // No external dependencies
-      output: {
-        assetFileNames: 'assets/[name][extname]',
-        globals: {},
-      },
+      formats: ['es'],
+      fileName: () => 'ghostterm.js',
     },
   },
 });

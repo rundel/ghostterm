@@ -1,5 +1,5 @@
 /**
- * Public API for @cmux/ghostty-terminal
+ * Public API for ghostterm
  *
  * Main entry point following xterm.js conventions
  */
@@ -10,7 +10,7 @@ import { Ghostty } from './ghostty';
 let ghosttyInstance: Ghostty | null = null;
 
 /**
- * Initialize the ghostty-web library by loading the WASM module.
+ * Initialize the ghostterm library by loading the WASM module.
  * Must be called before creating any Terminal instances.
  *
  * This creates a shared WASM instance that all Terminal instances will use.
@@ -18,7 +18,7 @@ let ghosttyInstance: Ghostty | null = null;
  *
  * @example
  * ```typescript
- * import { init, Terminal } from 'ghostty-web';
+ * import { init, Terminal } from 'ghostterm';
  *
  * await init();
  * const term = new Terminal();
@@ -29,7 +29,7 @@ let ghosttyInstance: Ghostty | null = null;
  * With Vite, for example:
  *
  * ```typescript
- * import fastWasm from 'ghostty-web/ghostty-vt-fast.wasm?url';
+ * import fastWasm from 'ghostterm/ghostty-vt-fast.wasm?url';
  *
  * await init({ wasmPath: fastWasm });
  * ```
@@ -44,7 +44,7 @@ export async function init(options: InitOptions = {}): Promise<void> {
 export interface InitOptions {
   /**
    * Where to load the libghostty-vt module from. Defaults to the size-optimized `ghostty-vt.wasm`
-   * bundled into the library. `ghostty-web/ghostty-vt-fast.wasm` is the speed-optimized build:
+   * bundled into the library. `ghostterm/ghostty-vt-fast.wasm` is the speed-optimized build:
    * the same features, 10-20% faster on output heavy in escape sequences, and about 1.5x larger.
    */
   wasmPath?: string | URL;
@@ -58,13 +58,13 @@ export interface InitOptions {
 export function getGhostty(): Ghostty {
   if (!ghosttyInstance) {
     throw new Error(
-      'ghostty-web not initialized. Call init() before creating Terminal instances.\n' +
+      'ghostterm not initialized. Call init() before creating Terminal instances.\n' +
         'Example:\n' +
-        '  import { init, Terminal } from "ghostty-web";\n' +
+        '  import { init, Terminal } from "ghostterm";\n' +
         '  await init();\n' +
         '  const term = new Terminal();\n\n' +
         'For tests, pass a Ghostty instance directly:\n' +
-        '  import { Ghostty, Terminal } from "ghostty-web";\n' +
+        '  import { Ghostty, Terminal } from "ghostterm";\n' +
         '  const ghostty = await Ghostty.load();\n' +
         '  const term = new Terminal({ ghostty });'
     );

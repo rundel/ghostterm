@@ -422,7 +422,7 @@ export class InputHandler {
 
   /**
    * Point the encoder at the terminal's current keyboard modes. Option keeps
-   * acting as Alt/Meta, as it always has in ghostty-web.
+   * acting as Alt/Meta, as it always has in ghostterm.
    */
   private syncEncoder(): void {
     const terminal = this.getTerminal?.();

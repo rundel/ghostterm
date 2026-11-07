@@ -1,5 +1,5 @@
 /**
- * Checks that ghostty-web's TypeScript enums match the C ABI of the loaded
+ * Checks that ghostterm's TypeScript enums match the C ABI of the loaded
  * libghostty-vt module, using the module's own type manifest.
  */
 
@@ -22,7 +22,7 @@ beforeAll(async () => {
   types = JSON.parse(new TextDecoder().decode(mem.subarray(ptr, end))).types;
 });
 
-/** Names ghostty-web uses that differ from libghostty-vt's. */
+/** Names ghostterm uses that differ from libghostty-vt's. */
 const KEY_ALIASES: Record<string, string> = {
   GRAVE: 'BACKQUOTE',
   ZERO: 'DIGIT_0',
@@ -48,7 +48,7 @@ function keyName(name: string): string {
   return KEY_ALIASES[name] ?? name.replace(/^KP_/, 'NUMPAD_');
 }
 
-/** [ghostty-web name, value, libghostty-vt value] for each mismatch. */
+/** [ghostterm name, value, libghostty-vt value] for each mismatch. */
 function mismatches(tsEnum: Enum, cType: string, rename: (n: string) => string) {
   const official = types[cType].values;
   return Object.entries(tsEnum)
@@ -62,7 +62,7 @@ describe('enums match the libghostty-vt ABI', () => {
     expect(mismatches(Key as unknown as Enum, 'GhosttyKey', keyName)).toEqual([]);
   });
 
-  test('every libghostty-vt key has a ghostty-web name', () => {
+  test('every libghostty-vt key has a ghostterm name', () => {
     const mine = new Set(Object.keys(Key).map(keyName));
     const missing = Object.keys(types.GhosttyKey.values).filter(
       (k) => k !== 'MAX_VALUE' && !mine.has(k)

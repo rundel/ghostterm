@@ -560,7 +560,7 @@ export class SelectionManager {
 
   /**
    * Keep ticking the gesture while it asks for autoscroll. Each tick scrolls
-   * libghostty's viewport one row and extends the selection; ghostty-web's
+   * libghostty's viewport one row and extends the selection; ghostterm's
    * viewport then follows.
    */
   private startAutoScroll(): void {

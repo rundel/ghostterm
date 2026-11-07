@@ -7,97 +7,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  fmt:
-    name: fmt
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
+      - uses: oven-sh/setup-bun@v2
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Check formatting
-        run: bun run fmt
-
-  lint:
-    name: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run linter
-        run: bun run lint
-
-  typecheck:
-    name: type check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Check types
-        run: bun run typecheck
-
-  test:
-    name: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Fetch WASM
-        run: ./scripts/fetch-wasm.sh
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test
-
-  build:
-    name: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Fetch WASM
-        run: ./scripts/fetch-wasm.sh
-
-      - name: Check WASM size
-        run: |
-          SIZE=$(stat -c%s ghostty-vt.wasm)
-          echo "WASM size: $SIZE bytes"
-          if [ "$SIZE" -gt 1048576 ]; then
-            echo "❌ Error: WASM exceeds 1 MiB limit"
-            exit 1
-          fi
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Build library
-        run: bun run build
+      - run: bun install --frozen-lockfile
+      - run: ./scripts/fetch-wasm.sh
+      - run: bun run fmt
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build

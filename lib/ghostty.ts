@@ -1490,7 +1490,7 @@ export class GhosttyTerminal {
    * pty, or '' if nothing should be written.
    *
    * Text that could run commands (a newline outside bracketed paste, or the
-   * bracketed paste terminator) is allowed, as ghostty-web and xterm.js always
+   * bracketed paste terminator) is allowed, as ghostterm and xterm.js always
    * have; libghostty can refuse it instead, which a future confirmation hook
    * could use.
    */
@@ -1572,10 +1572,10 @@ export class GhosttyTerminal {
     this.exports.ghostty_terminal_set(this.handle, option, ptr);
   }
 
-  /** Apply ghostty-web's config. A color of 0 means "keep the library default". */
+  /** Apply ghostterm's config. A color of 0 means "keep the library default". */
   private applyConfig(config?: GhosttyTerminalConfig): void {
     const ex = this.exports;
-    // ghostty-web's scrollback option counts lines (0 = unlimited). The library
+    // ghostterm's scrollback option counts lines (0 = unlimited). The library
     // also caps history by bytes, 10,000 by default, which would otherwise win.
     const scrollback = config?.scrollbackLimit ?? 10000;
     const view = this.mem.view();
@@ -2821,7 +2821,7 @@ export class SelectionGesture {
   /**
    * How close in time (ms) and space (CSS px) presses must be to count as a
    * double or triple click. libghostty has no defaults for these; browsers
-   * don't expose the OS settings, so ghostty-web picks common values.
+   * don't expose the OS settings, so ghostterm picks common values.
    */
   setRepeat(intervalMs: number, distancePx: number): void {
     const ex = this.exports;

@@ -659,12 +659,12 @@ describe('SelectionManager mouse gestures (libghostty)', () => {
   });
 
   test('double-click selects a word using Ghostty word rules', () => {
-    term.write('ls ~/projects/ghostty-web');
+    term.write('ls ~/projects/ghostterm');
     for (const t of [1000, 1100]) {
       mouse('mousedown', 10, 0, t);
       mouse('mouseup', 10, 0, t + 10, document);
     }
-    expect(selMgr().getSelection()).toBe('~/projects/ghostty-web');
+    expect(selMgr().getSelection()).toBe('~/projects/ghostterm');
   });
 
   test('selection fires onSelectionChange and copies on release', () => {

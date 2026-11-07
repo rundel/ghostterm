@@ -177,10 +177,10 @@ describe('demo auth helper', () => {
     expect(wsResult.ok).toBe(true);
   });
 
-  test('allows hosts configured through GHOSTTY_ALLOWED_HOSTS when using a wildcard bind', () => {
+  test('allows hosts configured through GHOSTTERM_ALLOWED_HOSTS when using a wildcard bind', () => {
     const wildcard = testConfig({ env: { HOST: '0.0.0.0' } });
     const configured = testConfig({
-      env: { HOST: '0.0.0.0', GHOSTTY_ALLOWED_HOSTS: 'demo.example' },
+      env: { HOST: '0.0.0.0', GHOSTTERM_ALLOWED_HOSTS: 'demo.example' },
     });
 
     expect(validateTokenRequest(wildcard, { host: 'demo.example:8080' }).ok).toBe(false);
