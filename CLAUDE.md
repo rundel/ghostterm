@@ -4,15 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## What this is
 
-ghostterm is a browser terminal with an xterm.js-compatible API, for personal and experimental use (not
-published to npm; releases are on GitHub). It began as a fork of Coder's ghostty-web and has been largely
-rewritten. The terminal emulation comes from [libghostty-vt](https://lib.ghostty.org/), Ghostty's terminal
-library, through the official prebuilt WebAssembly module that Ghostty publishes with each release. ghostterm
-supplies what the library doesn't: drawing to a canvas, DOM event plumbing, layout, the xterm.js API and addons.
+ghostterm is a browser terminal with an xterm.js-compatible API, for personal and experimental use (not published to npm; releases are on GitHub). It began as a fork of Coder's ghostty-web and has been largely rewritten. The terminal emulation comes from [libghostty-vt](https://lib.ghostty.org/), Ghostty's terminal library, through the official prebuilt WebAssembly module that Ghostty publishes with each release. ghostterm supplies what the library doesn't: drawing to a canvas, DOM event plumbing, layout, the xterm.js API and addons.
 
-The guiding rule: terminal behavior belongs to libghostty. Before writing terminal logic in TypeScript (parsing
-sequences, encoding keys or mouse events, word boundaries, text extraction, color resolution, row arithmetic),
-check whether the C API already does it. Most of the hand-written versions of these were removed for that reason.
+The guiding rule: terminal behavior belongs to libghostty. Before writing terminal logic in TypeScript (parsing sequences, encoding keys or mouse events, word boundaries, text extraction, color resolution, row arithmetic), check whether the C API already does it. Most of the hand-written versions of these were removed for that reason.
 
 ## Commands
 
@@ -35,11 +29,7 @@ bun run release <version>        # see "Releases" below
 
 Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
 
-`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle) and `ghostty-vt-fast.wasm`
-(ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same
-features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't
-reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too.
-`bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
+`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle) and `ghostty-vt-fast.wasm` (ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too. `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
 
 ## Architecture
 
@@ -57,29 +47,18 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 ### The bridge: `lib/ghostty.ts`, `lib/abi.ts`, `lib/types.ts`
 
 - `Ghostty` loads the module (it has no imports), owns the per-module state and creates terminals and encoders.
-- `GhosttyTerminal` wraps one `GhosttyTerminal` handle plus its render state, row iterator and row cells. Its
-  public methods are what the rest of the code uses; nothing else calls `exports.ghostty_*`.
+- `GhosttyTerminal` wraps one `GhosttyTerminal` handle plus its render state, row iterator and row cells. Its public methods are what the rest of the code uses; nothing else calls `exports.ghostty_*`.
 - `KeyEncoder`, `MouseEncoder`, `SelectionGesture`, `TerminalSearch` wrap the matching libghostty objects.
-- `lib/types.ts` declares the exports used (`GhosttyWasmExports`) and the public TS enums (`Key`, `Mods`,
-  `KeyEncoderOption`, `CellFlags`, ...). `lib/abi-enums.test.ts` checks those enums against the loaded module, so
-  a library upgrade that renumbers them fails a test instead of silently mis-encoding keys.
+- `lib/types.ts` declares the exports used (`GhosttyWasmExports`) and the public TS enums (`Key`, `Mods`, `KeyEncoderOption`, `CellFlags`, ...). `lib/abi-enums.test.ts` checks those enums against the loaded module, so a library upgrade that renumbers them fails a test instead of silently mis-encoding keys.
 
 Conventions in the bridge:
 
-- Enum values are part of libghostty's ABI promise and are written as constants. Bit positions inside packed
-  values (`GhosttyCell`, `GhosttyStyleFlags`) are not covered by the promise and are read from the module's
-  manifest (`ghostty_type_json()`) by `AbiLayout` in `lib/abi.ts`. Struct offsets also come from the manifest.
-- Structs passed by value in C are passed by pointer from JS (wasm32 C ABI); check an export's arity
-  (`exports.fn.length`) when in doubt.
-- Any export can grow memory, which detaches old `ArrayBuffer` views. Always get views through
-  `this.mem.view()` / `this.mem.bytes()` right before use, after any call into the module.
-- Out-parameters go through two per-terminal scratch areas (`scratch`, 2 KB, and `selScratch`, 256 B) at fixed
-  offsets. When adding a method, pick offsets that don't overlap anything that can be live at the same time.
+- Enum values are part of libghostty's ABI promise and are written as constants. Bit positions inside packed values (`GhosttyCell`, `GhosttyStyleFlags`) are not covered by the promise and are read from the module's manifest (`ghostty_type_json()`) by `AbiLayout` in `lib/abi.ts`. Struct offsets also come from the manifest.
+- Structs passed by value in C are passed by pointer from JS (wasm32 C ABI); check an export's arity (`exports.fn.length`) when in doubt.
+- Any export can grow memory, which detaches old `ArrayBuffer` views. Always get views through `this.mem.view()` / `this.mem.bytes()` right before use, after any call into the module.
+- Out-parameters go through two per-terminal scratch areas (`scratch`, 2 KB, and `selScratch`, 256 B) at fixed offsets. When adding a method, pick offsets that don't overlap anything that can be live at the same time.
 - Opaque handles are created through `ghostty_wasm_alloc_opaque` + `ghostty_wasm_take_opaque`.
-- JS callbacks (write_pty, bell, clipboard, ...) need a function-table entry. `wasmCallback()` builds a tiny
-  module that re-exports a JS function as a WASM function; `Ghostty.installEffects()` registers one entry per
-  callback type and routes calls by the terminal handle (always the first argument). Callbacks run synchronously
-  inside `vt_write` and friends.
+- JS callbacks (write_pty, bell, clipboard, ...) need a function-table entry. `wasmCallback()` builds a tiny module that re-exports a JS function as a WASM function; `Ghostty.installEffects()` registers one entry per callback type and routes calls by the terminal handle (always the first argument). Callbacks run synchronously inside `vt_write` and friends.
 
 ### Coordinates
 
@@ -91,80 +70,44 @@ Three row systems are in use; mixing them up is the most common bug.
 | Active row   | top of the screen below history | `getLine`, `getCursor().x/y`, `isRowWrapped`, `getHyperlinkUri` |
 | Absolute row | oldest scrollback line          | `getScreenLine`, buffer API, selection ranges, search, links    |
 
-`Terminal.viewportY` is the scroll offset in rows above the bottom (fractional during smooth scrolling; always
-floored for mapping). libghostty owns the real viewport: the renderer calls `setViewportOffset(floor(viewportY))`
-each frame, and code that lets libghostty scroll (search, selection autoscroll, prompt jumps) copies the result
-back with `scrollToLine(wasmTerm.getViewportOffset())`. When scrolled up, new output keeps the same content on
-screen (`followScrolledContent` in `writeInternal`); user input scrolls to the bottom.
+`Terminal.viewportY` is the scroll offset in rows above the bottom (fractional during smooth scrolling; always floored for mapping). libghostty owns the real viewport: the renderer calls `setViewportOffset(floor(viewportY))` each frame, and code that lets libghostty scroll (search, selection autoscroll, prompt jumps) copies the result back with `scrollToLine(wasmTerm.getViewportOffset())`. When scrolled up, new output keeps the same content on screen (`followScrolledContent` in `writeInternal`); user input scrolls to the bottom.
 
 ### Rendering
 
-`GhosttyTerminal.update()` refreshes the render state and accumulates dirty flags (an update only ever adds dirty
-state; `markClean()` clears it). `getViewport()` re-reads only stale rows, one `CELLS_RAW` call per row, and only
-fetches styles and graphemes for cells that have them. Each `GhosttyCell` carries resolved colors, flags, width,
-underline style and color, overline, `selected` (from the render state's selection), `bg_default`, a hyperlink ID
-shared by every cell of one URI, and, for screen lines, the full grapheme in `chars`.
+`GhosttyTerminal.update()` refreshes the render state and accumulates dirty flags (an update only ever adds dirty state; `markClean()` clears it). `getViewport()` re-reads only stale rows, one `CELLS_RAW` call per row, and only fetches styles and graphemes for cells that have them. Each `GhosttyCell` carries resolved colors, flags, width, underline style and color, overline, `selected` (from the render state's selection), `bg_default`, a hyperlink ID shared by every cell of one URI, and, for screen lines, the full grapheme in `chars`.
 
-Synchronized output (mode 2026) arrives as a render hold: `onRenderHold` captures the frame when the hold starts
-and `update()` is a no-op until it ends or times out (1 s).
+Synchronized output (mode 2026) arrives as a render hold: `onRenderHold` captures the frame when the hold starts and `update()` is a no-op until it ends or times out (1 s).
 
-The renderer draws rows, then the cursor (shape, blink and color from the render state, which programs can
-change), then the scrollbar in a gutter right of the grid. `FitAddon` sizes that gutter to absorb leftover width
-so the canvas fills its container. Search highlights come from a provider callback (`setHighlightProvider`); the
-active match is drawn over the selection.
+The renderer draws rows, then the cursor (shape, blink and color from the render state, which programs can change), then the scrollbar in a gutter right of the grid. `FitAddon` sizes that gutter to absorb leftover width so the canvas fills its container. Search highlights come from a provider callback (`setHighlightProvider`); the active match is drawn over the selection.
 
 ### Input
 
-- Keys: every mapped key goes through the key encoder after `syncFromTerminal()`, which copies the program's
-  keyboard modes (Kitty flags, modifyOtherKeys, cursor/keypad modes). Option-as-Alt is re-applied after each sync.
-  Releases (keyup) are sent only when the program asked for them. Dead keys and IME use composition events.
-- Mouse: `MouseEncoder` synced from the terminal, with geometry and button state. Shift bypasses reporting so
-  Shift+drag selects. Wheel steps are one per notch (large pixel deltas, about 100 px each) or one per cell of
-  accumulated trackpad movement.
-- Paste: `GhosttyTerminal.encodePaste()` via `ghostty_terminal_paste` (bracketed paste, unsafe-byte stripping,
-  Kitty paste events). Unsafe pastes are allowed, matching xterm.js.
+- Keys: every mapped key goes through the key encoder after `syncFromTerminal()`, which copies the program's keyboard modes (Kitty flags, modifyOtherKeys, cursor/keypad modes). Option-as-Alt is re-applied after each sync. Releases (keyup) are sent only when the program asked for them. Dead keys and IME use composition events.
+- Mouse: `MouseEncoder` synced from the terminal, with geometry and button state. Shift bypasses reporting so Shift+drag selects. Wheel steps are one per notch (large pixel deltas, about 100 px each) or one per cell of accumulated trackpad movement.
+- Paste: `GhosttyTerminal.encodePaste()` via `ghostty_terminal_paste` (bracketed paste, unsafe-byte stripping, Kitty paste events). Unsafe pastes are allowed, matching xterm.js.
 - Focus: reported only when the program enabled mode 1004.
 
-`Terminal.wasmTerm` is replaced by `reset()`. Anything holding on to it (gestures, searches, encoders) must look
-it up again or detect the change, as `SelectionManager` and `SearchAddon` do.
+`Terminal.wasmTerm` is replaced by `reset()`. Anything holding on to it (gestures, searches, encoders) must look it up again or detect the change, as `SelectionManager` and `SearchAddon` do.
 
 ## Tests
 
-Tests run under happy-dom with a mock 2D canvas (`happydom.ts`); there is no real drawing. To test rendering,
-replace `ctx.fillRect`/`fillText`/`stroke` on `(term as any).renderer.ctx` and inspect the calls. Use
-`createIsolatedTerminal()` from `lib/test-helpers.ts`, `open()` it in a container, and `dispose()` it.
-Bridge-level behavior is tested directly against `Ghostty.load()` in `lib/ghostty.test.ts`.
+Tests run under happy-dom with a mock 2D canvas (`happydom.ts`); there is no real drawing. To test rendering, replace `ctx.fillRect`/`fillText`/`stroke` on `(term as any).renderer.ctx` and inspect the calls. Use `createIsolatedTerminal()` from `lib/test-helpers.ts`, `open()` it in a container, and `dispose()` it. Bridge-level behavior is tested directly against `Ghostty.load()` in `lib/ghostty.test.ts`.
 
-happy-dom quirks: `WheelEvent` ignores `clientX`/`clientY`; set `offsetX`/`offsetY` on synthetic mouse events
-with `Object.defineProperty`; synthetic events need `cancelable: true` for `defaultPrevented` to mean anything.
+happy-dom quirks: `WheelEvent` ignores `clientX`/`clientY`; set `offsetX`/`offsetY` on synthetic mouse events with `Object.defineProperty`; synthetic events need `cancelable: true` for `defaultPrevented` to mean anything.
 
-Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be checked in a browser with
-`bun run demo`.
+Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be checked in a browser with `bun run demo`.
 
 ## Releases
 
-Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that
-changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every
-`v*` tag, and entries under `## Unreleased` in `CHANGELOG.md`. It runs the checks, moves those entries under
-`## X.Y.Z - <date>` (releases only; a prerelease leaves them, see `scripts/changelog.ts`), commits `Release vX.Y.Z`
-and creates an annotated tag; `--push` pushes both. The tag
-starts `.github/workflows/release.yml`, which checks the tag against `package.json`, builds, and creates the GitHub
-release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`; its notes are the version's changelog
-entries (`bun scripts/changelog.ts notes <version>`). A version with a suffix (`0.2.0-rc.1`) becomes a
-prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests.
+Versions are ghostterm's own semver; `bun run release <version>` (`scripts/release.ts`) is the only thing that changes `version` in `package.json`. It requires a clean `main` equal to `origin/main` and a version newer than every `v*` tag, and entries under `## Unreleased` in `CHANGELOG.md`. It runs the checks, moves those entries under `## X.Y.Z - <date>` (releases only; a prerelease leaves them, see `scripts/changelog.ts`), commits `Release vX.Y.Z` and creates an annotated tag; `--push` pushes both. The tag starts `.github/workflows/release.yml`, which checks the tag against `package.json`, builds, and creates the GitHub release with the `npm pack` tarball, a `dist/` zip and `SHA256SUMS`; its notes are the version's changelog entries (`bun scripts/changelog.ts notes <version>`). A version with a suffix (`0.2.0-rc.1`) becomes a prerelease. `.github/workflows/ci.yml` runs the same checks on pushes to `main` and on pull requests.
 
 ## Upgrading libghostty-vt
 
-The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (what is downloaded) and the
-`libghostty-vt` field in `package.json` (what release notes name). A test in `lib/ghostty.test.ts` keeps both equal
-to the loaded module's version. To move to a new release, follow the `bump-libghostty` skill
-(`.claude/skills/bump-libghostty/`). In short:
+The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (what is downloaded) and the `libghostty-vt` field in `package.json` (what release notes name). A test in `lib/ghostty.test.ts` keeps both equal to the loaded module's version. To move to a new release, follow the `bump-libghostty` skill (`.claude/skills/bump-libghostty/`). In short:
 
-1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the
-   minisign-verified `SHA256SUMS`, rewrites the pin and the `package.json` field, and fetches the modules.
+1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the minisign-verified `SHA256SUMS`, rewrites the pin and the `package.json` field, and fetches the modules.
 2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields.
-3. Read the header diff and commits between the `vt-` tags for changed behavior in what the bridge relies on,
-   and recheck the quirks below.
+3. Read the header diff and commits between the `vt-` tags for changed behavior in what the bridge relies on, and recheck the quirks below.
 
 Known libghostty-vt 1.0 quirks the code works around or documents:
 
@@ -180,5 +123,5 @@ Known libghostty-vt 1.0 quirks the code works around or documents:
 - Keep the public API xterm.js-compatible where xterm.js has an equivalent; new events and methods are additive.
 - Document deliberate differences from xterm.js (they follow Ghostty) in the README's "Behavior worth knowing".
 - Tests accompany behavior changes; prefer asserting what a program would receive (bytes sent) or what is drawn.
-- Changes users would notice get a short, high-level line under `## Unreleased` in `CHANGELOG.md`, in the same
-  commit. Internal refactors, tests and tooling don't.
+- Changes users would notice get a short, high-level line under `## Unreleased` in `CHANGELOG.md`, in the same commit. Internal refactors, tests and tooling don't.
+- Markdown is soft wrapped: each paragraph or list item is one line, never hard wrapped at a fixed width. Prettier enforces this (`proseWrap: "never"` for `*.md` in `.prettierrc`, so `bun run fmt` fails on hard wraps and `bun run fmt:fix` unwraps them); its Markdown `printWidth` is raised only so wide tables keep their aligned columns. Code comments keep the 100-column width.

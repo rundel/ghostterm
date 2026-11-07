@@ -1,21 +1,14 @@
 # ghostterm
 
-A terminal emulator for the browser, built on [libghostty-vt](https://lib.ghostty.org/), with an
-[xterm.js](https://github.com/xtermjs/xterm.js)-compatible API. The terminal emulation is Ghostty's own, from the
-official libghostty-vt WebAssembly release: parsing, screen and scrollback, keyboard and mouse encoding,
-selection, search and serialization. ghostterm draws it to a canvas and handles the DOM.
+A terminal emulator for the browser, built on [libghostty-vt](https://lib.ghostty.org/), with an [xterm.js](https://github.com/xtermjs/xterm.js)-compatible API. The terminal emulation is Ghostty's own, from the official libghostty-vt WebAssembly release: parsing, screen and scrollback, keyboard and mouse encoding, selection, search and serialization. ghostterm draws it to a canvas and handles the DOM.
 
 This is a personal, experimental project. It is not published to npm; releases are on GitHub.
 
 ## Origins
 
-ghostterm started as a fork of [ghostty-web](https://github.com/coder/ghostty-web) by [Coder](https://coder.com),
-published on npm as `ghostty-web`. It was forked after ghostty-web 0.4.0 (at
-[`640db46`](https://github.com/coder/ghostty-web/commit/640db46)) and has since been largely rewritten around
-Ghostty's official libghostty-vt WebAssembly module and its C API. The git history before the fork is ghostty-web's.
+ghostterm started as a fork of [ghostty-web](https://github.com/coder/ghostty-web) by [Coder](https://coder.com), published on npm as `ghostty-web`. It was forked after ghostty-web 0.4.0 (at [`640db46`](https://github.com/coder/ghostty-web/commit/640db46)) and has since been largely rewritten around Ghostty's official libghostty-vt WebAssembly module and its C API. The git history before the fork is ghostty-web's.
 
-[Ghostty](https://github.com/ghostty-org/ghostty) and libghostty are by Mitchell Hashimoto and the Ghostty
-contributors.
+[Ghostty](https://github.com/ghostty-org/ghostty) and libghostty are by Mitchell Hashimoto and the Ghostty contributors.
 
 ## Installation
 
@@ -51,10 +44,7 @@ See [`demo/index.html`](./demo/index.html) for a complete client connected to a 
 
 ### Faster WebAssembly build
 
-`init()` loads the size-optimized libghostty-vt module, which is bundled into the library. The package also
-ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same release. It has the same features, is
-10-20% faster on output heavy in escape sequences, and is about 1.5 times larger (1.2 MB instead of 840 KB). To
-use it, pass its URL to `init()`:
+`init()` loads the size-optimized libghostty-vt module, which is bundled into the library. The package also ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same release. It has the same features, is 10-20% faster on output heavy in escape sequences, and is about 1.5 times larger (1.2 MB instead of 840 KB). To use it, pass its URL to `init()`:
 
 ```javascript
 import { init } from 'ghostterm';
@@ -79,9 +69,7 @@ fit.observeResize();
 // Find text in the scrollback and screen
 const search = new SearchAddon();
 term.loadAddon(search);
-search.onDidChangeResults(({ resultIndex, resultCount }) =>
-  updateFindBar(resultIndex, resultCount)
-);
+search.onDidChangeResults(({ resultIndex, resultCount }) => updateFindBar(resultIndex, resultCount));
 search.findNext('error', {
   decorations: { matchBackground: '#5a4a00', activeMatchBackground: '#d97700' },
 });
@@ -129,11 +117,7 @@ These follow Ghostty rather than xterm.js:
 
 ## Development
 
-ghostterm runs on the official prebuilt WebAssembly module that Ghostty publishes with each
-[libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI.
-`scripts/fetch-wasm.sh` downloads both builds of the pinned release and checks their SHA-256;
-`scripts/update-libghostty.sh` moves the pin to a newer release. The bundled release is also recorded in the
-`libghostty-vt` field of `package.json` and reported at runtime by `ghostty.version`.
+ghostterm runs on the official prebuilt WebAssembly module that Ghostty publishes with each [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI. `scripts/fetch-wasm.sh` downloads both builds of the pinned release and checks their SHA-256; `scripts/update-libghostty.sh` moves the pin to a newer release. The bundled release is also recorded in the `libghostty-vt` field of `package.json` and reported at runtime by `ghostty.version`.
 
 Requires Bun and curl.
 
@@ -145,24 +129,18 @@ bun run build            # dist/
 bun run demo             # a real shell at http://127.0.0.1:8000/demo/ (see demo/README.md)
 ```
 
-Before committing, run `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
-[CLAUDE.md](./CLAUDE.md) describes the architecture for contributors and coding agents.
+Before committing, run `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`. [CLAUDE.md](./CLAUDE.md) describes the architecture for contributors and coding agents.
 
 ## Releases
 
-Versions are ghostterm's own semver, and [CHANGELOG.md](./CHANGELOG.md) records what changed in each one: add
-entries under `## Unreleased` as changes land. To release from an up-to-date, clean `main`:
+Versions are ghostterm's own semver, and [CHANGELOG.md](./CHANGELOG.md) records what changed in each one: add entries under `## Unreleased` as changes land. To release from an up-to-date, clean `main`:
 
 ```bash
 bun run release 0.2.0-rc.1        # a prerelease: any suffix after the patch number
 bun run release 0.2.0 --push      # a release, pushed straight away
 ```
 
-This refuses to run while Unreleased is empty. It runs the checks, sets the version in `package.json`, moves the
-Unreleased entries under the new version (a prerelease leaves them for the release that follows), commits and
-tags. Pushing the tag runs `.github/workflows/release.yml`, which builds and creates the GitHub release, marked
-as a prerelease when the version has a suffix. Each release carries the package tarball, a zip of `dist/` and
-`SHA256SUMS`, and its notes are its changelog entries and the libghostty-vt release it is built on.
+This refuses to run while Unreleased is empty. It runs the checks, sets the version in `package.json`, moves the Unreleased entries under the new version (a prerelease leaves them for the release that follows), commits and tags. Pushing the tag runs `.github/workflows/release.yml`, which builds and creates the GitHub release, marked as a prerelease when the version has a suffix. Each release carries the package tarball, a zip of `dist/` and `SHA256SUMS`, and its notes are its changelog entries and the libghostty-vt release it is built on.
 
 ## License
 
