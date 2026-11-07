@@ -156,6 +156,8 @@ export class Terminal implements ITerminalCore {
   private isOpen = false;
   private isDisposed = false;
   private animationFrameId?: number;
+  /** refresh() was called: the next frame redraws every row. */
+  private refreshPending = false;
   /** Writes waiting for open() or for the write in progress to finish. */
   private pendingWrites: Array<{ data: string | Uint8Array; callback?: () => void }> = [];
   /** Set while writes are being processed (listeners may write re-entrantly). */
@@ -1049,6 +1051,17 @@ export class Terminal implements ITerminalCore {
     return this.viewportY;
   }
 
+  /**
+   * Redraw viewport rows `start` to `end` (both included) on the next frame,
+   * as xterm.js does. The whole viewport is redrawn; onRender reports what
+   * was drawn. Does nothing before open().
+   */
+  public refresh(start: number, end: number): void {
+    if (!this.renderer || Number.isNaN(start) || Number.isNaN(end)) return;
+    if (Math.min(start, end) > this.rows - 1 || Math.max(start, end) < 0) return;
+    this.refreshPending = true;
+  }
+
   /** @internal Cell size in CSS pixels, or undefined before open() (for FitAddon). */
   public getMetrics(): FontMetrics | undefined {
     return this.renderer?.getMetrics();
@@ -1405,6 +1418,9 @@ export class Terminal implements ITerminalCore {
   /** Draw what changed (everything with `force`) and fire onRender for the rows drawn. */
   private renderFrame(force: boolean): void {
     if (!this.renderer || !this.wasmTerm) return;
+    // refresh() asks for a full redraw on the next frame.
+    force ||= this.refreshPending;
+    this.refreshPending = false;
     const rows = this.renderer.render(this.wasmTerm, force, this.viewportY, this.scrollbarOpacity);
     this.decorationService.refresh(rows !== null);
     if (rows) this.renderEmitter.fire(rows);

@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Terminal } from './terminal';
-import { internals, paintedRects, render, terminalFixture } from './test-helpers';
+import { drawnText, internals, paintedRects, render, terminalFixture } from './test-helpers';
 
 const fixture = terminalFixture();
 let term: Terminal;
@@ -86,5 +86,34 @@ describe('synchronized output', () => {
     expect(cursorAt()).toEqual([[2, 0]]);
     term.write('\x1b[?2026l');
     expect(cursorAt()).toEqual([[11, 2]]);
+  });
+});
+
+describe('refresh()', () => {
+  test('redraws the rows on the next frame and reports them through onRender', () => {
+    term.write('hello');
+    render(term);
+    // Nothing changed: an ordinary frame draws nothing.
+    expect(drawnText(term, render(term, false))).toEqual([]);
+
+    const rendered: Array<{ start: number; end: number }> = [];
+    term.onRender((r) => rendered.push(r));
+    term.refresh(0, 0);
+    const text = drawnText(term, render(term, false));
+    expect(text.map((t) => t.text).join('')).toBe('hello');
+    expect(rendered).toEqual([{ start: 0, end: 9 }]);
+    // Only once.
+    expect(drawnText(term, render(term, false))).toEqual([]);
+  });
+
+  test('ignores rows outside the viewport', () => {
+    term.write('hello');
+    render(term);
+    term.refresh(20, 30);
+    expect(drawnText(term, render(term, false))).toEqual([]);
+  });
+
+  test('does nothing before open()', () => {
+    expect(() => fixture.create().refresh(0, 1)).not.toThrow();
   });
 });
