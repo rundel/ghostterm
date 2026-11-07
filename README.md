@@ -45,6 +45,13 @@ underline colors, and a scrollback search whose results stay correct while outpu
 npm install ghostty-web
 ```
 
+### Versioning
+
+ghostty-web uses semantic versioning for its own API, independent of libghostty-vt's version numbers. The
+libghostty-vt release a version bundles is in its `package.json` (the `libghostty-vt` field), at the top of its
+release notes, and at runtime in `ghostty.version`. Moving to a new libghostty-vt release is a minor release
+when it brings new capabilities and a patch release otherwise.
+
 ## Usage
 
 ghostty-web aims to be API-compatible with the xterm.js API.
@@ -152,7 +159,8 @@ These follow Ghostty rather than xterm.js:
 ghostty-web runs on the official prebuilt WebAssembly module that Ghostty publishes with each
 [libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI.
 `scripts/fetch-wasm.sh` downloads both builds of the pinned release (`ghostty-vt.wasm`, size-optimized, and
-`ghostty-vt-fast.wasm`, speed-optimized) and checks their SHA-256.
+`ghostty-vt-fast.wasm`, speed-optimized) and checks their SHA-256. `scripts/update-libghostty.sh` moves the pin
+to the latest libghostty-vt release.
 
 > Requires Bun and curl.
 

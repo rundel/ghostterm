@@ -138,12 +138,22 @@ with `Object.defineProperty`; synthetic events need `cancelable: true` for `defa
 Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be checked in a browser with
 `bun run demo:dev`.
 
-## Upgrading libghostty-vt
+## Versioning and upgrading libghostty-vt
 
-1. Update `VERSION`, `SMALL_SHA256` and `FAST_SHA256` in `scripts/fetch-wasm.sh` (hashes are in the release's
-   `SHA256SUMS` at `https://release.files.ghostty.org/libghostty-vt/<version>/`) and run it.
+The package version is ghostty-web's own semver, set by release-please from conventional commits; never set it
+by hand. The bundled libghostty-vt release is recorded separately: `VERSION` in `scripts/fetch-wasm.sh` (what is
+downloaded) and the `libghostty-vt` field in `package.json` (what users and the release notes see, via
+`readLibghosttyVersion()` in `scripts/release-please-ai/changelog-notes.ts`). A test in `lib/ghostty.test.ts`
+keeps both equal to the loaded module's version.
+
+To move to a new libghostty-vt release, follow the `bump-libghostty` skill (`.claude/skills/bump-libghostty/`).
+In short:
+
+1. `./scripts/update-libghostty.sh [version]` finds the latest `vt-X.Y.Z` tag, takes both builds' hashes from the
+   minisign-verified `SHA256SUMS`, rewrites the pin and the `package.json` field, and fetches the modules.
 2. Run the tests. `lib/abi-enums.test.ts` catches renumbered enums; `AbiLayout` throws on missing manifest fields.
-3. Read the release notes for changed behavior in what the bridge relies on.
+3. Read the header diff and commits between the `vt-` tags for changed behavior in what the bridge relies on,
+   and recheck the quirks below.
 
 Known libghostty-vt 1.0 quirks the code works around or documents:
 

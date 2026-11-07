@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { BuildNotesOptions, ChangelogNotes } from 'release-please/build/src/changelog-notes';
 import { DefaultChangelogNotes } from 'release-please/build/src/changelog-notes/default';
 import type { ConventionalCommit } from 'release-please/build/src/commit';
@@ -18,6 +19,14 @@ export interface AiChangelogNotesOptions {
   env?: Env;
   generate?: GenerateEditorial;
   logger?: Pick<Console, 'log' | 'warn'>;
+  /** The libghostty-vt release this version is built on; adds a line under the release header. */
+  libghosttyVersion?: string;
+}
+
+/** The `libghostty-vt` field of a package.json: the libghostty-vt release the package bundles. */
+export function readLibghosttyVersion(packageJson: string): string | undefined {
+  const version = JSON.parse(packageJson)['libghostty-vt'];
+  return typeof version === 'string' && version ? version : undefined;
 }
 
 export class AiChangelogNotes implements ChangelogNotes {
@@ -25,15 +34,26 @@ export class AiChangelogNotes implements ChangelogNotes {
   private readonly env: Env;
   private readonly generate: GenerateEditorial;
   private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private readonly libghosttyVersion: string | undefined;
 
   constructor(options: AiChangelogNotesOptions = {}) {
     this.defaultNotes = options.defaultNotes ?? new DefaultChangelogNotes();
     this.env = options.env ?? process.env;
     this.generate = options.generate ?? generateEditorial;
     this.logger = options.logger ?? console;
+    this.libghosttyVersion = options.libghosttyVersion;
   }
 
   async buildNotes(commits: ConventionalCommit[], options: BuildNotesOptions): Promise<string> {
+    const notes = await this.buildReleaseNotes(commits, options);
+    if (!this.libghosttyVersion) return notes;
+    return injectAfterHeader(notes, `Built on libghostty-vt ${this.libghosttyVersion}.`);
+  }
+
+  private async buildReleaseNotes(
+    commits: ConventionalCommit[],
+    options: BuildNotesOptions
+  ): Promise<string> {
     const defaultNotes = await this.defaultNotes.buildNotes(commits, options);
     const apiKey = this.env.ANTHROPIC_API_KEY;
     const model = this.env.RELEASE_NOTES_MODEL;
@@ -86,6 +106,7 @@ export function registerAiChangelogNotes(): void {
         headerPartial: options.headerPartial,
         mainTemplate: options.mainTemplate,
       }),
+      libghosttyVersion: readLibghosttyVersion(readFileSync('package.json', 'utf8')),
     });
   });
 }

@@ -6,6 +6,7 @@
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { Ghostty, KeyEncoderOption, SelectionAutoscroll } from './ghostty';
 import { Key, KeyAction, Mods } from './types';
 
@@ -23,6 +24,12 @@ describe('Ghostty module', () => {
     expect(ghostty.version).toMatch(/^1\./);
   });
 
+  test('matches the libghostty-vt version recorded in package.json and pinned for download', () => {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+    const pinned = readFileSync('scripts/fetch-wasm.sh', 'utf8').match(/^VERSION="(.+)"$/m)?.[1];
+    expect(pkg['libghostty-vt']).toBe(pinned);
+    expect(ghostty.version).toBe(pinned);
+  });
 
   test('loads the size-optimized build by default', () => {
     expect(ghostty.optimizeMode).toBe('release-small');

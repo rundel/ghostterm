@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import type { BuildNotesOptions, ChangelogNotes } from 'release-please/build/src/changelog-notes';
 import type { ConventionalCommit } from 'release-please/build/src/commit';
-import { AiChangelogNotes } from './changelog-notes';
+import { AiChangelogNotes, readLibghosttyVersion } from './changelog-notes';
 
 const options: BuildNotesOptions = {
   owner: 'coder',
@@ -66,6 +67,37 @@ describe('AiChangelogNotes', () => {
       '## [1.2.3](link)\n\nRenderer support improves terminal integrations.\n\n**Highlights**\n\n- Renderer support (#17)\n\n### Features\n- add renderer support'
     );
   });
+  test('names the libghostty-vt release under the header, above the editorial', async () => {
+    const notes = new AiChangelogNotes({
+      defaultNotes: new FakeDefaultNotes(),
+      env: { ANTHROPIC_API_KEY: 'test-key', RELEASE_NOTES_MODEL: 'test-model' },
+      generate: async () => ({ summary: 'Summary.', highlights: [] }),
+      libghosttyVersion: '1.0.0',
+    });
+
+    await expect(notes.buildNotes(commits, options)).resolves.toBe(
+      '## [1.2.3](link)\n\nBuilt on libghostty-vt 1.0.0.\n\nSummary.\n\n### Features\n- add renderer support'
+    );
+  });
+
+  test('names the libghostty-vt release in the default notes too', async () => {
+    const notes = new AiChangelogNotes({
+      defaultNotes: new FakeDefaultNotes(),
+      env: {},
+      logger: { log() {}, warn() {} },
+      libghosttyVersion: '1.0.0',
+    });
+
+    await expect(notes.buildNotes(commits, options)).resolves.toBe(
+      '## [1.2.3](link)\n\nBuilt on libghostty-vt 1.0.0.\n\n### Features\n- add renderer support'
+    );
+  });
+
+  test('reads the libghostty-vt version from package.json', () => {
+    expect(readLibghosttyVersion(readFileSync('package.json', 'utf8'))).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(readLibghosttyVersion('{"name":"x"}')).toBeUndefined();
+  });
+
   test('falls back to default release-please notes when model generation fails', async () => {
     const notes = new AiChangelogNotes({
       defaultNotes: new FakeDefaultNotes(),
