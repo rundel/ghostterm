@@ -27,10 +27,7 @@ function setSelectionAbsolute(
   endAbsRow: number
 ): void {
   const selMgr = (term as any).selectionManager;
-  if (selMgr) {
-    (selMgr as any).selectionStart = { col: startCol, absoluteRow: startAbsRow };
-    (selMgr as any).selectionEnd = { col: endCol, absoluteRow: endAbsRow };
-  }
+  selMgr?.setSelectionAbsolute(startCol, startAbsRow, endCol, endAbsRow);
 }
 
 /**
@@ -467,24 +464,27 @@ describe('SelectionManager', () => {
   });
 
   describe('selectAll', () => {
-    test('selectAll selects entire viewport', async () => {
+    test('selectAll selects all content, scrollback included (as in xterm.js)', async () => {
       if (!container) return;
 
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
+      const term = await createIsolatedTerminal({ cols: 80, rows: 5 });
       term.open(container);
 
-      term.write('Hello\r\nWorld\r\n');
+      for (let i = 0; i < 8; i++) term.write(`Row ${i}\r\n`);
+      term.write('Last');
 
       const selMgr = (term as any).selectionManager;
       selMgr.selectAll();
 
       expect(selMgr.hasSelection()).toBe(true);
+      const text = selMgr.getSelection();
+      expect(text.startsWith('Row 0\nRow 1')).toBe(true);
+      expect(text.endsWith('Row 7\nLast')).toBe(true);
 
       const coords = selMgr.getSelectionCoords();
       expect(coords).not.toBeNull();
       expect(coords!.startRow).toBe(0);
       expect(coords!.startCol).toBe(0);
-      expect(coords!.endRow).toBe(23); // rows - 1
 
       term.dispose();
     });
@@ -633,5 +633,123 @@ describe('SelectionManager', () => {
 
       term.dispose();
     });
+  });
+});
+
+describe('SelectionManager mouse gestures (libghostty)', () => {
+  let container: HTMLElement;
+  let term: Terminal;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
+    term.open(container);
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+  });
+
+  /**
+   * Dispatch a mouse event in a cell. `fx` is how far across the cell the
+   * pointer is; like Ghostty, a drag only includes its end cell once the
+   * pointer passes the cell's midpoint.
+   */
+  function mouse(
+    type: string,
+    col: number,
+    row: number,
+    timeStamp: number,
+    target?: EventTarget,
+    fx = 0.5
+  ) {
+    const renderer = (term as any).renderer;
+    const metrics = renderer.getMetrics();
+    const canvas: HTMLCanvasElement = renderer.getCanvas();
+    const x = (col + fx) * metrics.width;
+    const y = (row + 0.5) * metrics.height;
+    const e = new MouseEvent(type, { button: 0, bubbles: true });
+    Object.defineProperty(e, 'offsetX', { value: x });
+    Object.defineProperty(e, 'offsetY', { value: y });
+    Object.defineProperty(e, 'timeStamp', { value: timeStamp });
+    (target ?? canvas).dispatchEvent(e);
+  }
+
+  const selMgr = () => (term as any).selectionManager;
+
+  test('dragging selects text', () => {
+    term.write('hello world');
+    mouse('mousedown', 0, 0, 1000);
+    mouse('mousemove', 4, 0, 1050, undefined, 0.9);
+    mouse('mouseup', 4, 0, 1060, document);
+    expect(selMgr().getSelection()).toBe('hello');
+  });
+
+  test('a plain click clears an existing selection', () => {
+    term.write('hello world');
+    selMgr().select(0, 0, 5);
+    expect(selMgr().hasSelection()).toBe(true);
+    mouse('mousedown', 8, 0, 1000);
+    mouse('mouseup', 8, 0, 1010, document);
+    expect(selMgr().hasSelection()).toBe(false);
+  });
+
+  test('double-click selects a word using Ghostty word rules', () => {
+    term.write('ls ~/projects/ghostty-web');
+    for (const t of [1000, 1100]) {
+      mouse('mousedown', 10, 0, t);
+      mouse('mouseup', 10, 0, t + 10, document);
+    }
+    expect(selMgr().getSelection()).toBe('~/projects/ghostty-web');
+  });
+
+  test('selection fires onSelectionChange and copies on release', () => {
+    term.write('copy me');
+    let changes = 0;
+    selMgr().onSelectionChange(() => changes++);
+    const copied: string[] = [];
+    (selMgr() as any).copyToClipboard = (text: string) => copied.push(text);
+    mouse('mousedown', 0, 0, 1000);
+    mouse('mousemove', 3, 0, 1050, undefined, 0.9);
+    mouse('mouseup', 3, 0, 1060, document);
+    expect(copied).toEqual(['copy']);
+    expect(changes).toBe(1);
+  });
+
+  test('dragging above the top autoscrolls into scrollback', async () => {
+    for (let i = 0; i < 20; i++) term.write(`row ${i}\r\n`);
+    term.write('last');
+    mouse('mousedown', 2, 4, 1000);
+
+    const canvas: HTMLCanvasElement = (term as any).renderer.getCanvas();
+    const rect = canvas.getBoundingClientRect();
+    const out = new MouseEvent('mousemove', {
+      clientX: rect.left + 5,
+      clientY: rect.top - 20,
+      bubbles: true,
+    });
+    document.dispatchEvent(out);
+
+    await new Promise((r) => setTimeout(r, 200));
+    mouse('mouseup', 0, 0, 1500, document);
+
+    expect(term.getViewportY()).toBeGreaterThan(0);
+    const text: string = selMgr().getSelection();
+    expect(text.endsWith('la')).toBe(true);
+    expect(text.split('\n').length).toBeGreaterThan(5);
+  });
+
+  test('selection keeps working after reset()', () => {
+    term.write('before');
+    selMgr().select(0, 0, 3);
+    term.reset();
+    expect(selMgr().hasSelection()).toBe(false);
+    term.write('after');
+    mouse('mousedown', 0, 0, 1000);
+    mouse('mousemove', 4, 0, 1050, undefined, 0.9);
+    mouse('mouseup', 4, 0, 1060, document);
+    expect(selMgr().getSelection()).toBe('after');
   });
 });
