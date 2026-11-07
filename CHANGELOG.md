@@ -4,7 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
-- `attachCustomKeyEventHandler` and `attachCustomWheelEventHandler` follow xterm.js: returning false stops the terminal handling the event. The key handler also runs for keyup.
+- `attachCustomKeyEventHandler` and `attachCustomWheelEventHandler` follow xterm.js: returning false stops the terminal handling the event. The key handler also runs for keyup, and the wheel handler also sees wheel events reported to a program.
 - `onKey` reports the data sent for the key (`"\r"` for Enter) and fires only when something is sent.
 - `select()`, `selectLines()`, `getSelectionPosition()` and `scrollToLine()` use buffer rows including the scrollback, and `onScroll` reports the top line, as in xterm.js. The end column of `getSelectionPosition()` is exclusive.
 - `onSelectionChange` fires when the selection is cleared; `onRender`, `buffer.onBufferChange` and `onCursorMove` (for moves along a line) now fire.
@@ -22,7 +22,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 - `translateToString()` keeps spaces between words, the inactive buffer no longer shows the other screen, and buffer cells report their color modes (`isFgDefault`, `isBgRGB`, `isAttributeDefault`, ...).
 - Programs that ask for the `default` pointer (OSC 22) get the arrow instead of the text cursor.
 - FitAddon no longer ignores `fit()` shortly after a resize or after the terminal was resized another way.
-- SerializeAddon keeps the normal screen and its scrollback while a full-screen program runs, and has a new `excludeAltBuffer` option.
+- SerializeAddon keeps the normal screen and its scrollback while a full-screen program runs (honoring `scrollback`), and has new `excludeAltBuffer` and `range` options.
 - SearchAddon counts `resultIndex` from the top as in xterm.js, counts every match, keeps its place during incremental search, and warns about the unsupported `regex`, `wholeWord` and `caseSensitive` options.
 - `init()` loads the module once even when called concurrently, and warns when a later call asks for a different `wasmPath`.
 - Buffer, selection and search types (`IBuffer`, `IBufferLine`, `IBufferCell`, `IBufferNamespace`, `SelectionRange`, `TerminalSearch`, ...) are exported.
