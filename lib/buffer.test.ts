@@ -418,4 +418,57 @@ describe('Buffer API', () => {
       expect(cell!.isUnderline()).toBe(1);
     });
   });
+
+  describe('xterm.js semantics', () => {
+    test('translateToString keeps empty cells as spaces', () => {
+      term!.write('a\x1b[3Cb');
+      const line = term!.buffer.active.getLine(0)!;
+      expect(line.translateToString(true)).toBe('a   b');
+      expect(line.translateToString(false, 0, 6)).toBe('a   b ');
+      expect(line.getCell(1)!.getChars()).toBe('');
+    });
+
+    test('translateToString adds nothing for the second half of a wide character', () => {
+      term!.write('日x');
+      expect(term!.buffer.active.getLine(0)!.translateToString(true)).toBe('日x');
+    });
+
+    test('isWrapped marks the line a long line continues on', () => {
+      term!.write('x'.repeat(85));
+      const buffer = term!.buffer.active;
+      expect(buffer.getLine(0)!.isWrapped).toBe(false);
+      expect(buffer.getLine(1)!.isWrapped).toBe(true);
+    });
+
+    test('the inactive buffer is empty instead of showing the active screen', () => {
+      term!.write('shell prompt');
+      term!.write('\x1b[?1049h\x1b[Hfull screen');
+      const { normal, alternate, active } = term!.buffer;
+      expect(active).toBe(alternate);
+      expect(alternate.getLine(0)!.translateToString(true)).toBe('full screen');
+      expect(normal.length).toBe(0);
+      expect(normal.getLine(0)).toBeUndefined();
+
+      term!.write('\x1b[?1049l');
+      expect(normal.getLine(0)!.translateToString(true)).toBe('shell prompt');
+      expect(alternate.length).toBe(0);
+      expect(alternate.getLine(0)).toBeUndefined();
+    });
+
+    test('background color modes follow xterm.js', () => {
+      term!.write('\x1b[41mr\x1b[0md\x1b[38;2;1;2;3mf');
+      const line = term!.buffer.active.getLine(0)!;
+      const red = line.getCell(0)!;
+      expect(red.getBgColorMode()).toBe(0x3000000);
+      expect(red.isBgRGB()).toBe(true);
+      expect(red.isBgDefault()).toBe(false);
+      const plain = line.getCell(1)!;
+      expect(plain.getBgColorMode()).toBe(0);
+      expect(plain.isBgDefault()).toBe(true);
+      const fg = line.getCell(2)!;
+      expect(fg.getFgColorMode()).toBe(0x3000000);
+      expect(fg.isFgRGB()).toBe(true);
+      expect(fg.getFgColor()).toBe(0x010203);
+    });
+  });
 });

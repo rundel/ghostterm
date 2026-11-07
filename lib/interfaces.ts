@@ -10,12 +10,17 @@ export interface ITerminalOptions {
   cursorBlink?: boolean; // Default: false
   cursorStyle?: 'block' | 'underline' | 'bar';
   theme?: ITheme;
-  scrollback?: number; // Default: 10000
+  /** Lines of history to keep (default 10000, 0 = unlimited). Read when open() runs. */
+  scrollback?: number;
   fontSize?: number; // Default: 15
   fontFamily?: string; // Default: 'monospace'
+  /**
+   * Accepted for xterm.js compatibility and has no effect: the canvas always
+   * supports transparency, so a theme background with alpha (or
+   * 'transparent') shows what is behind the terminal.
+   */
   allowTransparency?: boolean;
 
-  // Phase 1 additions
   convertEol?: boolean; // Convert \n to \r\n (default: false)
   disableStdin?: boolean; // Disable keyboard input (default: false)
 
@@ -123,18 +128,20 @@ export interface IBufferNamespace {
 }
 
 /**
- * A terminal buffer (normal or alternate screen)
+ * A terminal buffer (normal or alternate screen). Only the active one can be
+ * read: libghostty doesn't expose the inactive screen, so the inactive
+ * buffer has length 0 and no lines.
  */
 export interface IBuffer {
   /** Buffer type: 'normal' or 'alternate' */
   readonly type: 'normal' | 'alternate';
   /** Cursor X position (0-indexed) */
   readonly cursorX: number;
-  /** Cursor Y position (0-indexed, relative to viewport) */
+  /** Cursor Y position (0-indexed, relative to baseY: the top of the active area) */
   readonly cursorY: number;
-  /** Viewport Y position (scroll offset, 0 = bottom of scrollback) */
+  /** Buffer line shown at the top of the viewport (baseY when not scrolled) */
   readonly viewportY: number;
-  /** Base Y position (always 0 for normal buffer, may vary for alternate) */
+  /** Buffer line at the top of the active area: the scrollback length (0 for alternate) */
   readonly baseY: number;
   /** Total buffer length (rows + scrollback for normal, just rows for alternate) */
   readonly length: number;
@@ -158,7 +165,7 @@ export interface IBuffer {
 export interface IBufferLine {
   /** Length of the line (in columns) */
   readonly length: number;
-  /** Whether this line wraps to the next line */
+  /** Whether this line continues the previous one (the text wrapped onto it) */
   readonly isWrapped: boolean;
 
   /**
@@ -189,14 +196,28 @@ export interface IBufferCell {
   /** Character width (1 = normal, 2 = wide/emoji, 0 = combining) */
   getWidth(): number;
 
-  /** Foreground color index (for palette colors) or -1 for RGB */
+  /**
+   * Color mode, with xterm.js's values (0 = default, 0x3000000 = RGB). Colors
+   * are reported resolved to RGB, so the foreground is always RGB and the
+   * background RGB unless it is the default.
+   */
   getFgColorMode(): number;
-  /** Background color index (for palette colors) or -1 for RGB */
+  /** Background color mode: 0 (default) or 0x3000000 (RGB); see getFgColorMode */
   getBgColorMode(): number;
-  /** Foreground RGB color (or 0 for default) */
+  /** Foreground color as 0xRRGGBB */
   getFgColor(): number;
-  /** Background RGB color (or 0 for default) */
+  /** Background color as 0xRRGGBB (the default background for default cells) */
   getBgColor(): number;
+  /** Whether the foreground is RGB (always, see getFgColorMode) */
+  isFgRGB(): boolean;
+  /** Whether the cell has a background of its own */
+  isBgRGB(): boolean;
+  /** Always false: palette colors are reported as RGB */
+  isFgPalette(): boolean;
+  /** Always false: palette colors are reported as RGB */
+  isBgPalette(): boolean;
+  /** Whether the cell shows the default background */
+  isBgDefault(): boolean;
 
   /** Whether cell has bold style */
   isBold(): number;

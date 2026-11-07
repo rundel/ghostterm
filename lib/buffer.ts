@@ -18,16 +18,13 @@
 import { EventEmitter } from './event-emitter';
 import type { GhosttyTerminal } from './ghostty';
 import { CellFlags } from './ghostty';
-import type {
-  IBuffer,
-  IBufferCell,
-  IBufferLine,
-  IBufferNamespace,
-  IDisposable,
-  IEvent,
-} from './interfaces';
+import type { IBuffer, IBufferCell, IBufferLine, IBufferNamespace, IEvent } from './interfaces';
 import type { Terminal } from './terminal';
 import type { GhosttyCell } from './types';
+
+/** Color modes as xterm.js reports them (getFgColorMode/getBgColorMode). */
+const COLOR_MODE_DEFAULT = 0;
+const COLOR_MODE_RGB = 0x3000000;
 
 // ============================================================================
 // BufferNamespace - Top-level buffer API
@@ -50,8 +47,7 @@ export class BufferNamespace implements IBufferNamespace {
   }
 
   get active(): IBuffer {
-    // Query WASM to determine which buffer is active
-    const wasmTerm = (this.terminal as any).wasmTerm as GhosttyTerminal | undefined;
+    const wasmTerm = this.terminal.wasmTerm;
     if (!wasmTerm) {
       return this.normal; // Default to normal if not initialized
     }
@@ -77,10 +73,7 @@ export class BufferNamespace implements IBufferNamespace {
     return this.bufferChangeEmitter.event;
   }
 
-  /**
-   * Internal: Fire buffer change event when screen switches
-   * Should be called by Terminal when detecting screen change
-   */
+  /** @internal Fired by Terminal when the program switches screens. */
   _fireBufferChange(buffer: IBuffer): void {
     this.bufferChangeEmitter.fire(buffer);
   }
@@ -91,7 +84,9 @@ export class BufferNamespace implements IBufferNamespace {
 // ============================================================================
 
 /**
- * A terminal buffer (normal or alternate screen)
+ * A terminal buffer (normal or alternate screen). libghostty gives access to
+ * the active screen only, so the inactive buffer reads as empty (length 0, no
+ * lines) until the program switches to it.
  */
 export class Buffer implements IBuffer {
   private terminal: Terminal;
@@ -101,22 +96,7 @@ export class Buffer implements IBuffer {
   constructor(terminal: Terminal, type: 'normal' | 'alternate') {
     this.terminal = terminal;
     this.bufferType = type;
-
-    // Create a null cell (codepoint=0, default colors, no flags)
-    const nullCellData: GhosttyCell = {
-      codepoint: 0,
-      fg_r: 204,
-      fg_g: 204,
-      fg_b: 204,
-      bg_r: 0,
-      bg_g: 0,
-      bg_b: 0,
-      flags: 0,
-      width: 1,
-      hyperlink_id: 0,
-      grapheme_len: 0,
-    };
-    this.nullCell = new BufferCell(nullCellData, 0);
+    this.nullCell = new BufferCell(blankCell(), 0);
   }
 
   get type(): 'normal' | 'alternate' {
@@ -124,46 +104,36 @@ export class Buffer implements IBuffer {
   }
 
   get cursorX(): number {
-    const wasmTerm = this.getWasmTerm();
-    if (!wasmTerm) return 0;
-    return wasmTerm.getCursor().x;
+    return this.activeTerm()?.getCursor().x ?? 0;
   }
 
+  /** Cursor row in the active area (add baseY for the buffer line). */
   get cursorY(): number {
-    const wasmTerm = this.getWasmTerm();
-    if (!wasmTerm) return 0;
-    return wasmTerm.getCursor().y;
+    return this.activeTerm()?.getCursor().y ?? 0;
   }
 
   /** Line index of the top of the viewport (xterm.js semantics). */
   get viewportY(): number {
-    const offset = Math.max(0, Math.floor((this.terminal as any).viewportY ?? 0));
+    if (!this.activeTerm()) return 0;
+    const offset = Math.max(0, Math.floor(this.terminal.viewportY ?? 0));
     return Math.max(0, this.baseY - offset);
   }
 
   /** Line index of the top of the active area: the scrollback length. */
   get baseY(): number {
-    const wasmTerm = this.getWasmTerm();
+    const wasmTerm = this.activeTerm();
     if (!wasmTerm || this.bufferType === 'alternate') return 0;
     return wasmTerm.getScrollbackLength();
   }
 
   get length(): number {
-    const wasmTerm = this.getWasmTerm();
+    const wasmTerm = this.activeTerm();
     if (!wasmTerm) return 0;
-
-    if (this.bufferType === 'alternate') {
-      // Alternate buffer has no scrollback, just visible rows
-      return wasmTerm.rows;
-    } else {
-      // Normal buffer: scrollback + visible rows
-      const scrollback = wasmTerm.getScrollbackLength();
-      return scrollback + wasmTerm.rows;
-    }
+    return this.baseY + wasmTerm.rows;
   }
 
   getLine(y: number): IBufferLine | undefined {
-    const wasmTerm = this.getWasmTerm();
+    const wasmTerm = this.activeTerm();
     if (!wasmTerm) return undefined;
 
     // Check bounds
@@ -171,26 +141,45 @@ export class Buffer implements IBuffer {
       return undefined;
     }
 
-    // Determine if accessing scrollback or visible screen
     // libghostty addresses the whole buffer (scrollback, then the active
     // area) by one absolute row, the same numbering as y here.
     const cells = wasmTerm.getScreenLine(y);
-    const isWrapped = wasmTerm.isScreenRowWrapped(y);
-
     if (!cells) {
       return undefined;
     }
-
-    return new BufferLine(cells, isWrapped, wasmTerm.cols);
+    return new BufferLine(cells, wasmTerm.isScreenRowWrapped(y), wasmTerm.cols);
   }
 
   getNullCell(): IBufferCell {
     return this.nullCell;
   }
 
-  private getWasmTerm(): GhosttyTerminal | undefined {
-    return (this.terminal as any).wasmTerm as GhosttyTerminal | undefined;
+  /** The terminal, when this buffer is the screen it is showing. */
+  private activeTerm(): GhosttyTerminal | undefined {
+    const wasmTerm = this.terminal.wasmTerm;
+    if (!wasmTerm) return undefined;
+    return wasmTerm.isAlternateScreen() === (this.bufferType === 'alternate')
+      ? wasmTerm
+      : undefined;
   }
+}
+
+/** An empty cell with default colors. */
+function blankCell(): GhosttyCell {
+  return {
+    codepoint: 0,
+    fg_r: 204,
+    fg_g: 204,
+    fg_b: 204,
+    bg_r: 0,
+    bg_g: 0,
+    bg_b: 0,
+    flags: 0,
+    width: 1,
+    hyperlink_id: 0,
+    grapheme_len: 0,
+    bg_default: true,
+  };
 }
 
 // ============================================================================
@@ -223,30 +212,15 @@ export class BufferLine implements IBufferLine {
     if (x < 0 || x >= this._length) {
       return undefined;
     }
-
-    if (x >= this.cells.length) {
-      // Cell beyond what was returned (empty/null cell)
-      return new BufferCell(
-        {
-          codepoint: 0,
-          fg_r: 204,
-          fg_g: 204,
-          fg_b: 204,
-          bg_r: 0,
-          bg_g: 0,
-          bg_b: 0,
-          flags: 0,
-          width: 1,
-          hyperlink_id: 0,
-          grapheme_len: 0,
-        },
-        x
-      );
-    }
-
-    return new BufferCell(this.cells[x], x);
+    // Cells beyond what was returned are empty
+    return new BufferCell(x < this.cells.length ? this.cells[x] : blankCell(), x);
   }
 
+  /**
+   * The line's text. As in xterm.js, empty cells are spaces (so `a`, three
+   * empty cells and `b` give "a   b"); the second half of a wide character
+   * adds nothing.
+   */
   translateToString(trimRight = false, startColumn = 0, endColumn = this._length): string {
     // Clamp bounds
     const start = Math.max(0, Math.min(startColumn, this._length));
@@ -255,10 +229,8 @@ export class BufferLine implements IBufferLine {
     let result = '';
     for (let x = start; x < end; x++) {
       const cell = this.getCell(x);
-      if (cell) {
-        const chars = cell.getChars();
-        result += chars;
-      }
+      if (!cell || cell.getWidth() === 0) continue;
+      result += cell.getChars() || ' ';
     }
 
     if (trimRight) {
@@ -274,7 +246,9 @@ export class BufferLine implements IBufferLine {
 // ============================================================================
 
 /**
- * A single cell in the buffer
+ * A single cell in the buffer. Colors are the resolved RGB values libghostty
+ * draws with: palette colors are reported as RGB, and the background as
+ * default when the cell has none of its own.
  */
 export class BufferCell implements IBufferCell {
   private cell: GhosttyCell;
@@ -299,7 +273,7 @@ export class BufferCell implements IBufferCell {
     // Valid: 0x0000 to 0x10FFFF, excluding surrogates (0xD800-0xDFFF)
     if (codepoint < 0 || codepoint > 0x10ffff || (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
       // Return replacement character for invalid codepoints
-      return '\uFFFD';
+      return '�';
     }
 
     return String.fromCodePoint(codepoint);
@@ -313,16 +287,14 @@ export class BufferCell implements IBufferCell {
     return this.cell.width;
   }
 
+  /** Always RGB: the foreground is reported resolved (see getFgColor). */
   getFgColorMode(): number {
-    // Return -1 for RGB (we always use RGB in our WASM implementation)
-    // xterm.js uses different values:
-    // 0 = default, 1 = palette 16, 2 = palette 256, 3 = RGB
-    // For simplicity, we return -1 for RGB
-    return -1;
+    return COLOR_MODE_RGB;
   }
 
+  /** Default when the cell has no background of its own, else RGB. */
   getBgColorMode(): number {
-    return -1;
+    return this.isBgDefault() ? COLOR_MODE_DEFAULT : COLOR_MODE_RGB;
   }
 
   getFgColor(): number {
@@ -330,9 +302,29 @@ export class BufferCell implements IBufferCell {
     return (this.cell.fg_r << 16) | (this.cell.fg_g << 8) | this.cell.fg_b;
   }
 
+  /** The background as 0xRRGGBB (the resolved default color for default cells). */
   getBgColor(): number {
-    // Pack RGB into a single number: 0xRRGGBB
     return (this.cell.bg_r << 16) | (this.cell.bg_g << 8) | this.cell.bg_b;
+  }
+
+  isFgRGB(): boolean {
+    return true;
+  }
+
+  isBgRGB(): boolean {
+    return !this.isBgDefault();
+  }
+
+  isFgPalette(): boolean {
+    return false;
+  }
+
+  isBgPalette(): boolean {
+    return false;
+  }
+
+  isBgDefault(): boolean {
+    return this.cell.bg_default ?? false;
   }
 
   isBold(): number {
