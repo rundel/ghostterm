@@ -351,7 +351,8 @@ process.on('SIGINT', () => {
       port: HTTP_PORT,
       strictPort: true,
       cors: false,
-      allowedHosts: AUTH_CONFIG.allowedHosts,
+      // A copy: Vite appends to the array, and the config's is frozen.
+      allowedHosts: [...AUTH_CONFIG.allowedHosts],
       fs: {
         strict: true,
         allow: SERVED_PATHS,

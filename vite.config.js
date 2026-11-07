@@ -6,8 +6,8 @@ export default defineConfig({
     dts({
       include: ['lib/**/*.ts'],
       exclude: ['lib/**/*.test.ts', 'lib/test-helpers.ts'],
-      rollupTypes: true, // Bundle all .d.ts into single file
-      copyDtsFiles: false, // Don't copy individual .d.ts files
+      // One rolled-up dist/index.d.ts (API Extractor) instead of a .d.ts per source file.
+      bundleTypes: true,
     }),
   ],
   build: {
