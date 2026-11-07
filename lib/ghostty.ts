@@ -2085,11 +2085,12 @@ export class GhosttyTerminal {
   }
 
   /**
-   * Get cursor state from render state.
-   * Ensures render state is fresh by calling update().
+   * Cursor state: shape, blink, visibility and viewport position from the
+   * render state (updated first if the terminal changed), position in the
+   * active area from the terminal.
    */
   getCursor(): RenderStateCursor {
-    this.update();
+    if (this.pendingUpdate) this.update();
     const ptr = this.scratch;
     const c = this.L.cursor;
     const view = this.mem.view();
@@ -2428,23 +2429,23 @@ export class GhosttyTerminal {
   // ==========================================================================
 
   /**
-   * Get a row of the active area (the screen without scrollback), whatever the
-   * viewport is scrolled to. Returns a COPY of the cells.
+   * A row of the active area (the screen without scrollback) as the terminal
+   * holds it now, whatever the viewport is scrolled to and even while a
+   * render hold (mode 2026) freezes what is displayed. Read from the grid,
+   * like getScreenLine(); `selected` is always false. Returns new cells.
    */
   getLine(y: number): GhosttyCell[] | null {
     if (y < 0 || y >= this._rows) return null;
-    if (this.atBottom) return this.getViewportLine(y);
     return this.readGridLine(PointTag.ACTIVE, y);
   }
 
   /**
-   * Get a row of the viewport as it is displayed, which includes scrollback
-   * rows when scrolled up (see setViewportOffset). Read from the render state.
-   * Returns a COPY of the cells to avoid pool reference issues.
+   * A row of the viewport as it is displayed, which includes scrollback rows
+   * when scrolled up (see setViewportOffset) and the held frame during a
+   * render hold. Read from the render state. Returns a copy of the cells.
    */
   getViewportLine(y: number): GhosttyCell[] | null {
     if (y < 0 || y >= this._rows) return null;
-    this.update();
     const viewport = this.getViewport();
     const start = y * this._cols;
     return viewport.slice(start, start + this._cols).map((cell) => ({ ...cell }));
@@ -2625,11 +2626,12 @@ export class GhosttyTerminal {
   }
 
   /**
-   * Read one row cell by cell through grid references. Used for rows that are
-   * not in the render state's viewport.
+   * Read one row of the terminal's grid cell by cell through grid references,
+   * independent of the render state's (possibly held) frame.
    */
   private readGridLine(tag: number, row: number): GhosttyCell[] | null {
-    this.update();
+    // Only the default colors and palette come from the render state.
+    if (this.pendingUpdate) this.update();
     this.loadColors();
 
     const ex = this.exports;
@@ -2856,6 +2858,14 @@ export class GhosttyTerminal {
     }
     this.mem.view().setUint8(sel + S.rectangle, rectangle ? 1 : 0);
     return this.installSelection(sel);
+  }
+
+  /**
+   * @internal Note that the terminal changed outside write() and friends, so
+   * the next read refreshes the render state.
+   */
+  invalidate(): void {
+    this.pendingUpdate = true;
   }
 
   /** @internal Make the selection snapshot at ptr the terminal's selection. */
@@ -3182,6 +3192,8 @@ export class SelectionGesture {
       event,
       out
     );
+    // Autoscroll ticks scroll the viewport even when no selection results.
+    this.term.invalidate();
     if (result === GHOSTTY_SUCCESS) {
       this.term.installSelection(out);
       return true;
@@ -3361,16 +3373,17 @@ export class TerminalSearch {
 
   /** Select the next (older) match. Returns false when there is none. */
   next(): boolean {
-    return (
-      !!this.needle && this.exports.ghostty_search_select_next(this.search) === GHOSTTY_SUCCESS
-    );
+    if (!this.needle) return false;
+    // Selecting a match can scroll the viewport.
+    this.term.invalidate();
+    return this.exports.ghostty_search_select_next(this.search) === GHOSTTY_SUCCESS;
   }
 
   /** Select the previous (newer) match. Returns false when there is none. */
   previous(): boolean {
-    return (
-      !!this.needle && this.exports.ghostty_search_select_prev(this.search) === GHOSTTY_SUCCESS
-    );
+    if (!this.needle) return false;
+    this.term.invalidate();
+    return this.exports.ghostty_search_select_prev(this.search) === GHOSTTY_SUCCESS;
   }
 
   private getU32(data: number): number | null {

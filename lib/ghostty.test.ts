@@ -487,6 +487,53 @@ describe('library-owned viewport', () => {
     }
   });
 
+  test('getLine reads the same cells pinned and scrolled', () => {
+    const term = filled();
+    const family = '👨‍👩‍👧';
+    try {
+      term.write(
+        `\r\n\x1b[1;31mred\x1b[0m \x1b]8;;https://ghostty.org\x1b\\link\x1b]8;;\x1b\\ ${family}`
+      );
+      const pinned = term.getLine(2)!;
+      term.setViewportOffset(4);
+      const scrolled = term.getLine(2)!;
+      expect(scrolled).toEqual(pinned);
+      expect(pinned[0].flags & 1).toBe(1); // bold
+      expect(pinned[4].hyperlink_id).toBeGreaterThan(0);
+      expect(pinned[9].chars).toBe(family);
+
+      // At the bottom it is what the viewport shows, apart from the selection flag.
+      term.setViewportOffset(0);
+      const shown = term.getViewportLine(2)!.map(({ selected: _, ...c }) => c);
+      expect(shown).toEqual(pinned.map(({ selected: _, ...c }) => c));
+    } finally {
+      term.free();
+    }
+  });
+
+  test('reading lines and the cursor only refreshes the render state after a change', () => {
+    const term = filled();
+    try {
+      term.getViewport();
+      let updates = 0;
+      const update = term.update.bind(term);
+      term.update = () => {
+        updates++;
+        return update();
+      };
+      term.getViewportLine(0);
+      term.getCursor();
+      term.getLine(1);
+      expect(updates).toBe(0);
+      term.write('x');
+      term.getViewportLine(0);
+      term.getCursor();
+      expect(updates).toBe(1);
+    } finally {
+      term.free();
+    }
+  });
+
   test('scrolling marks the whole viewport for redraw', () => {
     const term = filled();
     try {
@@ -769,14 +816,17 @@ describe('terminal effects (library callbacks)', () => {
 
   test('synchronized output keeps the last finished frame on screen', () => {
     const term = ghostty.createTerminal(20, 3);
-    const row = () => text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd();
+    const shown = () => text(term.getViewportLine(0)!.map((c) => c.codepoint)).trimEnd();
+    const live = () => text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd();
     try {
       term.write('old');
-      expect(row()).toBe('old');
+      expect(shown()).toBe('old');
       term.write('\x1b[?2026h\x1b[2J\x1b[Hne');
-      expect(row()).toBe('old'); // held: still the frame from before
+      expect(shown()).toBe('old'); // held: still the frame from before
+      expect(live()).toBe('ne'); // the grid itself is not held
       term.write('w\x1b[?2026l');
-      expect(row()).toBe('new');
+      expect(shown()).toBe('new');
+      expect(live()).toBe('new');
     } finally {
       term.free();
     }
