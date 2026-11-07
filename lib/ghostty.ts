@@ -956,6 +956,11 @@ export class Ghostty {
     return this.layout.abi.version;
   }
 
+  /** Cells a codepoint takes on its own (0, 1 or 2), by libghostty's width rules. */
+  codepointWidth(codepoint: number): 0 | 1 | 2 {
+    return this.exports.ghostty_unicode_codepoint_width(codepoint >>> 0) as 0 | 1 | 2;
+  }
+
   /**
    * The optimization mode the loaded module was built with: `'release-small'` for the default
    * `ghostty-vt.wasm`, `'release-fast'` for `ghostty-vt-fast.wasm`.

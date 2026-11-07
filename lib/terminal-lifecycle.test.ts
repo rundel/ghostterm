@@ -3,11 +3,12 @@
  * addons, display changes and dispose().
  */
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { RecordingContext } from '../happydom';
 import type { ITerminalAddon } from './interfaces';
 import type { Terminal } from './terminal';
 import { internals, nextFrame, stub, terminalFixture } from './test-helpers';
+import { UNICODE_VERSIONS } from './unicode';
 
 const fixture = terminalFixture();
 
@@ -89,8 +90,25 @@ describe('construction and open()', () => {
     expect(sent).toEqual(['x']);
   });
 
-  test('unicode.activeVersion is the version libghostty implements', () => {
-    expect(fixture.create().unicode.activeVersion).toBe('15.1');
+  test('unicode reports the version of the libghostty tables, the only one available', () => {
+    const { unicode } = fixture.create();
+    expect(UNICODE_VERSIONS[fixture.ghostty.version!]).toBeDefined();
+    expect(unicode.activeVersion).toBe(UNICODE_VERSIONS[fixture.ghostty.version!]);
+    expect(unicode.versions).toEqual([unicode.activeVersion]);
+  });
+
+  test('unicode accepts its own version and warns once about any other or a provider', () => {
+    const { unicode } = fixture.create();
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    fixture.defer(() => warn.mockRestore());
+    const version = unicode.activeVersion;
+    unicode.activeVersion = version;
+    expect(warn).not.toHaveBeenCalled();
+    unicode.activeVersion = '11';
+    unicode.register({ version: '11', wcwidth: () => 1, charProperties: () => 0 });
+    expect(unicode.activeVersion).toBe(version);
+    expect(unicode.versions).toEqual([version]);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
 

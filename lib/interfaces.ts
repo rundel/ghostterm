@@ -292,11 +292,26 @@ export interface IKeyEvent {
   domEvent: KeyboardEvent;
 }
 
-/**
- * Unicode version provider (xterm.js compatibility)
- */
+/** Character widths for one Unicode version (xterm.js IUnicodeVersionProvider). */
 export interface IUnicodeVersionProvider {
-  readonly activeVersion: string;
+  readonly version: string;
+  /** Cells a codepoint takes. */
+  wcwidth(codepoint: number): 0 | 1 | 2;
+  /** xterm.js's packed width and join state for a codepoint after `preceding`. */
+  charProperties(codepoint: number, preceding: number): number;
+}
+
+/**
+ * Unicode handling (xterm.js IUnicodeHandling). libghostty owns character
+ * widths, so only its version is available.
+ */
+export interface IUnicodeHandling {
+  /** Accepted and ignored (logs a warning once). */
+  register(provider: IUnicodeVersionProvider): void;
+  /** The versions available: only libghostty's. */
+  readonly versions: readonly string[];
+  /** libghostty's Unicode version; setting another one logs a warning once and changes nothing. */
+  activeVersion: string;
 }
 
 // ============================================================================

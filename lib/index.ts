@@ -30,6 +30,7 @@ export type {
   IFunctionIdentifier,
   IModes,
   IParser,
+  IUnicodeHandling,
   IUnicodeVersionProvider,
   IBufferNamespace,
   IBuffer,

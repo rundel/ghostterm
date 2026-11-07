@@ -273,6 +273,7 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
 
   // Build info (build_info.h)
   ghostty_build_info(data: number, outPtr: number): number;
+  ghostty_unicode_codepoint_width(codepoint: number): number;
 
   // Memory helpers (wasm.h)
   ghostty_wasm_alloc(len: number): number;

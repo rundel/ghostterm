@@ -47,7 +47,7 @@ import type {
   ITerminalAddon,
   ITerminalCore,
   ITerminalOptions,
-  IUnicodeVersionProvider,
+  IUnicodeHandling,
 } from './interfaces';
 import { LinkDetector } from './link-detector';
 import { MarkerRegistry } from './markers';
@@ -64,6 +64,7 @@ import {
 } from './renderer';
 import { SelectionManager } from './selection-manager';
 import { Key } from './types';
+import { UnicodeHandling } from './unicode';
 
 // ============================================================================
 // Terminal Class
@@ -82,12 +83,8 @@ export class Terminal implements ITerminalCore {
   /** Parser hooks (xterm.js compatibility): OSC handlers; see Parser. */
   public readonly parser = new Parser();
 
-  // Unicode API (xterm.js compatibility)
-  public readonly unicode: IUnicodeVersionProvider = {
-    get activeVersion(): string {
-      return '15.1'; // Ghostty supports Unicode 15.1
-    },
-  };
+  /** Unicode API (xterm.js compatibility): libghostty's version only; see UnicodeHandling. */
+  public readonly unicode: IUnicodeHandling;
 
   // Options (public for xterm.js compatibility)
   public readonly options!: Required<ITerminalOptions>;
@@ -233,6 +230,7 @@ export class Terminal implements ITerminalCore {
   constructor(options: ITerminalOptions = {}) {
     // Use provided Ghostty instance (for test isolation) or get module-level instance
     this.ghostty = options.ghostty ?? getGhostty();
+    this.unicode = new UnicodeHandling(this.ghostty);
 
     // Create base options object with all defaults (excluding ghostty)
     const baseOptions = {
