@@ -146,6 +146,7 @@ These follow Ghostty rather than xterm.js:
 Other differences from xterm.js:
 
 - `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
+- No password indicator: Ghostty marks password prompts (a lock at the cursor) from the PTY's terminal settings (echo off), which only its own PTY code can see. libghostty-vt has no way to be told, so ghostterm can't show one.
 
 ## Development
 
