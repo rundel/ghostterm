@@ -599,6 +599,16 @@ export class Terminal implements ITerminalCore {
     // Invalidate link cache (content changed)
     this.linkDetector?.invalidateCache();
 
+    // The program may have asked for another pointer shape (OSC 22); a hovered
+    // link keeps its pointer.
+    if (this.canvas && !this.currentHoveredLink) {
+      const shape = this.pointerShape();
+      if (this.canvas.style.cursor !== shape) {
+        this.canvas.style.cursor = shape;
+        if (this.element) this.element.style.cursor = shape;
+      }
+    }
+
     // Call callback if provided
     if (callback) {
       // Queue callback after next render
@@ -1460,7 +1470,7 @@ export class Terminal implements ITerminalCore {
           link?.hover?.(true);
 
           // Update cursor style on both container and canvas
-          const cursorStyle = link ? 'pointer' : 'text';
+          const cursorStyle = link ? 'pointer' : this.pointerShape();
           if (this.element) {
             this.element.style.cursor = cursorStyle;
           }
@@ -1528,9 +1538,9 @@ export class Terminal implements ITerminalCore {
 
       // Reset cursor
       if (this.element) {
-        this.element.style.cursor = 'text';
+        this.element.style.cursor = this.pointerShape();
         if (this.canvas) {
-          this.canvas.style.cursor = 'text';
+          this.canvas.style.cursor = this.pointerShape();
         }
       }
     }
@@ -1921,6 +1931,11 @@ export class Terminal implements ITerminalCore {
         return m ? { width: m.width, height: m.height } : null;
       },
     });
+  }
+
+  /** The pointer over the text: the program's choice (OSC 22), else a text cursor. */
+  private pointerShape(): string {
+    return this.wasmTerm?.getMouseShape() ?? 'text';
   }
 
   /** Give libghostty the renderer's cell size in pixels. */

@@ -235,3 +235,16 @@ describe('selection drawing', () => {
     expect(painted).toEqual([7, 8]);
   });
 });
+
+describe('pointer shape (OSC 22)', () => {
+  test('programs can change the mouse pointer, and reset it', () => {
+    const canvas: HTMLCanvasElement = (term as any).renderer.getCanvas();
+    expect(canvas.style.cursor).toBe('text');
+    term.write('\x1b]22;pointer\x07');
+    expect(canvas.style.cursor).toBe('pointer');
+    term.write('\x1b]22;crosshair\x1b\\');
+    expect(canvas.style.cursor).toBe('crosshair');
+    term.write('\x1b]22;\x07');
+    expect(canvas.style.cursor).toBe('text');
+  });
+});

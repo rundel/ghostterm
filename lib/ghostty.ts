@@ -100,6 +100,45 @@ const ROW_DATA_WRAP_CONTINUATION = 2;
 const SELECTION_DATA = 31; // GHOSTTY_TERMINAL_DATA_SELECTION
 const TERMINAL_DATA_TITLE = 12;
 const TERMINAL_DATA_PWD = 13;
+const TERMINAL_DATA_MOUSE_SHAPE = 41;
+
+/** GhosttyMouseShape, in order; Ghostty uses the CSS cursor names. */
+const MOUSE_SHAPES = [
+  'default',
+  'context-menu',
+  'help',
+  'pointer',
+  'progress',
+  'wait',
+  'cell',
+  'crosshair',
+  'text',
+  'vertical-text',
+  'alias',
+  'copy',
+  'move',
+  'no-drop',
+  'not-allowed',
+  'grab',
+  'grabbing',
+  'all-scroll',
+  'col-resize',
+  'row-resize',
+  'n-resize',
+  'e-resize',
+  's-resize',
+  'w-resize',
+  'ne-resize',
+  'nw-resize',
+  'se-resize',
+  'sw-resize',
+  'ew-resize',
+  'ns-resize',
+  'nesw-resize',
+  'nwse-resize',
+  'zoom-in',
+  'zoom-out',
+];
 const SELECTION_OPT = 22; // GHOSTTY_TERMINAL_OPT_SELECTION
 const SELECTION_ORDER_FORWARD = 0;
 const POINT_TAG_SCREEN = 2;
@@ -1193,6 +1232,22 @@ export class GhosttyTerminal {
   /** The window title the program set (OSC 0/2). */
   getTitle(): string {
     return this.readDataString(TERMINAL_DATA_TITLE);
+  }
+
+  /**
+   * The pointer shape the program asked for (OSC 22), as a CSS cursor name,
+   * or null when it hasn't asked (or reset it).
+   */
+  getMouseShape(): string | null {
+    const out = this.selScratch + 240;
+    if (
+      this.exports.ghostty_terminal_get(this.handle, TERMINAL_DATA_MOUSE_SHAPE, out) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return null;
+    }
+    const shape = this.mem.view().getUint32(out, true);
+    return shape === 0 ? null : (MOUSE_SHAPES[shape] ?? null);
   }
 
   /** The working directory the program reported (OSC 7). */
