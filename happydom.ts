@@ -43,6 +43,9 @@ export class RecordingContext {
   private lineDash: number[] = [];
   private stack: Array<Record<string, unknown>> = [];
 
+  /** The attributes passed to getContext() when the context was created. */
+  attributes: Record<string, unknown> = {};
+
   constructor(readonly canvas: HTMLCanvasElement) {}
 
   private record(op: string, args: unknown[]): void {
@@ -134,6 +137,7 @@ HTMLCanvasElement.prototype.getContext = function (
   let ctx = contexts.get(this);
   if (!ctx) {
     ctx = new RecordingContext(this);
+    ctx.attributes = { ...(options as Record<string, unknown> | undefined) };
     contexts.set(this, ctx);
   }
   return ctx as unknown as CanvasRenderingContext2D;

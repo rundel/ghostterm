@@ -16,9 +16,10 @@ export interface ITerminalOptions {
   fontSize?: number; // Default: 15
   fontFamily?: string; // Default: 'monospace'
   /**
-   * Accepted for xterm.js compatibility and has no effect: the canvas always
-   * supports transparency, so a theme background with alpha (or
-   * 'transparent') shows what is behind the terminal.
+   * Whether a theme background with alpha (or 'transparent') shows what is
+   * behind the terminal (default false: the background is drawn opaque,
+   * without its alpha). As in xterm.js, set it before open(); later changes
+   * have no effect.
    */
   allowTransparency?: boolean;
 

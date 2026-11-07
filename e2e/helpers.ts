@@ -11,6 +11,7 @@ export interface FixtureOptions {
   scrollback?: number;
   smoothScrollDuration?: number;
   theme?: 'light' | 'transparent';
+  allowTransparency?: boolean;
   /** Put the terminal in a CSS-sized flex layout with a FitAddon (window.fit). */
   fit?: boolean;
 }

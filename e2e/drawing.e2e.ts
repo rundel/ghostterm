@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  canvasPixels,
   cellPixels,
   colorsOf,
   columnsWithColor,
@@ -80,14 +81,27 @@ test('theme colors: changed after open, black backgrounds on a light theme, OSC 
   expect(colorsOf(await cellPixels(page, 0, 0, 4))).toEqual(['#000000']);
 });
 
-test('a transparent background stays transparent', async ({ page }) => {
-  await openFixture(page, { theme: 'transparent' });
+test('a transparent background stays transparent with allowTransparency', async ({ page }) => {
+  await openFixture(page, { theme: 'transparent', allowTransparency: true });
   const g = await geometry(page);
   for (let i = 0; i < 20; i++) await write(page, `output line ${i}\r\n`);
   await write(page, `${ESC}[2J${ESC}[H`);
   await frames(page, 5);
   const px = await cellPixels(page, 1, 0, g.cols - 1, g.rows);
   expect(countTransparent(px)).toBe(px.width * px.height);
+});
+
+test('without allowTransparency a transparent background is drawn opaque', async ({ page }) => {
+  await openFixture(page, { theme: 'transparent' });
+  const g = await geometry(page);
+  await write(page, 'output\r\n');
+  // Right of the cursor, below the text.
+  const px = await cellPixels(page, 1, 1, g.cols - 1, g.rows - 1);
+  expect(countTransparent(px)).toBe(0);
+  expect(colorsOf(px)).toEqual(['#000000']);
+  // The scrollbar gutter too.
+  const gutter = await canvasPixels(page, g.cols * g.cellWidth, 0, 10, g.rows * g.cellHeight);
+  expect(countTransparent(gutter)).toBe(0);
 });
 
 test('underline styles, underline color and overline are drawn differently', async ({ page }) => {

@@ -64,6 +64,8 @@ export interface RendererOptions {
   cursorBlink?: boolean; // Default: false
   theme?: ITheme;
   devicePixelRatio?: number; // Default: window.devicePixelRatio
+  /** Let a theme background with alpha show through (default: drawn opaque). */
+  allowTransparency?: boolean;
 }
 
 export interface FontMetrics {
@@ -136,10 +138,10 @@ export const DEFAULT_THEME: Required<ITheme> = {
 /** Parse a CSS hex or rgb() color to 0xRRGGBB (alpha ignored), or undefined. */
 export function parseCssColor(color: string | undefined): number | undefined {
   if (!color) return undefined;
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(color.trim())?.[1];
   if (hex) {
-    const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
-    return Number.parseInt(full, 16);
+    const full = hex.length <= 4 ? [...hex.slice(0, 3)].map((c) => c + c).join('') : hex;
+    return Number.parseInt(full.slice(0, 6), 16);
   }
   const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
   if (rgb) return (+rgb[1] << 16) | (+rgb[2] << 8) | +rgb[3];
@@ -170,6 +172,7 @@ export class CanvasRenderer {
   private cursorBlink: boolean;
   private theme: Required<ITheme>;
   private devicePixelRatio: number;
+  private allowTransparency: boolean;
   private metrics: FontMetrics;
 
   // Cursor blinking state
@@ -221,7 +224,9 @@ export class CanvasRenderer {
 
   constructor(canvas: HTMLCanvasElement, options: RendererOptions = {}) {
     this.canvas = canvas;
-    const ctx = canvas.getContext('2d', { alpha: true });
+    this.allowTransparency = options.allowTransparency ?? false;
+    // An opaque canvas lets browsers draw text with subpixel antialiasing.
+    const ctx = canvas.getContext('2d', { alpha: this.allowTransparency });
     if (!ctx) {
       throw new Error('Failed to get 2D rendering context');
     }
@@ -233,7 +238,7 @@ export class CanvasRenderer {
     this.cursorStyle = options.cursorStyle ?? 'block';
     this.cursorBlink = options.cursorBlink ?? false;
     this.theme = { ...DEFAULT_THEME, ...options.theme };
-    this.background = this.theme.background;
+    this.background = this.themeBackground();
     this.devicePixelRatio = options.devicePixelRatio ?? window.devicePixelRatio ?? 1;
 
     // Measure font metrics
@@ -295,13 +300,24 @@ export class CanvasRenderer {
   }
 
   /**
-   * The default background to paint: the theme's own CSS color (which keeps
-   * transparent themes transparent) unless the program set another (OSC 11).
+   * The theme's background as painted: its own CSS color, which keeps a background with alpha
+   * transparent, only with allowTransparency; otherwise the color without its alpha
+   * ('transparent' is black, as libghostty is told).
+   */
+  private themeBackground(): string {
+    if (this.allowTransparency) return this.theme.background;
+    const hex = parseCssColor(this.theme.background) ?? 0;
+    return this.rgbToCSS((hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff);
+  }
+
+  /**
+   * The default background to paint: the theme's (themeBackground) unless the program set
+   * another (OSC 11).
    */
   private resolveBackground(rgb: RGB | undefined): string {
-    if (!rgb) return this.theme.background;
+    if (!rgb) return this.themeBackground();
     const hex = (rgb.r << 16) | (rgb.g << 8) | rgb.b;
-    if (hex === (parseCssColor(this.theme.background) ?? 0)) return this.theme.background;
+    if (hex === (parseCssColor(this.theme.background) ?? 0)) return this.themeBackground();
     return this.rgbToCSS(rgb.r, rgb.g, rgb.b);
   }
 
@@ -943,7 +959,7 @@ export class CanvasRenderer {
    */
   public setTheme(theme: ITheme): void {
     this.theme = { ...DEFAULT_THEME, ...theme };
-    this.background = this.theme.background;
+    this.background = this.themeBackground();
     this.needsFullRender = true;
   }
 

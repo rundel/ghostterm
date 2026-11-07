@@ -1,8 +1,8 @@
 // The page the Playwright specs drive: one Terminal with fixed options and no program behind it.
 // Everything the terminal sends is recorded in window.sent. Query parameters override the
 // numeric options (cols, rows, fontSize, scrollback, smoothScrollDuration) and fontFamily;
-// `theme=light|transparent` picks other colors, and `fit` puts the terminal in a flex layout
-// sized by CSS with a FitAddon observing it (window.fit).
+// `theme=light|transparent` picks other colors, `allowTransparency` sets that option, and `fit`
+// puts the terminal in a flex layout sized by CSS with a FitAddon observing it (window.fit).
 
 import { FitAddon } from '../lib/addons/fit';
 import { Terminal, init } from '../lib/index';
@@ -43,6 +43,7 @@ window.ready = (async () => {
     scrollback: num('scrollback', 1000),
     smoothScrollDuration: num('smoothScrollDuration', 100),
     cursorBlink: false,
+    allowTransparency: params.has('allowTransparency'),
     theme: themes[params.get('theme') as keyof typeof themes] ?? THEME,
   });
   term.onData((data) => window.sent.push(data));
