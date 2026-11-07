@@ -6,6 +6,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 - Markers: `registerMarker()` and `markers`, tracked by libghostty as output scrolls, history is pruned and the screen reflows.
 - Decorations: `registerDecoration()` places an element over a marker's line and can color its cells.
+- `parser.registerOscHandler()` sees and can consume any OSC sequence; the CSI, DCS and ESC registrations are accepted but not called.
 - `attachCustomKeyEventHandler` and `attachCustomWheelEventHandler` follow xterm.js: returning false stops the terminal handling the event. The key handler also runs for keyup, and the wheel handler also sees wheel events reported to a program.
 - `onKey` reports the data sent for the key (`"\r"` for Enter) and fires only when something is sent.
 - `select()`, `selectLines()`, `getSelectionPosition()` and `scrollToLine()` use buffer rows including the scrollback, and `onScroll` reports the top line, as in xterm.js. The end column of `getSelectionPosition()` is exclusive.

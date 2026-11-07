@@ -143,6 +143,19 @@ decoration?.onRender((el) => {
 });
 ```
 
+### Parser hooks
+
+`term.parser.registerOscHandler(code, handler)` sees OSC sequences before the terminal acts on them, for any code, including ones libghostty handles (titles, OSC 7, OSC 133, ...). libghostty's parser reports where each OSC starts, so sequences split across writes or sitting inside other strings are found as the terminal finds them. The handler gets the text after `code;`; returning true consumes the sequence (the terminal then ignores it), false passes it to older handlers for the same code and then to the terminal.
+
+```javascript
+term.parser.registerOscHandler(633, (data) => {
+  if (data.startsWith('E;')) recordCommand(data.slice(2));
+  return true;
+});
+```
+
+`registerCsiHandler`, `registerDcsHandler` and `registerEscHandler` exist for compatibility but their handlers are never called: libghostty parses those sequences itself and its API has no hook for them. The first registration of each logs a warning.
+
 ### Behavior worth knowing
 
 These follow Ghostty rather than xterm.js:
@@ -167,6 +180,7 @@ Other differences from xterm.js:
 
 - `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
 - No password indicator: Ghostty marks password prompts (a lock at the cursor) from the PTY's terminal settings (echo off), which only its own PTY code can see. libghostty-vt has no way to be told, so ghostterm can't show one.
+- Parser hooks: only OSC handlers are called (see [Parser hooks](#parser-hooks)). They run synchronously; a handler returning a Promise is not awaited and counts as returning false.
 - Decorations: `overviewRulerOptions` is accepted and not drawn (there is no overview ruler). Decoration elements are always above the canvas, whatever their layer. A decoration on the normal screen is hidden while the alternate screen is shown, and one made on the alternate screen is shown there (xterm.js hides every decoration on the alternate screen).
 - Markers are disposed when their line leaves the buffer, not when the line is erased in place (xterm.js also disposes markers on lines erased with ED or EL). Since libghostty prunes scrollback a page at a time, a marker on an old line can be disposed some lines before the `scrollback` limit alone would drop it.
 

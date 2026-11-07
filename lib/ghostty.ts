@@ -480,6 +480,13 @@ export const CursorStyle = {
 /** Mode 2027: grapheme clustering, on by default as in Ghostty itself. */
 const MODE_GRAPHEME_CLUSTER = 2027;
 
+/** GHOSTTY_TERMINAL_BOUNDARY_OSC_START. */
+const WRITE_BOUNDARY_OSC_START = 1 << 5;
+/** Bytes that end an OSC string in libghostty's parser: BEL, ESC, CAN, SUB. */
+const OSC_TERMINATORS = new Set([0x07, 0x1b, 0x18, 0x1a]);
+/** Longest OSC payload passed to writeCapturingOsc's callback, as in xterm.js. */
+const OSC_PAYLOAD_LIMIT = 10_000_000;
+
 /** Pack a mode number the way ghostty_mode_new() does. */
 function packMode(mode: number, ansi: boolean): number {
   return (mode & 0x7fff) | (ansi ? 0x8000 : 0);
@@ -542,6 +549,7 @@ interface Layout {
   coordinate: { size: number; x: number; y: number };
   geometry: { columns: number; cellWidth: number; paddingLeft: number; screenHeight: number };
   surface: { x: number; y: number };
+  writeStop: { size: number; consumed: number; reached: number };
   string: { size: number; ptr: number; len: number };
   rgb: { size: number; r: number; g: number; b: number };
   writer: { write: number; userdata: number };
@@ -700,6 +708,11 @@ function buildLayout(abi: AbiLayout): Layout {
     surface: {
       x: abi.offset('GhosttySurfacePosition', 'x'),
       y: abi.offset('GhosttySurfacePosition', 'y'),
+    },
+    writeStop: {
+      size: abi.size('GhosttyTerminalWriteStop'),
+      consumed: abi.offset('GhosttyTerminalWriteStop', 'consumed'),
+      reached: abi.offset('GhosttyTerminalWriteStop', 'reached'),
     },
     string: {
       size: abi.size('GhosttyString'),
@@ -2061,6 +2074,90 @@ export class GhosttyTerminal {
     this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
 
+  /** The OSC string writeCapturingOsc() is collecting, which may span writes. */
+  private oscCapture: { bytes: number[]; overflow: boolean } | null = null;
+
+  /** Whether writeCapturingOsc() is inside an OSC string, so the next write must use it too. */
+  get capturingOsc(): boolean {
+    return this.oscCapture !== null;
+  }
+
+  /**
+   * Write like write(), passing each complete OSC string's payload (the bytes
+   * between the introducer and the terminator) to `onOsc` before the
+   * terminal acts on it. When `onOsc` returns true the string is cancelled
+   * (CAN), so the terminal ignores it; otherwise it is processed as usual.
+   *
+   * libghostty's parser finds where each OSC starts (vt_write_until with
+   * OSC_START), so introducers inside other strings and split across writes
+   * are handled as it handles them. Inside the OSC the terminators are the
+   * ones libghostty uses: BEL, ESC (of ESC \), and CAN or SUB, which cancel
+   * it. Other C0 bytes are ignored there, as the parser ignores them.
+   */
+  writeCapturingOsc(data: string | Uint8Array, onOsc: (payload: Uint8Array) => boolean): void {
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const len = bytes.length;
+    if (len === 0) return;
+    const ex = this.exports;
+    const W = this.L.writeStop;
+    // The data, then one byte for the CAN that cancels a handled string.
+    const ptr = ex.ghostty_wasm_alloc(len + 1 + W.size);
+    if (!ptr) throw new Error('Failed to allocate write buffer (out of memory)');
+    const can = ptr + len;
+    const stop = can + 1;
+    this.mem.bytes().set(bytes, ptr);
+    this.mem.bytes()[can] = 0x18;
+    try {
+      let pos = 0;
+      while (pos < len) {
+        const capture = this.oscCapture;
+        if (capture) {
+          let end = pos;
+          while (end < len && !OSC_TERMINATORS.has(bytes[end])) end++;
+          for (let i = pos; i < end; i++) {
+            if (bytes[i] < 0x20) continue;
+            if (capture.bytes.length >= OSC_PAYLOAD_LIMIT) capture.overflow = true;
+            else capture.bytes.push(bytes[i]);
+          }
+          if (end > pos) ex.ghostty_terminal_vt_write(this.handle, ptr + pos, end - pos);
+          pos = end;
+          if (end === len) break;
+          this.oscCapture = null;
+          const terminator = bytes[end];
+          // A cancelled string: libghostty drops it when it reads the CAN or SUB.
+          if (terminator === 0x18 || terminator === 0x1a) continue;
+          if (!capture.overflow && onOsc(Uint8Array.from(capture.bytes))) {
+            ex.ghostty_terminal_vt_write(this.handle, can, 1);
+            // A BEL ends the string alone. The ESC of ESC \ stays: at ground,
+            // ESC \ does nothing, and any other byte after ESC starts a sequence.
+            if (terminator === 0x07) pos++;
+          }
+          continue;
+        }
+        const v = this.mem.view();
+        for (let i = 0; i < W.size; i += 4) v.setUint32(stop + i, 0, true);
+        v.setUint32(stop, W.size, true); // sized struct: the size field comes first
+        const result = ex.ghostty_terminal_vt_write_until(
+          this.handle,
+          ptr + pos,
+          len - pos,
+          WRITE_BOUNDARY_OSC_START,
+          stop
+        );
+        const after = this.mem.view();
+        const consumed = after.getUint32(stop + W.consumed, true);
+        pos += consumed;
+        if (result !== GHOSTTY_SUCCESS || consumed === 0) break;
+        if (after.getUint32(stop + W.reached, true) & WRITE_BOUNDARY_OSC_START) {
+          this.oscCapture = { bytes: [], overflow: false };
+        }
+      }
+    } finally {
+      ex.ghostty_wasm_free(ptr, len + 1 + W.size);
+      this.pendingUpdate = true;
+    }
+  }
+
   /**
    * The cursor shape and blink the user configured. Programs can change them
    * (DECSCUSR, mode 12); `CSI 0 q` returns to these. getCursor() reports
@@ -2289,6 +2386,7 @@ export class GhosttyTerminal {
   reset(): void {
     this.exports.ghostty_terminal_reset(this.handle);
     this.primary = null;
+    this.oscCapture = null;
     this.holdStarted = null;
     this.responses = [];
     this.atBottom = true;

@@ -131,6 +131,48 @@ export interface IDecoration extends IDisposable {
   readonly onDispose: IEvent<void>;
 }
 
+/** Identifies a CSI, DCS or ESC sequence (xterm.js IFunctionIdentifier). */
+export interface IFunctionIdentifier {
+  /** A private-parameter prefix byte, e.g. '?'. */
+  prefix?: string;
+  /** Intermediate bytes, e.g. '$'. */
+  intermediates?: string;
+  /** The final byte, e.g. 'm'. */
+  final: string;
+}
+
+/**
+ * Hooks into the escape sequence parser (xterm.js IParser). Only OSC handlers
+ * are called; libghostty offers no hook for CSI, DCS or ESC sequences.
+ */
+export interface IParser {
+  /** Never called (logs a warning once): libghostty has no hook for CSI sequences. */
+  registerCsiHandler(
+    id: IFunctionIdentifier,
+    callback: (params: (number | number[])[]) => boolean | Promise<boolean>
+  ): IDisposable;
+  /** Never called (logs a warning once): libghostty has no hook for DCS sequences. */
+  registerDcsHandler(
+    id: IFunctionIdentifier,
+    callback: (data: string, param: (number | number[])[]) => boolean | Promise<boolean>
+  ): IDisposable;
+  /** Never called (logs a warning once): libghostty has no hook for ESC sequences. */
+  registerEscHandler(
+    id: IFunctionIdentifier,
+    handler: () => boolean | Promise<boolean>
+  ): IDisposable;
+  /**
+   * Handle OSC `ident` (any code, including ones the terminal handles). The
+   * callback gets the data after `ident;`; returning true consumes the
+   * sequence, false passes it to older handlers and then the terminal.
+   * Called synchronously; a returned Promise counts as false.
+   */
+  registerOscHandler(
+    ident: number,
+    callback: (data: string) => boolean | Promise<boolean>
+  ): IDisposable;
+}
+
 export interface ITerminalAddon {
   activate(terminal: ITerminalCore): void;
   dispose(): void;

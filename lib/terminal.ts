@@ -50,6 +50,7 @@ import type {
 } from './interfaces';
 import { LinkDetector } from './link-detector';
 import { MarkerRegistry } from './markers';
+import { Parser } from './parser';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import {
@@ -75,6 +76,9 @@ export class Terminal implements ITerminalCore {
 
   // Buffer API (xterm.js compatibility)
   public readonly buffer: BufferNamespace;
+
+  /** Parser hooks (xterm.js compatibility): OSC handlers; see Parser. */
+  public readonly parser = new Parser();
 
   // Unicode API (xterm.js compatibility)
   public readonly unicode: IUnicodeVersionProvider = {
@@ -709,7 +713,12 @@ export class Terminal implements ITerminalCore {
     if (scrolledOffset > 0) this.wasmTerm!.setViewportOffset(scrolledOffset);
 
     // Write directly to WASM terminal (handles VT parsing internally)
-    this.wasmTerm!.write(data);
+    const wasmTerm = this.wasmTerm!;
+    if (this.parser.hasOscHandlers || wasmTerm.capturingOsc) {
+      wasmTerm.writeCapturingOsc(data, (payload) => this.parser.handleOsc(payload));
+    } else {
+      wasmTerm.write(data);
+    }
     this.markerRegistry.update();
     if (scrolledOffset > 0) this.followScrolledContent(scrolledOffset);
     if (this.resetPending) {
