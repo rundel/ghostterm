@@ -132,12 +132,29 @@ describe('Terminal Scrolling', () => {
       expect(terminal.wasmTerm!.getViewportOffset()).toBe(0);
     });
 
-    test('output while scrolled returns to the bottom', () => {
+    test('output while scrolled keeps the same content on screen', () => {
       for (let i = 0; i < 50; i++) terminal.write(`Line ${i}\r\n`);
       terminal.scrollLines(-5);
-      drawnRows();
-      terminal.write('fresh');
+      const before = drawnRows();
+      expect(before[0]).toBe('Line 22');
+
+      for (let i = 50; i < 60; i++) terminal.write(`Line ${i}\r\n`);
+      expect(terminal.viewportY).toBe(15);
+      expect(drawnRows()).toEqual(before);
+    });
+
+    test('typing while scrolled returns to the bottom', () => {
+      for (let i = 0; i < 50; i++) terminal.write(`Line ${i}\r\n`);
+      terminal.scrollLines(-5);
+      const input = (terminal as any).inputHandler;
+      input.onDataCallback('x');
       expect(terminal.viewportY).toBe(0);
+    });
+
+    test('output while at the bottom keeps following it', () => {
+      for (let i = 0; i < 50; i++) terminal.write(`Line ${i}\r\n`);
+      expect(terminal.viewportY).toBe(0);
+      terminal.write('fresh');
       expect(drawnRows()[23]).toBe('fresh');
     });
   });
@@ -730,5 +747,44 @@ describe('Custom Wheel Event Handler', () => {
 
     // Should have scrolled up
     expect((term as any).viewportY).toBeGreaterThan(0);
+  });
+});
+
+describe('Scrolled view under heavy output', () => {
+  test('stays within scrollback when history is pruned underneath it', async () => {
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 500 });
+    term.open(c);
+    try {
+      for (let i = 0; i < 600; i++) term.write(`Line ${i}\r\n`);
+      term.scrollLines(-100);
+      for (let i = 600; i < 3000; i++) term.write(`Line ${i}\r\n`);
+      const scrollback = term.wasmTerm!.getScrollbackLength();
+      expect(term.viewportY).toBeGreaterThan(0);
+      expect(term.viewportY).toBeLessThanOrEqual(scrollback);
+      expect(term.wasmTerm!.getViewportOffset()).toBe(Math.floor(term.viewportY));
+    } finally {
+      term.dispose();
+      c.remove();
+    }
+  });
+
+  test('entering the alternate screen while scrolled shows it from the top', async () => {
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
+    term.open(c);
+    try {
+      for (let i = 0; i < 100; i++) term.write(`Line ${i}\r\n`);
+      term.scrollLines(-10);
+      term.write('\x1b[?1049h\x1b[Hvim');
+      expect(term.viewportY).toBe(0);
+      term.write('\x1b[?1049l');
+      expect(term.wasmTerm!.getScrollbackLength()).toBeGreaterThan(0);
+    } finally {
+      term.dispose();
+      c.remove();
+    }
   });
 });
