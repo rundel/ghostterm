@@ -22,6 +22,13 @@ export interface ITerminalOptions {
   // Scrolling options
   smoothScrollDuration?: number; // Duration in ms for smooth scroll animation (default: 100, 0 = instant)
 
+  /**
+   * Let programs write to the clipboard with OSC 52 (default: true, as in
+   * Ghostty). Reading the clipboard is always denied. onClipboardWrite fires
+   * either way.
+   */
+  allowClipboardWrite?: boolean;
+
   // Internal: Ghostty WASM instance (optional, for test isolation)
   // If not provided, uses the module-level instance from init()
   ghostty?: Ghostty;

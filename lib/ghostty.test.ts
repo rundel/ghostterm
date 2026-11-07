@@ -468,3 +468,140 @@ describe('library selection', () => {
     }
   });
 });
+
+describe('terminal effects (library callbacks)', () => {
+  function withEffects() {
+    const term = ghostty.createTerminal(40, 5);
+    const log: unknown[] = [];
+    term.setEffects({
+      bell: () => log.push('bell'),
+      titleChanged: (t) => log.push(['title', t]),
+      pwdChanged: (p) => log.push(['pwd', p]),
+      clipboardWrite: (req) => {
+        log.push([
+          'clip',
+          req.location,
+          req.contents.map((c) => [c.mime, new TextDecoder().decode(c.data)]),
+        ]);
+        return true;
+      },
+      notification: (n) => log.push(['notify', n.title, n.body]),
+      progress: (p) => log.push(['progress', p.state, p.progress]),
+      semanticPrompt: (e) => log.push(['prompt', e.kind, e.exitCode]),
+      colorScheme: () => 'dark',
+      cellSize: () => ({ width: 9, height: 18 }),
+    });
+    return { term, log };
+  }
+
+  test('bell, title and working directory', () => {
+    const { term, log } = withEffects();
+    try {
+      term.write('a\x07b');
+      term.write('\x1b]2;my title\x07');
+      term.write('\x1b]0;split ');
+      term.write('across writes\x1b\\');
+      term.write('\x1b]7;file://host/tmp/work\x07');
+      expect(log).toEqual([
+        'bell',
+        ['title', 'my title'],
+        ['title', 'split across writes'],
+        ['pwd', 'file://host/tmp/work'],
+      ]);
+      expect(term.getTitle()).toBe('split across writes');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('a BEL ending an OSC sequence is not a bell', () => {
+    const { term, log } = withEffects();
+    try {
+      term.write('\x1b]2;title\x07');
+      expect(log.includes('bell')).toBe(false);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('OSC 52 clipboard writes', () => {
+    const { term, log } = withEffects();
+    try {
+      term.write(`\x1b]52;c;${btoa('copied text')}\x07`);
+      expect(log).toEqual([['clip', 'standard', [['text/plain', 'copied text']]]]);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('clipboard reads are denied (no response)', () => {
+    const { term } = withEffects();
+    try {
+      term.write('\x1b]52;c;?\x07');
+      const reply = term.readResponse();
+      expect(reply === null || !reply.includes(btoa('x'))).toBe(true);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('notifications and progress reports', () => {
+    const { term, log } = withEffects();
+    try {
+      term.write('\x1b]777;notify;Build;finished\x07');
+      term.write('\x1b]9;4;1;42\x07');
+      term.write('\x1b]9;4;0\x07');
+      expect(log).toEqual([
+        ['notify', 'Build', 'finished'],
+        ['progress', 'set', 42],
+        ['progress', 'remove', null],
+      ]);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('shell integration prompts (OSC 133)', () => {
+    const { term, log } = withEffects();
+    try {
+      term.write('\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07out\r\n\x1b]133;D;3\x07');
+      expect(log).toEqual([
+        ['prompt', 'prompt-start', null],
+        ['prompt', 'input-start', null],
+        ['prompt', 'output-start', null],
+        ['prompt', 'command-end', 3],
+      ]);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('color scheme and size queries are answered', () => {
+    const { term } = withEffects();
+    try {
+      term.write('\x1b[?996n');
+      expect(term.readResponse()).toBe('\x1b[?997;1n');
+      term.write('\x1b[16t');
+      expect(term.readResponse()).toBe('\x1b[6;18;9t');
+      term.write('\x1b[14t');
+      expect(term.readResponse()).toBe('\x1b[4;90;360t');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('synchronized output keeps the last finished frame on screen', () => {
+    const term = ghostty.createTerminal(20, 3);
+    const row = () => text(term.getLine(0)!.map((c) => c.codepoint)).trimEnd();
+    try {
+      term.write('old');
+      expect(row()).toBe('old');
+      term.write('\x1b[?2026h\x1b[2J\x1b[Hne');
+      expect(row()).toBe('old'); // held: still the frame from before
+      term.write('w\x1b[?2026l');
+      expect(row()).toBe('new');
+    } finally {
+      term.free();
+    }
+  });
+});

@@ -94,6 +94,8 @@ const PointTag = {
 const ROW_DATA_WRAP_CONTINUATION = 2;
 
 const SELECTION_DATA = 31; // GHOSTTY_TERMINAL_DATA_SELECTION
+const TERMINAL_DATA_TITLE = 12;
+const TERMINAL_DATA_PWD = 13;
 const SELECTION_OPT = 22; // GHOSTTY_TERMINAL_OPT_SELECTION
 const SELECTION_ORDER_FORWARD = 0;
 const POINT_TAG_SCREEN = 2;
@@ -122,6 +124,74 @@ const GestureEvent = {
   DATA_AUTOSCROLL: 3,
 } as const;
 
+/** Which clipboard a program wrote to (OSC 52). */
+export type ClipboardLocation = 'standard' | 'selection' | 'primary';
+
+/** A clipboard write requested by the running program (OSC 52). */
+export interface ClipboardWriteRequest {
+  location: ClipboardLocation;
+  /** Representations of the same value; empty means "clear the clipboard". */
+  contents: { mime: string; data: Uint8Array }[];
+}
+
+/** A desktop notification requested by the program (OSC 9 / OSC 777). */
+export interface TerminalNotification {
+  title: string;
+  body: string;
+}
+
+/** A progress report from the program (OSC 9;4). */
+export interface ProgressReport {
+  state: 'remove' | 'set' | 'error' | 'indeterminate' | 'pause';
+  /** 0-100, or null when the program gave no percentage. */
+  progress: number | null;
+}
+
+/** A program status report (OSC 7501): what a program such as an agent is doing. */
+export interface ProgramStatus {
+  state: 'idle' | 'working' | 'done' | 'blocked' | 'error' | 'clear';
+  /** What a blocked program needs from the user. */
+  kind: 'none' | 'permission' | 'question' | 'auth';
+  progress: number | null;
+  id: string;
+  app: string;
+  title: string;
+  message: string;
+}
+
+/** A shell integration event (OSC 133). */
+export interface SemanticPromptEvent {
+  kind: 'prompt-start' | 'input-start' | 'output-start' | 'command-end';
+  promptKind: 'primary' | 'right' | 'continuation' | 'secondary';
+  /** Set on command-end when the shell reported it. */
+  exitCode: number | null;
+  /** The command about to run (output-start), when the shell reports it. */
+  command: string;
+  error: string;
+}
+
+/**
+ * Handlers for what the running program asks of the terminal. Each is
+ * optional; without one the request is ignored (or denied).
+ */
+export interface TerminalEffects {
+  bell?(): void;
+  titleChanged?(title: string): void;
+  pwdChanged?(pwd: string): void;
+  /** Return true if the write was carried out. */
+  clipboardWrite?(request: ClipboardWriteRequest): boolean;
+  notification?(notification: TerminalNotification): void;
+  progress?(report: ProgressReport): void;
+  programStatus?(status: ProgramStatus): void;
+  semanticPrompt?(event: SemanticPromptEvent): void;
+  /** Answer "is the terminal light or dark?" (CSI ? 996 n). */
+  colorScheme?(): 'light' | 'dark' | null;
+  /** Cell size in pixels, for size queries (CSI 14/16/18/19 t). */
+  cellSize?(): { width: number; height: number } | null;
+  /** The program performed a full reset (RIS). */
+  reset?(): void;
+}
+
 /** Autoscroll a selection drag asks for (GhosttySelectionGestureAutoscroll). */
 export enum SelectionAutoscroll {
   NONE = 0,
@@ -144,6 +214,24 @@ export interface SelectionGeometry {
   cellWidth: number;
   screenHeight: number;
 }
+
+const EffectOpt = {
+  BELL: 3,
+  TITLE_CHANGED: 6,
+  SIZE: 7,
+  COLOR_SCHEME: 8,
+  PWD_CHANGED: 26,
+  CLIPBOARD_WRITE: 27,
+  DESKTOP_NOTIFICATION: 30,
+  PROGRESS_REPORT: 31,
+  RENDER_HOLD: 42,
+  SEMANTIC_PROMPT: 43,
+  RESET: 44,
+  PROGRAM_STATUS: 47,
+} as const;
+
+/** Longest a render hold may freeze the screen before it is ended (ms). */
+const RENDER_HOLD_TIMEOUT_MS = 1000;
 
 const ScrollViewport = {
   BOTTOM: 1,
@@ -455,6 +543,50 @@ export class Ghostty {
     return index;
   }
 
+  private effectFns = new Map<number, number>();
+
+  /**
+   * Install every effect callback on a terminal. Each callback type gets one
+   * shared function-table entry; libghostty passes the terminal handle first,
+   * which routes the call to the right GhosttyTerminal.
+   */
+  private installEffects(term: GhosttyTerminal): void {
+    const route =
+      (impl: (t: GhosttyTerminal, ...args: number[]) => unknown) =>
+      (handle: number, _userdata: number, ...args: number[]) => {
+        const t = this.terminals.get(handle);
+        return t ? impl(t, ...args) : 0;
+      };
+    const table: [number, number, boolean, (t: GhosttyTerminal, ...a: number[]) => unknown][] = [
+      [EffectOpt.BELL, 2, false, (t) => t.onEffect('bell')],
+      [EffectOpt.TITLE_CHANGED, 2, false, (t) => t.onEffect('title')],
+      [EffectOpt.PWD_CHANGED, 2, false, (t) => t.onEffect('pwd')],
+      [EffectOpt.CLIPBOARD_WRITE, 3, false, (t, ptr) => t.onClipboardWrite(ptr)],
+      [EffectOpt.DESKTOP_NOTIFICATION, 3, false, (t, ptr) => t.onNotification(ptr)],
+      [EffectOpt.PROGRESS_REPORT, 3, false, (t, ptr) => t.onProgress(ptr)],
+      [EffectOpt.PROGRAM_STATUS, 3, false, (t, ptr) => t.onProgramStatus(ptr)],
+      [EffectOpt.SEMANTIC_PROMPT, 3, false, (t, ptr) => t.onSemanticPrompt(ptr)],
+      [EffectOpt.COLOR_SCHEME, 3, true, (t, ptr) => t.onColorScheme(ptr)],
+      [EffectOpt.SIZE, 3, true, (t, ptr) => t.onSizeQuery(ptr)],
+      [EffectOpt.RENDER_HOLD, 3, false, (t, held) => t.onRenderHold(held !== 0)],
+      [EffectOpt.RESET, 2, false, (t) => t.onEffect('reset')],
+    ];
+    for (const [option, params, returnsI32, impl] of table) {
+      let index = this.effectFns.get(option);
+      if (index === undefined) {
+        index = this.tableFunction(wasmCallback(route(impl), params, returnsI32));
+        this.effectFns.set(option, index);
+      }
+      this.exports.ghostty_terminal_set(term.handle, option, index);
+    }
+  }
+
+  /** @internal Call a function pointer from the module's function table. */
+  callTable(index: number, ...args: number[]): number {
+    const fn = this.exports.__indirect_function_table.get(index) as (...a: number[]) => number;
+    return fn(...args);
+  }
+
   /** Put a JS function in the module's function table; returns its index. */
   private tableFunction(fn: unknown): number {
     const table = this.exports.__indirect_function_table;
@@ -530,6 +662,7 @@ export class Ghostty {
     term.ghostty = this;
     this.terminals.set(term.handle, term);
     term.setWritePty(this.writePtyCallback(), () => this.terminals.delete(term.handle));
+    this.installEffects(term);
     return term;
   }
 
@@ -1015,6 +1148,175 @@ export class GhosttyTerminal {
 
   /** @internal The Ghostty instance that created this terminal. */
   ghostty?: Ghostty;
+
+  /** Handlers for the program's requests (bell, title, clipboard, ...). */
+  private effects: TerminalEffects = {};
+  /** When the current render hold began (performance.now()), or null. */
+  private holdStarted: number | null = null;
+
+  setEffects(effects: TerminalEffects): void {
+    this.effects = effects;
+  }
+
+  /** Read a GhosttyString (ptr, len) at `at` as UTF-8. */
+  private readString(at: number): string {
+    const view = this.mem.view();
+    const ptr = view.getUint32(at, true);
+    const len = view.getUint32(at + 4, true);
+    if (!ptr || !len) return '';
+    return new TextDecoder().decode(this.mem.bytes().slice(ptr, ptr + len));
+  }
+
+  /** Read a GhosttyString-valued terminal data field (title, pwd). */
+  private readDataString(data: number): string {
+    const out = this.selScratch + 240;
+    if (this.exports.ghostty_terminal_get(this.handle, data, out) !== GHOSTTY_SUCCESS) return '';
+    return this.readString(out);
+  }
+
+  /** The window title the program set (OSC 0/2). */
+  getTitle(): string {
+    return this.readDataString(TERMINAL_DATA_TITLE);
+  }
+
+  /** The working directory the program reported (OSC 7). */
+  getPwd(): string {
+    return this.readDataString(TERMINAL_DATA_PWD);
+  }
+
+  /** @internal */
+  onEffect(kind: 'bell' | 'title' | 'pwd' | 'reset'): void {
+    const e = this.effects;
+    if (kind === 'bell') e.bell?.();
+    else if (kind === 'title') e.titleChanged?.(this.getTitle());
+    else if (kind === 'pwd') e.pwdChanged?.(this.getPwd());
+    else e.reset?.();
+  }
+
+  /** @internal Answer a GhosttyClipboardWrite; not replying denies it. */
+  onClipboardWrite(ptr: number): void {
+    const handler = this.effects.clipboardWrite;
+    if (!handler || !this.ghostty) return;
+    const view = this.mem.view();
+    const location = (['standard', 'selection', 'primary'] as const)[view.getUint32(ptr, true)];
+    const contentsPtr = view.getUint32(ptr + 4, true);
+    const count = view.getUint32(ptr + 8, true);
+    const contents: ClipboardWriteRequest['contents'] = [];
+    for (let i = 0; i < count; i++) {
+      const c = contentsPtr + i * 16;
+      const v = this.mem.view();
+      const dataPtr = v.getUint32(c + 8, true);
+      const dataLen = v.getUint32(c + 12, true);
+      contents.push({
+        mime: this.readString(c),
+        data: this.mem.bytes().slice(dataPtr, dataPtr + dataLen),
+      });
+    }
+    const ok = handler({ location: location ?? 'standard', contents });
+
+    const reply = this.selScratch + 160;
+    const v = this.mem.view();
+    v.setUint32(reply, 12, true); // size
+    v.setUint32(reply + 4, ok ? 0 : 1, true); // SUCCESS or DENIED
+    v.setUint32(reply + 8, 0, true); // remember: false
+    const replyFn = this.mem.view().getUint32(ptr + 28, true);
+    this.ghostty.callTable(replyFn, ptr, reply);
+  }
+
+  /** @internal */
+  onNotification(ptr: number): void {
+    this.effects.notification?.({ title: this.readString(ptr), body: this.readString(ptr + 8) });
+  }
+
+  /** @internal */
+  onProgress(ptr: number): void {
+    const view = this.mem.view();
+    const states = ['remove', 'set', 'error', 'indeterminate', 'pause'] as const;
+    const progress = view.getInt8(ptr + 4);
+    this.effects.progress?.({
+      state: states[view.getUint32(ptr, true)] ?? 'remove',
+      progress: progress < 0 ? null : progress,
+    });
+  }
+
+  /** @internal */
+  onProgramStatus(ptr: number): void {
+    const view = this.mem.view();
+    const states = ['idle', 'working', 'done', 'blocked', 'error', 'clear'] as const;
+    const kinds = ['none', 'permission', 'question', 'auth'] as const;
+    const progress = view.getInt8(ptr + 8);
+    this.effects.programStatus?.({
+      state: states[view.getUint32(ptr, true)] ?? 'idle',
+      kind: kinds[view.getUint32(ptr + 4, true)] ?? 'none',
+      progress: progress < 0 ? null : progress,
+      id: this.readString(ptr + 12),
+      app: this.readString(ptr + 20),
+      title: this.readString(ptr + 28),
+      message: this.readString(ptr + 36),
+    });
+  }
+
+  /** @internal */
+  onSemanticPrompt(ptr: number): void {
+    const view = this.mem.view();
+    const kinds = [null, 'prompt-start', 'input-start', 'output-start', 'command-end'] as const;
+    const promptKinds = ['primary', 'right', 'continuation', 'secondary'] as const;
+    const kind = kinds[view.getUint32(ptr, true)];
+    if (!kind) return;
+    this.effects.semanticPrompt?.({
+      kind,
+      promptKind: promptKinds[view.getUint32(ptr + 4, true)] ?? 'primary',
+      exitCode: view.getUint8(ptr + 8) ? view.getInt32(ptr + 12, true) : null,
+      command: this.readString(ptr + 16),
+      error: this.readString(ptr + 24),
+    });
+  }
+
+  /** @internal Fill a GhosttyColorScheme; returning 0 leaves the query unanswered. */
+  onColorScheme(ptr: number): number {
+    const scheme = this.effects.colorScheme?.();
+    if (!scheme) return 0;
+    this.mem.view().setUint32(ptr, scheme === 'dark' ? 1 : 0, true);
+    return 1;
+  }
+
+  /** @internal Fill a GhosttySizeReportSize for XTWINOPS size queries. */
+  onSizeQuery(ptr: number): number {
+    const cell = this.effects.cellSize?.();
+    if (!cell) return 0;
+    const view = this.mem.view();
+    view.setUint16(ptr, this._rows, true);
+    view.setUint16(ptr + 2, this._cols, true);
+    view.setUint32(ptr + 4, Math.max(1, Math.round(cell.width)), true);
+    view.setUint32(ptr + 8, Math.max(1, Math.round(cell.height)), true);
+    return 1;
+  }
+
+  /**
+   * @internal Synchronized output (mode 2026): when a hold starts, capture the
+   * frame the program wants left on screen; keep showing it until the hold
+   * ends (or times out).
+   */
+  onRenderHold(held: boolean): void {
+    if (held) {
+      this.holdStarted = null;
+      this.update();
+      this.holdStarted = performance.now();
+    } else {
+      this.holdStarted = null;
+      this.pendingUpdate = true;
+    }
+  }
+
+  /** Whether a render hold is freezing the screen. */
+  isRenderHeld(): boolean {
+    if (this.holdStarted === null) return false;
+    if (performance.now() - this.holdStarted > RENDER_HOLD_TIMEOUT_MS) {
+      this.holdStarted = null;
+      return false;
+    }
+    return true;
+  }
   /** While set, write_pty output is collected here instead of as responses. */
   private capture: Uint8Array[] | null = null;
 
@@ -1157,11 +1459,29 @@ export class GhosttyTerminal {
     this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
 
+  /** Cell size in pixels, reported to programs (in-band resize, mode 2048). */
+  private cellPx = { width: 0, height: 0 };
+
+  /** Tell the terminal its cell size in pixels. */
+  setCellPixelSize(width: number, height: number): void {
+    const w = Math.round(width);
+    const h = Math.round(height);
+    if (w === this.cellPx.width && h === this.cellPx.height) return;
+    this.cellPx = { width: w, height: h };
+    this.exports.ghostty_terminal_resize(this.handle, this._cols, this._rows, w, h);
+  }
+
   resize(cols: number, rows: number): void {
     if (cols === this._cols && rows === this._rows) return;
     this._cols = cols;
     this._rows = rows;
-    this.exports.ghostty_terminal_resize(this.handle, cols, rows, 0, 0);
+    this.exports.ghostty_terminal_resize(
+      this.handle,
+      cols,
+      rows,
+      this.cellPx.width,
+      this.cellPx.height
+    );
     this.pendingUpdate = true;
     this.atBottom = this.getViewportOffset() === 0;
     this.rowDirty = new Uint8Array(rows).fill(1);
@@ -1209,6 +1529,9 @@ export class GhosttyTerminal {
    */
   update(): DirtyState {
     const ex = this.exports;
+    // During a render hold the render state keeps the frame captured when the
+    // hold began.
+    if (this.isRenderHeld()) return this.dirty;
     ex.ghostty_render_state_update(this.renderState, this.handle);
     this.colorsFresh = false;
     this.pendingUpdate = false;

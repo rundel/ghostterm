@@ -79,6 +79,15 @@ export {
   DirtyState,
   KeyEncoderOption,
 } from './ghostty';
+export type {
+  ClipboardLocation,
+  ClipboardWriteRequest,
+  ProgramStatus,
+  ProgressReport,
+  SemanticPromptEvent,
+  TerminalEffects,
+  TerminalNotification,
+} from './ghostty';
 export { Key, KeyAction, Mods } from './types';
 export type { KeyEvent, GhosttyCell, RGB, Cursor, TerminalHandle } from './types';
 

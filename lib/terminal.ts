@@ -17,7 +17,17 @@
 
 import { BufferNamespace } from './buffer';
 import { EventEmitter } from './event-emitter';
-import type { Ghostty, GhosttyCell, GhosttyTerminal, GhosttyTerminalConfig } from './ghostty';
+import type {
+  ClipboardLocation,
+  Ghostty,
+  GhosttyCell,
+  GhosttyTerminal,
+  GhosttyTerminalConfig,
+  ProgramStatus,
+  ProgressReport,
+  SemanticPromptEvent,
+  TerminalNotification,
+} from './ghostty';
 import { getGhostty } from './index';
 import { InputHandler, type MouseTrackingConfig } from './input-handler';
 import type {
@@ -87,6 +97,12 @@ export class Terminal implements ITerminalCore {
   private scrollEmitter = new EventEmitter<number>();
   private renderEmitter = new EventEmitter<{ start: number; end: number }>();
   private cursorMoveEmitter = new EventEmitter<void>();
+  private workingDirectoryEmitter = new EventEmitter<string>();
+  private clipboardWriteEmitter = new EventEmitter<{ text: string; location: ClipboardLocation }>();
+  private notificationEmitter = new EventEmitter<TerminalNotification>();
+  private progressEmitter = new EventEmitter<ProgressReport>();
+  private programStatusEmitter = new EventEmitter<ProgramStatus>();
+  private semanticPromptEmitter = new EventEmitter<SemanticPromptEvent>();
   // Public event accessors (xterm.js compatibility)
   public readonly onData: IEvent<string> = this.dataEmitter.event;
   public readonly onResize: IEvent<{ cols: number; rows: number }> = this.resizeEmitter.event;
@@ -97,6 +113,21 @@ export class Terminal implements ITerminalCore {
   public readonly onScroll: IEvent<number> = this.scrollEmitter.event;
   public readonly onRender: IEvent<{ start: number; end: number }> = this.renderEmitter.event;
   public readonly onCursorMove: IEvent<void> = this.cursorMoveEmitter.event;
+
+  // Requests from the running program, reported by libghostty
+  /** The program reported its working directory (OSC 7), as a file:// URL. */
+  public readonly onWorkingDirectoryChange: IEvent<string> = this.workingDirectoryEmitter.event;
+  /** The program wrote text to the clipboard (OSC 52). */
+  public readonly onClipboardWrite: IEvent<{ text: string; location: ClipboardLocation }> =
+    this.clipboardWriteEmitter.event;
+  /** The program asked for a desktop notification (OSC 9 / OSC 777). */
+  public readonly onNotification: IEvent<TerminalNotification> = this.notificationEmitter.event;
+  /** The program reported progress (OSC 9;4). */
+  public readonly onProgress: IEvent<ProgressReport> = this.progressEmitter.event;
+  /** The program reported its status (OSC 7501), e.g. an agent waiting for input. */
+  public readonly onProgramStatus: IEvent<ProgramStatus> = this.programStatusEmitter.event;
+  /** Shell integration: prompt, input, output and command-end markers (OSC 133). */
+  public readonly onSemanticPrompt: IEvent<SemanticPromptEvent> = this.semanticPromptEmitter.event;
 
   // Lifecycle state
   private isOpen = false;
@@ -242,15 +273,10 @@ export class Terminal implements ITerminalCore {
       this.selectionManager.clearSelection();
     }
 
-    // Resize canvas to match new font metrics
+    // Resize canvas to the new font metrics. renderer.resize() sizes the
+    // canvas for the device pixel ratio and the scrollbar gutter.
     this.renderer.resize(this.cols, this.rows);
-
-    // Update canvas element dimensions to match renderer
-    const metrics = this.renderer.getMetrics();
-    this.canvas.width = metrics.width * this.cols;
-    this.canvas.height = metrics.height * this.rows;
-    this.canvas.style.width = `${metrics.width * this.cols}px`;
-    this.canvas.style.height = `${metrics.height * this.rows}px`;
+    this.syncCellPixelSize();
 
     // Force full re-render with new font
     this.renderer.render(this.wasmTerm, true, this.viewportY, this);
@@ -374,6 +400,7 @@ export class Terminal implements ITerminalCore {
       // Create WASM terminal with current dimensions and config
       const config = this.buildWasmConfig();
       this.wasmTerm = this.ghostty!.createTerminal(this.cols, this.rows, config);
+      this.connectEffects(this.wasmTerm);
 
       // Create canvas element
       this.canvas = document.createElement('canvas');
@@ -491,6 +518,8 @@ export class Terminal implements ITerminalCore {
         () => this.wasmTerm
       );
 
+      this.syncCellPixelSize();
+
       // Create selection manager (pass textarea for context menu positioning)
       this.selectionManager = new SelectionManager(
         this,
@@ -582,22 +611,8 @@ export class Terminal implements ITerminalCore {
     // These need to be sent back to the PTY via onData
     this.processTerminalResponses();
 
-    // Check for bell character (BEL, \x07)
-    // WASM doesn't expose bell events, so we detect it in the data stream
-    if (typeof data === 'string' && data.includes('\x07')) {
-      this.bellEmitter.fire();
-    } else if (data instanceof Uint8Array && data.includes(0x07)) {
-      this.bellEmitter.fire();
-    }
-
     // Invalidate link cache (content changed)
     this.linkDetector?.invalidateCache();
-
-    // Check for title changes (OSC 0, 1, 2 sequences)
-    // This is a simplified implementation - Ghostty WASM may provide this
-    if (typeof data === 'string' && data.includes('\x1b]')) {
-      this.checkForTitleChange(data);
-    }
 
     // Call callback if provided
     if (callback) {
@@ -743,6 +758,8 @@ export class Terminal implements ITerminalCore {
     }
     const config = this.buildWasmConfig();
     this.wasmTerm = this.ghostty!.createTerminal(this.cols, this.rows, config);
+    this.connectEffects(this.wasmTerm);
+    this.syncCellPixelSize();
 
     // Clear renderer
     this.renderer!.clear();
@@ -1159,6 +1176,12 @@ export class Terminal implements ITerminalCore {
     this.scrollEmitter.dispose();
     this.renderEmitter.dispose();
     this.cursorMoveEmitter.dispose();
+    this.workingDirectoryEmitter.dispose();
+    this.clipboardWriteEmitter.dispose();
+    this.notificationEmitter.dispose();
+    this.progressEmitter.dispose();
+    this.programStatusEmitter.dispose();
+    this.semanticPromptEmitter.dispose();
   }
 
   // ==========================================================================
@@ -1877,28 +1900,55 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Check for title changes in written data (OSC sequences)
-   * Simplified implementation - looks for OSC 0, 1, 2
+   * Route what the running program asks of the terminal (bell, title,
+   * clipboard, notifications, ...) from libghostty to this Terminal's events.
    */
-  private checkForTitleChange(data: string): void {
-    // OSC sequences: ESC ] Ps ; Pt BEL or ESC ] Ps ; Pt ST
-    // OSC 0 = icon + title, OSC 1 = icon, OSC 2 = title
-    const oscRegex = /\x1b\]([012]);([^\x07\x1b]*?)(?:\x07|\x1b\\)/g;
-    let match: RegExpExecArray | null = null;
-
-    // biome-ignore lint/suspicious/noAssignInExpressions: Standard regex pattern
-    while ((match = oscRegex.exec(data)) !== null) {
-      const ps = match[1];
-      const pt = match[2];
-
-      // OSC 0 and OSC 2 set the title
-      if (ps === '0' || ps === '2') {
-        if (pt !== this.currentTitle) {
-          this.currentTitle = pt;
-          this.titleChangeEmitter.fire(pt);
+  private connectEffects(wasmTerm: GhosttyTerminal): void {
+    wasmTerm.setEffects({
+      bell: () => this.bellEmitter.fire(),
+      titleChanged: (title) => {
+        if (title !== this.currentTitle) {
+          this.currentTitle = title;
+          this.titleChangeEmitter.fire(title);
         }
-      }
-    }
+      },
+      pwdChanged: (pwd) => this.workingDirectoryEmitter.fire(pwd),
+      clipboardWrite: ({ location, contents }) => {
+        const plain = contents.find((c) => c.mime.startsWith('text/plain')) ?? contents[0];
+        const text = plain ? new TextDecoder().decode(plain.data) : '';
+        this.clipboardWriteEmitter.fire({ text, location });
+        if (this.options.allowClipboardWrite === false) return false;
+        if (location === 'standard' && typeof navigator !== 'undefined' && navigator.clipboard) {
+          // Browsers may refuse writes without a recent user gesture.
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        return true;
+      },
+      notification: (n) => this.notificationEmitter.fire(n),
+      progress: (p) => this.progressEmitter.fire(p),
+      programStatus: (st) => this.programStatusEmitter.fire(st),
+      semanticPrompt: (e) => this.semanticPromptEmitter.fire(e),
+      colorScheme: () => this.colorScheme(),
+      cellSize: () => {
+        const m = this.renderer?.getMetrics();
+        return m ? { width: m.width, height: m.height } : null;
+      },
+    });
+  }
+
+  /** Give libghostty the renderer's cell size in pixels. */
+  private syncCellPixelSize(): void {
+    const m = this.renderer?.getMetrics();
+    if (m && this.wasmTerm) this.wasmTerm.setCellPixelSize(m.width, m.height);
+  }
+
+  /** Light or dark, from the theme's background luminance. */
+  private colorScheme(): 'light' | 'dark' {
+    const bg = this.options.theme?.background ?? '#000000';
+    const hex = /^#?([0-9a-f]{6})$/i.exec(bg.trim())?.[1];
+    if (!hex) return 'dark';
+    const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 'light' : 'dark';
   }
 
   // ============================================================================
