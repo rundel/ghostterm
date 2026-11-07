@@ -22,6 +22,7 @@ import {
   type RenderStateColors,
   type RenderStateCursor,
   type TerminalHandle,
+  UnderlineStyle,
 } from './types';
 
 // Re-export types for convenience
@@ -310,8 +311,9 @@ interface Layout {
     invisible: BitField;
     strikethrough: BitField;
     underline: BitField;
+    overline: BitField;
   };
-  style: { size: number; fg: number; bg: number; flags: number };
+  style: { size: number; fg: number; bg: number; underline: number; flags: number };
   cursor: {
     size: number;
     hasValue: number;
@@ -366,11 +368,13 @@ function buildLayout(abi: AbiLayout): Layout {
       invisible: flag('invisible'),
       strikethrough: flag('strikethrough'),
       underline: flag('underline'),
+      overline: flag('overline'),
     },
     style: {
       size: abi.size('GhosttyStyle'),
       fg: abi.offset('GhosttyStyle', 'fg_color'),
       bg: abi.offset('GhosttyStyle', 'bg_color'),
+      underline: abi.offset('GhosttyStyle', 'underline_color'),
       flags: abi.offset('GhosttyStyle', 'flags'),
     },
     cursor: {
@@ -1808,6 +1812,9 @@ export class GhosttyTerminal {
     cell.width = 1;
     cell.hyperlink_id = 0;
     cell.grapheme_len = 0;
+    cell.underline_style = UnderlineStyle.NONE;
+    cell.underline_color = undefined;
+    cell.overline = false;
   }
 
   /**
@@ -1830,7 +1837,14 @@ export class GhosttyTerminal {
     let fg = this.fgDefault;
     let bg = this.bgDefault;
     let flags = 0;
+    let underlineStyle = UnderlineStyle.NONE;
+    let underlineColor: number | undefined;
+    let overline = false;
     if (style) {
+      underlineStyle = readBits(style.getUint16(L.style.flags, true), 0, L.styleFlags.underline);
+      overline = readBits(style.getUint16(L.style.flags, true), 0, L.styleFlags.overline) !== 0;
+      const ul = this.resolveStyleColor(style, L.style.underline);
+      if (ul) underlineColor = (ul.r << 16) | (ul.g << 8) | ul.b;
       fg = this.resolveStyleColor(style, L.style.fg) ?? fg;
       bg = this.resolveStyleColor(style, L.style.bg) ?? bg;
       const f = style.getUint16(L.style.flags, true);
@@ -1865,6 +1879,9 @@ export class GhosttyTerminal {
     cell.width = wide === CellWide.NARROW ? 1 : wide === CellWide.WIDE ? 2 : 0;
     cell.hyperlink_id = readBits(lo, hi, L.cell.hyperlink) ? 1 : 0;
     cell.grapheme_len = graphemeLen;
+    cell.underline_style = underlineStyle;
+    cell.underline_color = underlineColor;
+    cell.overline = overline;
   }
 
   private paletteColor(index: number): RGB {

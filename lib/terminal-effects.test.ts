@@ -185,3 +185,30 @@ describe('cursor', () => {
     expect(drawnCursor().color).toBe('rgb(255, 136, 0)');
   });
 });
+
+describe('underline drawing', () => {
+  test('each style is drawn in the underline color', () => {
+    term.write('\x1b[4:3;58;2;0;128;255mcurly\x1b[0m \x1b[4:4mdots\x1b[0m');
+    const renderer = (term as any).renderer;
+    const ctx = renderer.ctx;
+    const strokes: string[] = [];
+    const dashes: number[][] = [];
+    let curves = 0;
+    const orig = { stroke: ctx.stroke, setLineDash: ctx.setLineDash, quad: ctx.quadraticCurveTo };
+    ctx.stroke = () => strokes.push(String(ctx.strokeStyle));
+    ctx.setLineDash = (d: number[]) => dashes.push(d);
+    ctx.quadraticCurveTo = () => curves++;
+    try {
+      renderer.render(term.wasmTerm, true, 0, term);
+    } finally {
+      Object.assign(ctx, {
+        stroke: orig.stroke,
+        setLineDash: orig.setLineDash,
+        quadraticCurveTo: orig.quad,
+      });
+    }
+    expect(strokes).toContain('#0080ff');
+    expect(curves).toBeGreaterThanOrEqual(10); // 5 curly cells, 2 curves each
+    expect(dashes).toContainEqual([1, 2]);
+  });
+});

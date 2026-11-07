@@ -593,6 +593,22 @@ export interface GhosttyCell {
   width: number; // u8 (character width: 1=normal, 2=wide, etc.)
   hyperlink_id: number; // u16 (0 = no link, >0 = hyperlink ID in set)
   grapheme_len: number; // u8 (number of extra codepoints beyond first)
+  /** Underline style (UnderlineStyle); NONE when not underlined. */
+  underline_style?: UnderlineStyle;
+  /** Underline color as 0xRRGGBB, or undefined to use the text color. */
+  underline_color?: number;
+  /** Overline (SGR 53). */
+  overline?: boolean;
+}
+
+/** Underline styles (SGR 4:x), as libghostty reports them. */
+export enum UnderlineStyle {
+  NONE = 0,
+  SINGLE = 1,
+  DOUBLE = 2,
+  CURLY = 3,
+  DOTTED = 4,
+  DASHED = 5,
 }
 
 /**

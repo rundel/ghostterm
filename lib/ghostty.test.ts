@@ -605,3 +605,22 @@ describe('terminal effects (library callbacks)', () => {
     }
   });
 });
+
+describe('underline styles and overline', () => {
+  test('decodes SGR 4:x styles, underline color (SGR 58) and overline (SGR 53)', () => {
+    const term = ghostty.createTerminal(40, 3);
+    try {
+      term.write('\x1b[4mA\x1b[0m\x1b[4:2mB\x1b[0m\x1b[4:3;58;2;255;0;0mC\x1b[0m');
+      term.write('\x1b[4:4mD\x1b[0m\x1b[4:5mE\x1b[0m\x1b[53mF\x1b[0mG');
+      const row = term.getLine(0)!;
+      expect(row.slice(0, 7).map((c) => c.underline_style)).toEqual([1, 2, 3, 4, 5, 0, 0]);
+      expect(row[2].underline_color).toBe(0xff0000);
+      expect(row[0].underline_color).toBeUndefined();
+      expect(row[5].overline).toBe(true);
+      expect(row[6].overline).toBe(false);
+      expect(row[2].flags & 4).toBe(4); // still flagged as underlined
+    } finally {
+      term.free();
+    }
+  });
+});

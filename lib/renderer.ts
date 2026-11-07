@@ -13,7 +13,7 @@
 import type { ITheme } from './interfaces';
 import type { SelectionManager } from './selection-manager';
 import type { GhosttyCell, ILink } from './types';
-import { CellFlags } from './types';
+import { CellFlags, UnderlineStyle } from './types';
 
 // Interface for objects that can be rendered
 export interface IRenderable {
@@ -701,14 +701,18 @@ export class CanvasRenderer {
       this.ctx.globalAlpha = 1.0;
     }
 
-    // Draw underline
+    // Draw underline, in its own style and color when the program set them
     if (cell.flags & CellFlags.UNDERLINE) {
-      const underlineY = cellY + this.metrics.baseline + 2;
+      this.drawUnderline(cell, cellX, cellY, cellWidth);
+    }
+
+    // Draw overline (SGR 53)
+    if (cell.overline) {
       this.ctx.strokeStyle = this.ctx.fillStyle;
       this.ctx.lineWidth = 1;
       this.ctx.beginPath();
-      this.ctx.moveTo(cellX, underlineY);
-      this.ctx.lineTo(cellX + cellWidth, underlineY);
+      this.ctx.moveTo(cellX, cellY + 0.5);
+      this.ctx.lineTo(cellX + cellWidth, cellY + 0.5);
       this.ctx.stroke();
     }
 
@@ -758,6 +762,51 @@ export class CanvasRenderer {
         this.ctx.stroke();
       }
     }
+  }
+
+  /**
+   * Draw a cell's underline: single, double, curly, dotted or dashed. Dash
+   * patterns are offset by x so they continue across neighboring cells.
+   */
+  private drawUnderline(cell: GhosttyCell, x: number, cellY: number, width: number): void {
+    const ctx = this.ctx;
+    const y = cellY + this.metrics.baseline + 2;
+    const style = cell.underline_style ?? UnderlineStyle.SINGLE;
+    ctx.save();
+    ctx.strokeStyle =
+      cell.underline_color !== undefined
+        ? `#${cell.underline_color.toString(16).padStart(6, '0')}`
+        : ctx.fillStyle;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    switch (style) {
+      case UnderlineStyle.DOUBLE:
+        ctx.moveTo(x, y - 1);
+        ctx.lineTo(x + width, y - 1);
+        ctx.moveTo(x, y + 1);
+        ctx.lineTo(x + width, y + 1);
+        break;
+      case UnderlineStyle.CURLY: {
+        // One wave per cell, so neighboring cells join up.
+        const amplitude = Math.max(1, Math.round(this.metrics.height * 0.08));
+        ctx.moveTo(x, y);
+        ctx.quadraticCurveTo(x + width / 4, y - amplitude, x + width / 2, y);
+        ctx.quadraticCurveTo(x + (3 * width) / 4, y + amplitude, x + width, y);
+        break;
+      }
+      case UnderlineStyle.DOTTED:
+      case UnderlineStyle.DASHED:
+        ctx.setLineDash(style === UnderlineStyle.DOTTED ? [1, 2] : [3, 2]);
+        ctx.lineDashOffset = x;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + width, y);
+        break;
+      default:
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + width, y);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   /**
