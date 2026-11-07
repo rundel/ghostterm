@@ -372,6 +372,29 @@ describe('grid access', () => {
     }
   });
 
+  test('cells of one link share an ID; IDs are never reused and the table is bounded', () => {
+    const term = ghostty.createTerminal(40, 3);
+    const link = (uri: string, label: string) => `\x1b]8;;${uri}\x1b\\${label}\x1b]8;;\x1b\\`;
+    try {
+      term.write(`${link('https://a.example', 'aa')} ${link('https://b.example', 'bb')}`);
+      const row = term.getLine(0)!;
+      expect(row[0].hyperlink_id).toBe(row[1].hyperlink_id);
+      expect(row[3].hyperlink_id).not.toBe(row[0].hyperlink_id);
+      expect(row[2].hyperlink_id).toBe(0);
+
+      const seen = new Set<number>();
+      for (let i = 0; i < 5000; i++) {
+        term.write(`\x1b[H${link(`https://example.com/${i}`, 'x')}`);
+        const id = term.getLine(0)![0].hyperlink_id;
+        expect(seen.has(id)).toBe(false);
+        seen.add(id);
+      }
+      expect((term as any).linkIds.size).toBeLessThanOrEqual(4096);
+    } finally {
+      term.free();
+    }
+  });
+
   test('reports soft-wrapped continuation rows', () => {
     const term = ghostty.createTerminal(10, 5);
     try {

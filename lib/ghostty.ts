@@ -1444,6 +1444,8 @@ export class MouseEncoder {
 /** Size of the per-terminal scratch area for out-parameters. */
 const SCRATCH_SIZE = 2048;
 const SELECTION_SCRATCH_SIZE = 256;
+/** How many hyperlink URIs a terminal remembers IDs for. */
+const MAX_LINK_IDS = 4096;
 /** Where in the scratch area grapheme codepoints are read, and how much room they have. */
 const GRAPHEME_BUFFER = 1008; // the GhosttyCodepointBuffer describing them
 const GRAPHEME_SCRATCH = 1024;
@@ -2594,15 +2596,15 @@ export class GhosttyTerminal {
     return this.mem.view().getUint32(this.scratch, true);
   }
 
-  /**
-   * Resolve a grid point to a GhosttyGridRef written at `refPtr`.
-   * Returns false if the point is outside the requested area.
-   */
   /** @internal Write the grid reference for a viewport cell to refPtr. */
   viewportRef(col: number, row: number, refPtr: number): boolean {
     return this.gridRef(PointTag.VIEWPORT, col, row, refPtr);
   }
 
+  /**
+   * Resolve a grid point to a GhosttyGridRef written at `refPtr`.
+   * Returns false if the point is outside the requested area.
+   */
   private gridRef(tag: number, x: number, y: number, refPtr: number): boolean {
     const P = this.L.point;
     const pointPtr = this.scratch + 256;
@@ -2678,13 +2680,24 @@ export class GhosttyTerminal {
 
   /** Hyperlink IDs by URI, so cells of the same link share one ID. */
   private linkIds = new Map<string, number>();
+  private nextLinkId = 1;
 
-  /** A stable ID for a hyperlink URI (0 for none). */
+  /**
+   * The ID for a hyperlink URI (0 for none). IDs are never reused. The map
+   * is bounded: when it fills up it starts over, and the viewport is re-read
+   * so its cells don't keep IDs a URI no longer has.
+   */
   private linkId(uri: string | null): number {
     if (!uri) return 0;
     let id = this.linkIds.get(uri);
     if (id === undefined) {
-      id = this.linkIds.size + 1;
+      if (this.linkIds.size >= MAX_LINK_IDS) {
+        this.linkIds.clear();
+        this.rowStale.fill(1);
+        this.rowDirty.fill(1);
+        this.dirty = DirtyState.FULL;
+      }
+      id = this.nextLinkId++;
       this.linkIds.set(uri, id);
     }
     return id;

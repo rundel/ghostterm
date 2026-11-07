@@ -496,20 +496,22 @@ export interface GhosttyTerminalConfig {
 export type TerminalHandle = number;
 
 /**
- * Cell structure matching ghostty_cell_t in C (16 bytes)
+ * A decoded cell: libghostty's packed GhosttyCell (8 bytes) together with
+ * its style, with colors resolved against the palette and default colors.
+ * Not a C struct; the bridge builds it.
  */
 export interface GhosttyCell {
-  codepoint: number; // u32 (Unicode codepoint - first codepoint of grapheme)
-  fg_r: number; // u8 (foreground red)
-  fg_g: number; // u8 (foreground green)
-  fg_b: number; // u8 (foreground blue)
-  bg_r: number; // u8 (background red)
-  bg_g: number; // u8 (background green)
-  bg_b: number; // u8 (background blue)
-  flags: number; // u8 (style flags bitfield)
-  width: number; // u8 (character width: 1=normal, 2=wide, etc.)
+  codepoint: number; // Unicode codepoint (the first codepoint of a grapheme cluster)
+  fg_r: number; // foreground red, 0-255
+  fg_g: number; // foreground green
+  fg_b: number; // foreground blue
+  bg_r: number; // background red
+  bg_g: number; // background green
+  bg_b: number; // background blue
+  flags: number; // CellFlags
+  width: number; // 1 = normal, 2 = wide, 0 = spacer after a wide character
   hyperlink_id: number; // 0 = no link; otherwise the same ID for every cell of one link URI
-  grapheme_len: number; // u8 (number of extra codepoints beyond first)
+  grapheme_len: number; // number of codepoints beyond the first
   /** Underline style (UnderlineStyle); NONE when not underlined. */
   underline_style?: UnderlineStyle;
   /** Underline color as 0xRRGGBB, or undefined to use the text color. */
