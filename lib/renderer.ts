@@ -706,40 +706,23 @@ export class CanvasRenderer {
       this.ctx.stroke();
     }
 
-    // Draw hyperlink underline (for OSC8 hyperlinks)
-    if (cell.hyperlink_id > 0) {
-      const isHovered = cell.hyperlink_id === this.hoveredHyperlinkId;
-
-      // Only show underline when hovered (cleaner look)
-      if (isHovered) {
-        const underlineY = cellY + this.metrics.baseline + 2;
-        this.ctx.strokeStyle = '#4A90E2'; // Blue underline on hover
-        this.ctx.lineWidth = 1;
-        this.ctx.beginPath();
-        this.ctx.moveTo(cellX, underlineY);
-        this.ctx.lineTo(cellX + cellWidth, underlineY);
-        this.ctx.stroke();
-      }
-    }
-
-    // Draw regex link underline (for plain text URLs)
-    if (this.hoveredLinkRange) {
-      const range = this.hoveredLinkRange;
-      // Check if this cell is within the hovered link range
-      const isInRange =
-        (y === range.startY && x >= range.startX && (y < range.endY || x <= range.endX)) ||
-        (y > range.startY && y < range.endY) ||
-        (y === range.endY && x <= range.endX && (y > range.startY || x >= range.startX));
-
-      if (isInRange) {
-        const underlineY = cellY + this.metrics.baseline + 2;
-        this.ctx.strokeStyle = '#4A90E2'; // Blue underline on hover
-        this.ctx.lineWidth = 1;
-        this.ctx.beginPath();
-        this.ctx.moveTo(cellX, underlineY);
-        this.ctx.lineTo(cellX + cellWidth, underlineY);
-        this.ctx.stroke();
-      }
+    // A hovered link is underlined once, whether it is an OSC 8 hyperlink (matched by ID) or a
+    // range from the link detector (plain-text URLs, and OSC 8 links it also reports).
+    const range = this.hoveredLinkRange;
+    const hovered =
+      (cell.hyperlink_id > 0 && cell.hyperlink_id === this.hoveredHyperlinkId) ||
+      (range !== null &&
+        ((y === range.startY && x >= range.startX && (y < range.endY || x <= range.endX)) ||
+          (y > range.startY && y < range.endY) ||
+          (y === range.endY && x <= range.endX && (y > range.startY || x >= range.startX))));
+    if (hovered) {
+      const underlineY = cellY + this.metrics.baseline + 2;
+      this.ctx.strokeStyle = '#4A90E2';
+      this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      this.ctx.moveTo(cellX, underlineY);
+      this.ctx.lineTo(cellX + cellWidth, underlineY);
+      this.ctx.stroke();
     }
   }
 

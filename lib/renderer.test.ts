@@ -195,12 +195,11 @@ describe('link hover underlines', () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   }
 
-  /** Columns of row 0 underlined in the link color. */
+  /** Columns of row 0 underlined in the link color, once per stroke. */
   function underlined(): number[] {
-    const cols = strokes(term)
+    return strokes(term)
       .filter((s) => s.strokeStyle === LINK)
       .map((s) => s.path[0][1] / cell().w);
-    return [...new Set(cols)];
   }
 
   test('an OSC 8 hyperlink is underlined while hovered, and not after the pointer leaves', async () => {
