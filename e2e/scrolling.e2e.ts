@@ -35,7 +35,7 @@ async function gutterPixels(page: Page) {
 /** Where the scrollbar thumb is now, in page coordinates. */
 async function thumb(page: Page) {
   const g = await geometry(page);
-  const t = await page.evaluate(() => window.term['scrollbarThumb']());
+  const t = await page.evaluate(() => window.term['scrollbar']['host'].thumb());
   return {
     x: g.left + t.x + t.width / 2,
     top: g.top + t.y,

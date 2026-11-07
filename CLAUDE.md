@@ -42,6 +42,7 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 ├─ CanvasRenderer (lib/renderer.ts)   draws the render state; cursor, scrollbar, highlights
 ├─ InputHandler (lib/input-handler.ts)    DOM keyboard/mouse/paste/focus → libghostty encoders
 ├─ PointerRouter (lib/pointer-router.ts)  which of scrollbar, program, selection gets a press
+├─ Scrollbar (lib/scrollbar.ts)       thumb drag, track clicks, fade (the renderer draws it)
 ├─ SelectionManager (lib/selection-manager.ts)  DOM mouse → libghostty selection gesture
 ├─ BufferNamespace (lib/buffer.ts)    xterm.js IBuffer over absolute screen rows
 ├─ LinkDetector + providers           OSC 8 (libghostty hyperlinks) and regex URLs

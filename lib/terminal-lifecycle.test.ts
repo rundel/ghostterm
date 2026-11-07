@@ -641,9 +641,9 @@ describe('dispose()', () => {
 
     expect(beforeInput()).toBe(false);
     // The document-level mouseup (scrollbar drag) is gone too.
-    term['isDraggingScrollbar'] = true;
+    term['scrollbar']['drag'] = { startY: 0, startViewportY: 0 };
     document.dispatchEvent(new MouseEvent('mouseup'));
-    expect(term['isDraggingScrollbar']).toBe(true);
+    expect(term['scrollbar'].dragging).toBe(true);
     const wheel = new WheelEvent('wheel', { deltaY: 100, cancelable: true });
     container.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(false);

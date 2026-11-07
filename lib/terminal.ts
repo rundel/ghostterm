@@ -64,6 +64,7 @@ import {
   type HighlightRange,
   parseCssColor,
 } from './renderer';
+import { Scrollbar } from './scrollbar';
 import { SelectionManager } from './selection-manager';
 import { Key } from './types';
 import { UnicodeHandling } from './unicode';
@@ -260,16 +261,16 @@ export class Terminal implements ITerminalCore {
   /** A program reset the terminal (RIS) during the write in progress. */
   private resetPending = false;
 
-  // Scrollbar interaction state
-  private isDraggingScrollbar: boolean = false;
-  private scrollbarDragStart: number | null = null;
-  private scrollbarDragStartViewportY: number = 0;
-
-  // Scrollbar visibility/auto-hide state
-  private scrollbarFade = { from: 0, to: 0, start: 0 };
-  private scrollbarHideTimeout?: number;
-  private readonly SCROLLBAR_HIDE_DELAY_MS = 1500; // Hide after 1.5 seconds
-  private readonly SCROLLBAR_FADE_DURATION_MS = 200; // 200ms fade animation
+  /** Thumb dragging, track clicks and fading (drawn by the renderer). */
+  private scrollbar = new Scrollbar({
+    canvas: () => this.canvas,
+    thumb: () =>
+      this.renderer!.getScrollbarThumb(this.viewportY, this.getScrollbackLength(), this.rows),
+    scrollbackLength: () => this.getScrollbackLength(),
+    viewportY: () => this.viewportY,
+    scrollTo: (offset) => this.scrollToViewportOffset(offset),
+    requestRender: () => this.requestRender(),
+  });
 
   constructor(options: ITerminalOptions = {}) {
     // Use provided Ghostty instance (for test isolation) or get module-level instance
@@ -604,7 +605,7 @@ export class Terminal implements ITerminalCore {
       };
 
       this.pointer = new PointerRouter({
-        overScrollbar: (e) => this.overScrollbar(e),
+        overScrollbar: (e) => !!this.renderer && this.scrollbar.isOver(e),
         programTracksMouse: () => this.wasmTerm?.hasMouseTracking() ?? false,
       });
 
@@ -664,8 +665,8 @@ export class Terminal implements ITerminalCore {
       this.listen(parent, 'mouseleave', this.handleMouseLeave);
       this.listen(parent, 'click', this.handleClick);
 
-      // Setup document-level mouseup for scrollbar drag (so drag works even outside canvas)
-      this.listen(document, 'mouseup', this.handleMouseUp);
+      // A thumb drag ends wherever the pointer is released
+      this.listen(document, 'mouseup', () => this.scrollbar.release());
 
       // Use capture phase to ensure we get the event before browser scrolling
       this.listen(parent, 'wheel', this.handleWheel, { passive: false, capture: true });
@@ -1304,7 +1305,7 @@ export class Terminal implements ITerminalCore {
     if (target === this.viewportY) return;
     this.setViewportY(target);
     this.fireScrollIfMoved();
-    if (scrollbackLength > 0) this.showScrollbar();
+    if (scrollbackLength > 0) this.scrollbar.show();
   }
 
   /** Set the scroll offset and move libghostty's viewport with it. */
@@ -1409,7 +1410,7 @@ export class Terminal implements ITerminalCore {
     }
 
     this.fireScrollIfMoved();
-    if (this.getScrollbackLength() > 0) this.showScrollbar();
+    if (this.getScrollbackLength() > 0) this.scrollbar.show();
   };
 
   // ==========================================================================
@@ -1497,7 +1498,7 @@ export class Terminal implements ITerminalCore {
     // refresh() asks for a full redraw on the next frame.
     force ||= this.refreshPending;
     this.refreshPending = false;
-    const rows = this.renderer.render(this.wasmTerm, force, this.viewportY, this.scrollbarOpacity);
+    const rows = this.renderer.render(this.wasmTerm, force, this.viewportY, this.scrollbar.opacity);
     this.decorationService.refresh(rows !== null);
     if (rows) this.renderEmitter.fire(rows);
   }
@@ -1525,7 +1526,7 @@ export class Terminal implements ITerminalCore {
     }
 
     // The scrollbar fades by time, one frame after another until it settles.
-    if (this.scrollbarOpacity !== this.scrollbarFade.to) this.requestRender();
+    if (!this.scrollbar.settled) this.requestRender();
 
     // A render hold keeps the old frame until it ends (a change) or times out (no change).
     const hold = this.wasmTerm.renderHoldRemaining();
@@ -1595,11 +1596,7 @@ export class Terminal implements ITerminalCore {
     }
     this.parentState = undefined;
 
-    // Clean up scrollbar timers
-    if (this.scrollbarHideTimeout) {
-      window.clearTimeout(this.scrollbarHideTimeout);
-      this.scrollbarHideTimeout = undefined;
-    }
+    this.scrollbar.dispose();
 
     this.currentHoveredLink = undefined;
     this.pointer = undefined;
@@ -1632,11 +1629,8 @@ export class Terminal implements ITerminalCore {
   private handleMouseMove = (e: MouseEvent): void => {
     if (!this.canvas || !this.renderer || !this.wasmTerm) return;
 
-    // If dragging scrollbar, handle immediately without throttling
-    if (this.isDraggingScrollbar) {
-      this.processScrollbarDrag(e);
-      return;
-    }
+    // A thumb drag follows the pointer at once, without throttling
+    if (this.scrollbar.move(e)) return;
 
     if (!this.linkDetector) return;
 
@@ -1848,130 +1842,13 @@ export class Terminal implements ITerminalCore {
     }
   };
 
-  /** The scrollbar as drawn now, in CSS px relative to the canvas. */
-  private scrollbarThumb() {
-    return this.renderer!.getScrollbarThumb(this.viewportY, this.getScrollbackLength(), this.rows);
-  }
-
-  /**
-   * Handle mouse down for scrollbar interaction
-   */
+  /** Every press starts a gesture here first; the other listeners follow the router. */
   private handleMouseDown = (e: MouseEvent): void => {
-    if (!this.canvas || !this.renderer || !this.wasmTerm || !this.pointer) return;
-    // Every press starts a gesture here first; the other listeners follow the router.
-    if (this.pointer.press(e) !== 'scrollbar') return;
-
+    if (!this.pointer || this.pointer.press(e) !== 'scrollbar') return;
     // Keep the press from starting a native text selection
     e.preventDefault();
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    const mouseY = e.clientY - this.canvas.getBoundingClientRect().top;
-    const bar = this.scrollbarThumb();
-    if (mouseY >= bar.y && mouseY <= bar.y + bar.height) {
-      // Start dragging the thumb
-      this.isDraggingScrollbar = true;
-      this.scrollbarDragStart = mouseY;
-      this.scrollbarDragStartViewportY = this.viewportY;
-      this.canvas.style.userSelect = 'none';
-      this.canvas.style.webkitUserSelect = 'none';
-      this.showScrollbar();
-    } else {
-      // Click on the track: jump there (top = oldest line, bottom = newest)
-      const fraction = 1 - (mouseY - bar.trackY) / bar.trackHeight;
-      this.scrollToViewportOffset(Math.round(fraction * scrollbackLength));
-    }
+    this.scrollbar.press(e);
   };
-
-  /** Whether a pointer event is over the scrollbar's gutter while there is history to scroll. */
-  private overScrollbar(e: MouseEvent): boolean {
-    if (!this.canvas || !this.renderer || this.getScrollbackLength() === 0) return false;
-    const mouseX = e.clientX - this.canvas.getBoundingClientRect().left;
-    const bar = this.scrollbarThumb();
-    return mouseX >= bar.x && mouseX <= bar.x + bar.width;
-  }
-
-  /**
-   * Handle mouse up for scrollbar drag
-   */
-  private handleMouseUp = (): void => {
-    if (!this.isDraggingScrollbar) return;
-    this.isDraggingScrollbar = false;
-    this.scrollbarDragStart = null;
-
-    // Restore text selection
-    if (this.canvas) {
-      this.canvas.style.userSelect = '';
-      this.canvas.style.webkitUserSelect = '';
-    }
-
-    // Start the auto-hide timer again
-    if (this.getScrollbackLength() > 0) this.showScrollbar();
-  };
-
-  /**
-   * Process scrollbar drag movement
-   */
-  private processScrollbarDrag(e: MouseEvent): void {
-    if (!this.canvas || !this.renderer || this.scrollbarDragStart === null) return;
-
-    const scrollbackLength = this.getScrollbackLength();
-    if (scrollbackLength === 0) return;
-
-    const rect = this.canvas.getBoundingClientRect();
-    const deltaY = e.clientY - rect.top - this.scrollbarDragStart;
-    const bar = this.scrollbarThumb();
-    const travel = bar.trackHeight - bar.height;
-    if (travel <= 0) return;
-
-    // The thumb moving down scrolls toward the bottom (a smaller offset).
-    const rows = Math.round((-deltaY / travel) * scrollbackLength);
-    this.scrollToViewportOffset(this.scrollbarDragStartViewportY + rows);
-  }
-
-  /**
-   * The scrollbar's opacity now: it fades between `from` and `to` over
-   * SCROLLBAR_FADE_DURATION_MS from `start`. Each frame reads it, and
-   * drawFrame() asks for another until the fade settles.
-   */
-  private get scrollbarOpacity(): number {
-    const { from, to, start } = this.scrollbarFade;
-    const progress = Math.min(1, (performance.now() - start) / this.SCROLLBAR_FADE_DURATION_MS);
-    return from + (to - from) * Math.max(0, progress);
-  }
-
-  private fadeScrollbar(to: number): void {
-    if (this.scrollbarFade.to === to) return;
-    this.scrollbarFade = { from: this.scrollbarOpacity, to, start: performance.now() };
-    this.requestRender();
-  }
-
-  /**
-   * Show scrollbar with fade-in and schedule auto-hide
-   */
-  private showScrollbar(): void {
-    if (this.scrollbarHideTimeout) {
-      window.clearTimeout(this.scrollbarHideTimeout);
-      this.scrollbarHideTimeout = undefined;
-    }
-    this.fadeScrollbar(1);
-
-    // Schedule auto-hide (unless dragging)
-    if (!this.isDraggingScrollbar) {
-      this.scrollbarHideTimeout = window.setTimeout(() => {
-        this.hideScrollbar();
-      }, this.SCROLLBAR_HIDE_DELAY_MS);
-    }
-  }
-
-  /**
-   * Hide scrollbar with fade-out
-   */
-  private hideScrollbar(): void {
-    if (this.scrollbarHideTimeout) {
-      window.clearTimeout(this.scrollbarHideTimeout);
-      this.scrollbarHideTimeout = undefined;
-    }
-    this.fadeScrollbar(0);
-  }
 
   /**
    * Process any pending terminal responses and emit them via onData.

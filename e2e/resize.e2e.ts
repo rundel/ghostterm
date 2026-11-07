@@ -28,7 +28,7 @@ const layout = () => {
   const term = window.term;
   const canvas = term['canvas']!;
   const element = term.element!;
-  const thumb = term['scrollbarThumb']();
+  const thumb = term['scrollbar']['host'].thumb();
   return {
     cols: term.cols,
     rows: term.rows,
