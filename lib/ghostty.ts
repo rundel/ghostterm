@@ -303,6 +303,46 @@ const EffectOpt = {
   PROGRAM_STATUS: 47,
 } as const;
 
+/** @internal GhosttyClipboardLocation, in order. */
+export const CLIPBOARD_LOCATIONS = ['standard', 'selection', 'primary'] as const;
+
+/** @internal GhosttyClipboardWriteResult values ghostterm replies with. */
+export const ClipboardWriteResult = { SUCCESS: 0, DENIED: 1 } as const;
+
+/** @internal GhosttyPasteSource. */
+export const PasteSource = { CLIPBOARD: 0, TEXT: 1 } as const;
+
+/** @internal GhosttyColorScheme. */
+export const ColorScheme = { LIGHT: 0, DARK: 1 } as const;
+
+/** @internal GhosttyTerminalProgressState, in order. */
+export const PROGRESS_STATES = ['remove', 'set', 'error', 'indeterminate', 'pause'] as const;
+
+/** @internal GhosttyProgramStatusState, in order. */
+export const PROGRAM_STATUS_STATES = [
+  'idle',
+  'working',
+  'done',
+  'blocked',
+  'error',
+  'clear',
+] as const;
+
+/** @internal GhosttyProgramStatusKind, in order. */
+export const PROGRAM_STATUS_KINDS = ['none', 'permission', 'question', 'auth'] as const;
+
+/** @internal GhosttySemanticPromptKind, in order (0 is INVALID). */
+export const SEMANTIC_PROMPT_KINDS = [
+  null,
+  'prompt-start',
+  'input-start',
+  'output-start',
+  'command-end',
+] as const;
+
+/** @internal GhosttySemanticPromptPromptKind, in order. */
+export const PROMPT_KINDS = ['primary', 'right', 'continuation', 'secondary'] as const;
+
 /** Longest a render hold may freeze the screen before it is ended (ms). */
 const RENDER_HOLD_TIMEOUT_MS = 1000;
 
@@ -402,7 +442,10 @@ interface Layout {
     underline: BitField;
     overline: BitField;
   };
+  /** Size of a raw GhosttyCell, as stored in a row's cells view. */
+  cellSize: number;
   style: { size: number; fg: number; bg: number; underline: number; flags: number };
+  styleColor: { tag: number; value: number; r: number; g: number; b: number };
   cursor: {
     size: number;
     hasValue: number;
@@ -425,9 +468,57 @@ interface Layout {
   cellsView: { ptr: number; len: number };
   modeConfig: { size: number; value: number };
   selection: { size: number; start: number; end: number; rectangle: number };
-  coordinate: { x: number; y: number };
+  coordinate: { size: number; x: number; y: number };
   geometry: { columns: number; cellWidth: number; paddingLeft: number; screenHeight: number };
   surface: { x: number; y: number };
+  string: { size: number; ptr: number; len: number };
+  rgb: { size: number; r: number; g: number; b: number };
+  writer: { write: number; userdata: number };
+  clipboardWrite: { location: number; contents: number; contentsLen: number; reply: number };
+  clipboardContent: { size: number; mime: number; data: number };
+  clipboardReply: { size: number; result: number; remember: number };
+  notification: { title: number; body: number };
+  progress: { state: number; progress: number };
+  programStatus: {
+    state: number;
+    kind: number;
+    progress: number;
+    id: number;
+    app: number;
+    title: number;
+    message: number;
+  };
+  semanticPrompt: {
+    kind: number;
+    promptKind: number;
+    hasExitCode: number;
+    exitCode: number;
+    command: number;
+    error: number;
+  };
+  sizeReport: { rows: number; columns: number; cellWidth: number; cellHeight: number };
+  paste: {
+    size: number;
+    location: number;
+    source: number;
+    mimes: number;
+    mimesLen: number;
+    reader: number;
+    allowUnsafe: number;
+  };
+  mimeReader: { read: number; userdata: number };
+  mouseSize: {
+    size: number;
+    screenWidth: number;
+    screenHeight: number;
+    cellWidth: number;
+    cellHeight: number;
+  };
+  mousePosition: { x: number; y: number };
+  scrollbar: { size: number; total: number; offset: number; len: number };
+  scrollViewport: { size: number; tag: number; delta: number; row: number };
+  rowSelection: { size: number; startX: number; endX: number };
+  selectionBuffer: { size: number; ptr: number; cap: number; len: number };
 }
 
 function buildLayout(abi: AbiLayout): Layout {
@@ -435,6 +526,17 @@ function buildLayout(abi: AbiLayout): Layout {
   const content = (arm: string, inner: string) =>
     abi.unionBits('GhosttyCell', 'content', arm, inner);
   const flag = (f: string) => abi.bits('GhosttyStyleFlags', f);
+  const at = (struct: string) => (field: string) => abi.offset(struct, field);
+  const rgb = at('GhosttyColorRgb');
+  const clip = at('GhosttyClipboardWrite');
+  const status = at('GhosttyTerminalProgramStatus');
+  const prompt = at('GhosttyTerminalSemanticPrompt');
+  const sizeReport = at('GhosttySizeReportSize');
+  const paste = at('GhosttyPaste');
+  const mouseSize = at('GhosttyMouseEncoderSize');
+  const scrollValue = abi.offset('GhosttyTerminalScrollViewport', 'value');
+  const styleColorValue = abi.offset('GhosttyStyleColor', 'value');
+  const styleColorRgb = styleColorValue + abi.offset('GhosttyStyleColorValue', 'rgb');
   return {
     abi,
     cell: {
@@ -458,6 +560,14 @@ function buildLayout(abi: AbiLayout): Layout {
       strikethrough: flag('strikethrough'),
       underline: flag('underline'),
       overline: flag('overline'),
+    },
+    cellSize: abi.size('GhosttyCell'),
+    styleColor: {
+      tag: abi.offset('GhosttyStyleColor', 'tag'),
+      value: styleColorValue + abi.offset('GhosttyStyleColorValue', 'palette'),
+      r: styleColorRgb + rgb('r'),
+      g: styleColorRgb + rgb('g'),
+      b: styleColorRgb + rgb('b'),
     },
     style: {
       size: abi.size('GhosttyStyle'),
@@ -505,6 +615,7 @@ function buildLayout(abi: AbiLayout): Layout {
       rectangle: abi.offset('GhosttySelection', 'rectangle'),
     },
     coordinate: {
+      size: abi.size('GhosttyPointCoordinate'),
       x: abi.offset('GhosttyPointCoordinate', 'x'),
       y: abi.offset('GhosttyPointCoordinate', 'y'),
     },
@@ -517,6 +628,115 @@ function buildLayout(abi: AbiLayout): Layout {
     surface: {
       x: abi.offset('GhosttySurfacePosition', 'x'),
       y: abi.offset('GhosttySurfacePosition', 'y'),
+    },
+    string: {
+      size: abi.size('GhosttyString'),
+      ptr: abi.offset('GhosttyString', 'ptr'),
+      len: abi.offset('GhosttyString', 'len'),
+    },
+    rgb: {
+      size: abi.size('GhosttyColorRgb'),
+      r: rgb('r'),
+      g: rgb('g'),
+      b: rgb('b'),
+    },
+    writer: {
+      write: abi.offset('GhosttyWriter', 'write'),
+      userdata: abi.offset('GhosttyWriter', 'userdata'),
+    },
+    clipboardWrite: {
+      location: clip('location'),
+      contents: clip('contents'),
+      contentsLen: clip('contents_len'),
+      reply: clip('reply'),
+    },
+    clipboardContent: {
+      size: abi.size('GhosttyClipboardContent'),
+      mime: abi.offset('GhosttyClipboardContent', 'mime'),
+      data: abi.offset('GhosttyClipboardContent', 'data'),
+    },
+    clipboardReply: {
+      size: abi.size('GhosttyClipboardWriteReply'),
+      result: abi.offset('GhosttyClipboardWriteReply', 'result'),
+      remember: abi.offset('GhosttyClipboardWriteReply', 'remember'),
+    },
+    notification: {
+      title: abi.offset('GhosttyTerminalDesktopNotification', 'title'),
+      body: abi.offset('GhosttyTerminalDesktopNotification', 'body'),
+    },
+    progress: {
+      state: abi.offset('GhosttyTerminalProgressReport', 'state'),
+      progress: abi.offset('GhosttyTerminalProgressReport', 'progress'),
+    },
+    programStatus: {
+      state: status('state'),
+      kind: status('kind'),
+      progress: status('progress'),
+      id: status('id'),
+      app: status('app'),
+      title: status('title'),
+      message: status('message'),
+    },
+    semanticPrompt: {
+      kind: prompt('kind'),
+      promptKind: prompt('prompt_kind'),
+      hasExitCode: prompt('has_exit_code'),
+      exitCode: prompt('exit_code'),
+      command: prompt('command'),
+      error: prompt('error'),
+    },
+    sizeReport: {
+      rows: sizeReport('rows'),
+      columns: sizeReport('columns'),
+      cellWidth: sizeReport('cell_width'),
+      cellHeight: sizeReport('cell_height'),
+    },
+    paste: {
+      size: abi.size('GhosttyPaste'),
+      location: paste('location'),
+      source: paste('source'),
+      mimes: paste('mimes'),
+      mimesLen: paste('mimes_len'),
+      reader: paste('reader'),
+      allowUnsafe: paste('allow_unsafe'),
+    },
+    mimeReader: {
+      read: abi.offset('GhosttyMimeReader', 'read'),
+      userdata: abi.offset('GhosttyMimeReader', 'userdata'),
+    },
+    mouseSize: {
+      size: abi.size('GhosttyMouseEncoderSize'),
+      screenWidth: mouseSize('screen_width'),
+      screenHeight: mouseSize('screen_height'),
+      cellWidth: mouseSize('cell_width'),
+      cellHeight: mouseSize('cell_height'),
+    },
+    mousePosition: {
+      x: abi.offset('GhosttyMousePosition', 'x'),
+      y: abi.offset('GhosttyMousePosition', 'y'),
+    },
+    scrollbar: {
+      size: abi.size('GhosttyTerminalScrollbar'),
+      total: abi.offset('GhosttyTerminalScrollbar', 'total'),
+      offset: abi.offset('GhosttyTerminalScrollbar', 'offset'),
+      len: abi.offset('GhosttyTerminalScrollbar', 'len'),
+    },
+    scrollViewport: {
+      size: abi.size('GhosttyTerminalScrollViewport'),
+      tag: abi.offset('GhosttyTerminalScrollViewport', 'tag'),
+      delta: scrollValue + abi.offset('GhosttyTerminalScrollViewportValue', 'delta'),
+      row: scrollValue + abi.offset('GhosttyTerminalScrollViewportValue', 'row'),
+    },
+    rowSelection: {
+      size: abi.size('GhosttyRenderStateRowSelection'),
+      startX: abi.offset('GhosttyRenderStateRowSelection', 'start_x'),
+      endX: abi.offset('GhosttyRenderStateRowSelection', 'end_x'),
+    },
+    selectionBuffer: {
+      size: abi.size('GhosttySelectionBuffer'),
+      ptr: abi.offset('GhosttySelectionBuffer', 'ptr'),
+      cap: abi.offset('GhosttySelectionBuffer', 'cap'),
+      len: abi.offset('GhosttySelectionBuffer', 'len'),
     },
   };
 }
@@ -754,8 +974,9 @@ export class Ghostty {
         const data = this.pasteData;
         if (!data) return 0;
         const view = this.mem.view();
-        const write = view.getUint32(writerPtr, true);
-        const writerData = view.getUint32(writerPtr + 4, true);
+        const W = this.layout.writer;
+        const write = view.getUint32(writerPtr + W.write, true);
+        const writerData = view.getUint32(writerPtr + W.userdata, true);
         const len = Math.max(1, data.length);
         const ptr = ex.ghostty_wasm_alloc(len);
         if (!ptr) return 0;
@@ -788,11 +1009,11 @@ export class Ghostty {
   }
 
   createKeyEncoder(): KeyEncoder {
-    return new KeyEncoder(this.exports, this.mem);
+    return new KeyEncoder(this.exports, this.mem, this.layout);
   }
 
   createMouseEncoder(): MouseEncoder {
-    return new MouseEncoder(this.exports, this.mem);
+    return new MouseEncoder(this.exports, this.mem, this.layout);
   }
 
   createTerminal(
@@ -908,10 +1129,12 @@ export class KeyEncoder {
   private exports: GhosttyWasmExports;
   private mem: Memory;
   private encoder: number = 0;
+  private L: Layout;
 
-  constructor(exports: GhosttyWasmExports, mem: Memory) {
+  constructor(exports: GhosttyWasmExports, mem: Memory, layout: Layout) {
     this.exports = exports;
     this.mem = mem;
+    this.L = layout;
     const slot = this.exports.ghostty_wasm_alloc_opaque();
     const result = this.exports.ghostty_key_encoder_new(0, slot);
     this.encoder = this.exports.ghostty_wasm_take_opaque(slot);
@@ -978,11 +1201,11 @@ export class KeyEncoder {
         const utf8Bytes = new TextEncoder().encode(event.utf8);
         utf8Len = utf8Bytes.length;
         utf8Ptr = ex.ghostty_wasm_alloc(utf8Len);
-        stringPtr = ex.ghostty_wasm_alloc(8);
+        stringPtr = ex.ghostty_wasm_alloc(this.L.string.size);
         this.mem.bytes().set(utf8Bytes, utf8Ptr);
         const view = this.mem.view();
-        view.setUint32(stringPtr, utf8Ptr, true);
-        view.setUint32(stringPtr + 4, utf8Len, true);
+        view.setUint32(stringPtr + this.L.string.ptr, utf8Ptr, true);
+        view.setUint32(stringPtr + this.L.string.len, utf8Len, true);
         ex.ghostty_key_event_set_utf8(eventPtr, stringPtr);
       }
 
@@ -1002,7 +1225,7 @@ export class KeyEncoder {
     } finally {
       ex.ghostty_wasm_free(bufPtr, bufferSize);
       ex.ghostty_wasm_free(writtenPtr, 4);
-      if (stringPtr) ex.ghostty_wasm_free(stringPtr, 8);
+      if (stringPtr) ex.ghostty_wasm_free(stringPtr, this.L.string.size);
       if (utf8Ptr) ex.ghostty_wasm_free(utf8Ptr, utf8Len);
       ex.ghostty_key_event_free(eventPtr);
     }
@@ -1063,10 +1286,12 @@ export class MouseEncoder {
   private encoder = 0;
   private event = 0;
   private scratch = 0;
+  private L: Layout;
 
-  constructor(exports: GhosttyWasmExports, mem: Memory) {
+  constructor(exports: GhosttyWasmExports, mem: Memory, layout: Layout) {
     this.exports = exports;
     this.mem = mem;
+    this.L = layout;
     const ex = exports;
     const slot = ex.ghostty_wasm_alloc_opaque();
     try {
@@ -1095,14 +1320,15 @@ export class MouseEncoder {
   /** Surface size and cell size; the encoder turns positions into cells. */
   setGeometry(g: MouseGeometry): void {
     const p = this.scratch;
+    const S = this.L.mouseSize;
     const view = this.mem.view();
     const u32 = (offset: number, v: number) => view.setUint32(p + offset, v, true);
-    for (let i = 0; i < 36; i += 4) u32(i, 0);
-    u32(0, 36); // size
-    u32(4, Math.max(1, Math.round(g.screenWidth)));
-    u32(8, Math.max(1, Math.round(g.screenHeight)));
-    u32(12, Math.max(1, Math.round(g.cellWidth)));
-    u32(16, Math.max(1, Math.round(g.cellHeight)));
+    this.mem.bytes().fill(0, p, p + S.size);
+    u32(0, S.size); // sized struct: the size field comes first
+    u32(S.screenWidth, Math.max(1, Math.round(g.screenWidth)));
+    u32(S.screenHeight, Math.max(1, Math.round(g.screenHeight)));
+    u32(S.cellWidth, Math.max(1, Math.round(g.cellWidth)));
+    u32(S.cellHeight, Math.max(1, Math.round(g.cellHeight)));
     this.exports.ghostty_mouse_encoder_set(this.encoder, MouseEncoderOpt.SIZE, p);
   }
 
@@ -1140,8 +1366,8 @@ export class MouseEncoder {
     ex.ghostty_mouse_event_set_mods(ev, mods);
     const pos = this.scratch + 64;
     const view = this.mem.view();
-    view.setFloat32(pos, x, true);
-    view.setFloat32(pos + 4, y, true);
+    view.setFloat32(pos + this.L.mousePosition.x, x, true);
+    view.setFloat32(pos + this.L.mousePosition.y, y, true);
     ex.ghostty_mouse_event_set_position(ev, pos);
 
     const buf = this.scratch + 96;
@@ -1213,7 +1439,8 @@ export class GhosttyTerminal {
   /** Default colors and palette from the last update, used to resolve cell colors. */
   private fgDefault: RGB = { r: 204, g: 204, b: 204 };
   private bgDefault: RGB = { r: 0, g: 0, b: 0 };
-  private palette = new Uint8Array(256 * 3);
+  /** The 256-color palette as GhosttyColorRgb[256]. */
+  private palette: Uint8Array;
   private colorsFresh = false;
   /** Whether libghostty's viewport is pinned to the active area. */
   private atBottom = true;
@@ -1235,6 +1462,7 @@ export class GhosttyTerminal {
     this.exports = exports;
     this.mem = mem;
     this.L = layout;
+    this.palette = new Uint8Array(256 * layout.rgb.size);
     this._cols = cols;
     this._rows = rows;
 
@@ -1308,8 +1536,8 @@ export class GhosttyTerminal {
   /** Read a GhosttyString (ptr, len) at `at` as UTF-8. */
   private readString(at: number): string {
     const view = this.mem.view();
-    const ptr = view.getUint32(at, true);
-    const len = view.getUint32(at + 4, true);
+    const ptr = view.getUint32(at + this.L.string.ptr, true);
+    const len = view.getUint32(at + this.L.string.len, true);
     if (!ptr || !len) return '';
     return new TextDecoder().decode(this.mem.bytes().slice(ptr, ptr + len));
   }
@@ -1360,78 +1588,88 @@ export class GhosttyTerminal {
   onClipboardWrite(ptr: number): void {
     const handler = this.effects.clipboardWrite;
     if (!handler || !this.ghostty) return;
+    const W = this.L.clipboardWrite;
+    const C = this.L.clipboardContent;
     const view = this.mem.view();
-    const location = (['standard', 'selection', 'primary'] as const)[view.getUint32(ptr, true)];
-    const contentsPtr = view.getUint32(ptr + 4, true);
-    const count = view.getUint32(ptr + 8, true);
+    const location = CLIPBOARD_LOCATIONS[view.getUint32(ptr + W.location, true)];
+    const contentsPtr = view.getUint32(ptr + W.contents, true);
+    const count = view.getUint32(ptr + W.contentsLen, true);
     const contents: ClipboardWriteRequest['contents'] = [];
     for (let i = 0; i < count; i++) {
-      const c = contentsPtr + i * 16;
+      const c = contentsPtr + i * C.size;
       const v = this.mem.view();
-      const dataPtr = v.getUint32(c + 8, true);
-      const dataLen = v.getUint32(c + 12, true);
+      const dataPtr = v.getUint32(c + C.data + this.L.string.ptr, true);
+      const dataLen = v.getUint32(c + C.data + this.L.string.len, true);
       contents.push({
-        mime: this.readString(c),
+        mime: this.readString(c + C.mime),
         data: this.mem.bytes().slice(dataPtr, dataPtr + dataLen),
       });
     }
     const ok = handler({ location: location ?? 'standard', contents });
 
+    const R = this.L.clipboardReply;
     const reply = this.selScratch + 160;
+    this.mem.bytes().fill(0, reply, reply + R.size);
     const v = this.mem.view();
-    v.setUint32(reply, 12, true); // size
-    v.setUint32(reply + 4, ok ? 0 : 1, true); // SUCCESS or DENIED
-    v.setUint32(reply + 8, 0, true); // remember: false
-    const replyFn = this.mem.view().getUint32(ptr + 28, true);
+    v.setUint32(reply, R.size, true); // sized struct: the size field comes first
+    v.setUint32(
+      reply + R.result,
+      ok ? ClipboardWriteResult.SUCCESS : ClipboardWriteResult.DENIED,
+      true
+    );
+    v.setUint8(reply + R.remember, 0);
+    const replyFn = v.getUint32(ptr + W.reply, true);
     this.ghostty.callTable(replyFn, ptr, reply);
   }
 
   /** @internal */
   onNotification(ptr: number): void {
-    this.effects.notification?.({ title: this.readString(ptr), body: this.readString(ptr + 8) });
+    const N = this.L.notification;
+    this.effects.notification?.({
+      title: this.readString(ptr + N.title),
+      body: this.readString(ptr + N.body),
+    });
   }
 
   /** @internal */
   onProgress(ptr: number): void {
+    const P = this.L.progress;
     const view = this.mem.view();
-    const states = ['remove', 'set', 'error', 'indeterminate', 'pause'] as const;
-    const progress = view.getInt8(ptr + 4);
+    const progress = view.getInt8(ptr + P.progress);
     this.effects.progress?.({
-      state: states[view.getUint32(ptr, true)] ?? 'remove',
+      state: PROGRESS_STATES[view.getUint32(ptr + P.state, true)] ?? 'remove',
       progress: progress < 0 ? null : progress,
     });
   }
 
   /** @internal */
   onProgramStatus(ptr: number): void {
+    const S = this.L.programStatus;
     const view = this.mem.view();
-    const states = ['idle', 'working', 'done', 'blocked', 'error', 'clear'] as const;
-    const kinds = ['none', 'permission', 'question', 'auth'] as const;
-    const progress = view.getInt8(ptr + 8);
+    const progress = view.getInt8(ptr + S.progress);
     this.effects.programStatus?.({
-      state: states[view.getUint32(ptr, true)] ?? 'idle',
-      kind: kinds[view.getUint32(ptr + 4, true)] ?? 'none',
+      state: PROGRAM_STATUS_STATES[view.getUint32(ptr + S.state, true)] ?? 'idle',
+      kind: PROGRAM_STATUS_KINDS[view.getUint32(ptr + S.kind, true)] ?? 'none',
       progress: progress < 0 ? null : progress,
-      id: this.readString(ptr + 12),
-      app: this.readString(ptr + 20),
-      title: this.readString(ptr + 28),
-      message: this.readString(ptr + 36),
+      id: this.readString(ptr + S.id),
+      app: this.readString(ptr + S.app),
+      title: this.readString(ptr + S.title),
+      message: this.readString(ptr + S.message),
     });
   }
 
   /** @internal */
   onSemanticPrompt(ptr: number): void {
+    const S = this.L.semanticPrompt;
     const view = this.mem.view();
-    const kinds = [null, 'prompt-start', 'input-start', 'output-start', 'command-end'] as const;
-    const promptKinds = ['primary', 'right', 'continuation', 'secondary'] as const;
-    const kind = kinds[view.getUint32(ptr, true)];
+    const kind = SEMANTIC_PROMPT_KINDS[view.getUint32(ptr + S.kind, true)];
     if (!kind) return;
     this.effects.semanticPrompt?.({
       kind,
-      promptKind: promptKinds[view.getUint32(ptr + 4, true)] ?? 'primary',
-      exitCode: view.getUint8(ptr + 8) ? view.getInt32(ptr + 12, true) : null,
-      command: this.readString(ptr + 16),
-      error: this.readString(ptr + 24),
+      promptKind: PROMPT_KINDS[view.getUint32(ptr + S.promptKind, true)] ?? 'primary',
+      exitCode: view.getUint8(ptr + S.hasExitCode) ? view.getInt32(ptr + S.exitCode, true) : null,
+      command: this.readString(ptr + S.command),
+      error: this.readString(ptr + S.error),
     });
   }
 
@@ -1439,7 +1677,8 @@ export class GhosttyTerminal {
   onColorScheme(ptr: number): number {
     const scheme = this.effects.colorScheme?.();
     if (!scheme) return 0;
-    this.mem.view().setUint32(ptr, scheme === 'dark' ? 1 : 0, true);
+    const value = scheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
+    this.mem.view().setUint32(ptr, value, true);
     return 1;
   }
 
@@ -1447,11 +1686,12 @@ export class GhosttyTerminal {
   onSizeQuery(ptr: number): number {
     const cell = this.effects.cellSize?.();
     if (!cell) return 0;
+    const S = this.L.sizeReport;
     const view = this.mem.view();
-    view.setUint16(ptr, this._rows, true);
-    view.setUint16(ptr + 2, this._cols, true);
-    view.setUint32(ptr + 4, Math.max(1, Math.round(cell.width)), true);
-    view.setUint32(ptr + 8, Math.max(1, Math.round(cell.height)), true);
+    view.setUint16(ptr + S.rows, this._rows, true);
+    view.setUint16(ptr + S.columns, this._cols, true);
+    view.setUint32(ptr + S.cellWidth, Math.max(1, Math.round(cell.width)), true);
+    view.setUint32(ptr + S.cellHeight, Math.max(1, Math.round(cell.height)), true);
     return 1;
   }
 
@@ -1502,29 +1742,37 @@ export class GhosttyTerminal {
     const data = new TextEncoder().encode(text);
     const mime = new TextEncoder().encode('text/plain');
 
+    const P = this.L.paste;
+    const S = this.L.string;
+    const R = this.L.mimeReader;
+    // One block: the GhosttyPaste, the out-param, a GhosttyString[1] of mime
+    // types and the mime type's bytes.
+    const align4 = (n: number) => (n + 3) & ~3;
+    const out = align4(P.size);
+    const mimes = out + 4;
+    const mimeBytes = mimes + align4(S.size);
+    const blockSize = mimeBytes + mime.length;
+
     return ghostty.withPasteData(data, (readerFn) => {
-      const block = ex.ghostty_wasm_alloc(64);
-      const mimePtr = block + 48;
-      const mimes = block + 40; // GhosttyString[1]
-      const paste = block; // GhosttyPaste (32 bytes)
-      const out = block + 36;
+      const block = ex.ghostty_wasm_alloc(blockSize);
+      const paste = block;
+      this.mem.bytes().fill(0, block, block + blockSize);
+      this.mem.bytes().set(mime, block + mimeBytes);
       const view = this.mem.view();
-      for (let i = 0; i < 64; i += 4) view.setUint32(block + i, 0, true);
-      this.mem.bytes().set(mime, mimePtr);
-      view.setUint32(mimes, mimePtr, true);
-      view.setUint32(mimes + 4, mime.length, true);
-      view.setUint32(paste, 32, true); // size
-      view.setUint32(paste + 4, 0, true); // location: standard clipboard
-      view.setUint32(paste + 8, 0, true); // source: clipboard
-      view.setUint32(paste + 12, mimes, true);
-      view.setUint32(paste + 16, 1, true);
-      view.setUint32(paste + 20, readerFn, true); // reader.read
-      view.setUint32(paste + 24, 0, true); // reader.userdata
-      view.setUint8(paste + 28, 1); // allow_unsafe
+      view.setUint32(block + mimes + S.ptr, block + mimeBytes, true);
+      view.setUint32(block + mimes + S.len, mime.length, true);
+      view.setUint32(paste, P.size, true); // sized struct: the size field comes first
+      view.setUint32(paste + P.location, CLIPBOARD_LOCATIONS.indexOf('standard'), true);
+      view.setUint32(paste + P.source, PasteSource.CLIPBOARD, true);
+      view.setUint32(paste + P.mimes, block + mimes, true);
+      view.setUint32(paste + P.mimesLen, 1, true);
+      view.setUint32(paste + P.reader + R.read, readerFn, true);
+      view.setUint32(paste + P.reader + R.userdata, 0, true);
+      view.setUint8(paste + P.allowUnsafe, 1);
 
       this.capture = [];
       try {
-        const result = ex.ghostty_terminal_paste(this.handle, paste, out);
+        const result = ex.ghostty_terminal_paste(this.handle, paste, block + out);
         const chunks = this.capture;
         if (result !== GHOSTTY_SUCCESS) return '';
         const all = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
@@ -1536,7 +1784,7 @@ export class GhosttyTerminal {
         return new TextDecoder().decode(all);
       } finally {
         this.capture = null;
-        ex.ghostty_wasm_free(block, 64);
+        ex.ghostty_wasm_free(block, blockSize);
       }
     });
   }
@@ -1564,13 +1812,25 @@ export class GhosttyTerminal {
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE, ptr);
   }
 
-  private setColor(option: number, hex: number): void {
-    const ptr = this.scratch;
+  /** Write 0xRRGGBB as a GhosttyColorRgb at `at`. */
+  private writeRgb(at: number, hex: number): void {
+    const C = this.L.rgb;
     const view = this.mem.view();
-    view.setUint8(ptr, (hex >> 16) & 0xff);
-    view.setUint8(ptr + 1, (hex >> 8) & 0xff);
-    view.setUint8(ptr + 2, hex & 0xff);
-    this.exports.ghostty_terminal_set(this.handle, option, ptr);
+    view.setUint8(at + C.r, (hex >> 16) & 0xff);
+    view.setUint8(at + C.g, (hex >> 8) & 0xff);
+    view.setUint8(at + C.b, hex & 0xff);
+  }
+
+  /** Read a GhosttyColorRgb at `at`. */
+  private readRgb(at: number): RGB {
+    const C = this.L.rgb;
+    const b = this.mem.bytes();
+    return { r: b[at + C.r], g: b[at + C.g], b: b[at + C.b] };
+  }
+
+  private setColor(option: number, hex: number): void {
+    this.writeRgb(this.scratch, hex);
+    this.exports.ghostty_terminal_set(this.handle, option, this.scratch);
   }
 
   /** Apply ghostterm's config. A color of 0 means "keep the library default". */
@@ -1622,12 +1882,8 @@ export class GhosttyTerminal {
         ex.ghostty_terminal_get(this.handle, TerminalData.COLOR_PALETTE_DEFAULT, ptr),
         'read default palette'
       );
-      const view = this.mem.view();
       colors.palette.forEach((hex, i) => {
-        if (hex === undefined || i >= 256) return;
-        view.setUint8(ptr + i * 3, (hex >> 16) & 0xff);
-        view.setUint8(ptr + i * 3 + 1, (hex >> 8) & 0xff);
-        view.setUint8(ptr + i * 3 + 2, hex & 0xff);
+        if (hex !== undefined && i < 256) this.writeRgb(ptr + i * this.L.rgb.size, hex);
       });
       ex.ghostty_terminal_set(this.handle, TerminalOpt.COLOR_PALETTE, ptr);
     }
@@ -1828,10 +2084,10 @@ export class GhosttyTerminal {
     const c = this.L.colors;
     this.mem.view().setUint32(ptr, c.size, true);
     this.exports.ghostty_render_state_get(this.renderState, RenderData.COLORS, ptr);
-    const b = this.mem.bytes();
-    this.bgDefault = { r: b[ptr + c.bg], g: b[ptr + c.bg + 1], b: b[ptr + c.bg + 2] };
-    this.fgDefault = { r: b[ptr + c.fg], g: b[ptr + c.fg + 1], b: b[ptr + c.fg + 2] };
-    this.palette.set(b.subarray(ptr + c.palette, ptr + c.palette + 768));
+    this.bgDefault = this.readRgb(ptr + c.bg);
+    this.fgDefault = this.readRgb(ptr + c.fg);
+    const palette = ptr + c.palette;
+    this.palette.set(this.mem.bytes().subarray(palette, palette + this.palette.length));
     this.colorsFresh = true;
   }
 
@@ -1849,9 +2105,7 @@ export class GhosttyTerminal {
     return {
       background: { ...this.bgDefault },
       foreground: { ...this.fgDefault },
-      cursor: hasCursor
-        ? { r: b[ptr + c.cursor], g: b[ptr + c.cursor + 1], b: b[ptr + c.cursor + 2] }
-        : null,
+      cursor: hasCursor ? this.readRgb(ptr + c.cursor) : null,
     };
   }
 
@@ -1900,13 +2154,14 @@ export class GhosttyTerminal {
             return cellsHandle();
           };
           // The row's selected columns (inclusive), from the terminal's selection.
+          const RS = this.L.rowSelection;
           const selPtr = this.scratch + 192;
-          this.mem.view().setUint32(selPtr, 8, true);
+          this.mem.view().setUint32(selPtr, RS.size, true);
           const selected =
             ex.ghostty_render_state_row_get(iter, RowData.SELECTION, selPtr) === GHOSTTY_SUCCESS
               ? ([
-                  this.mem.view().getUint16(selPtr + 4, true),
-                  this.mem.view().getUint16(selPtr + 6, true),
+                  this.mem.view().getUint16(selPtr + RS.startX, true),
+                  this.mem.view().getUint16(selPtr + RS.endX, true),
                 ] as const)
               : null;
           this.readRow(y, viewPtr, rowCells, selected);
@@ -1935,7 +2190,8 @@ export class GhosttyTerminal {
     const lenPtr = this.scratch + 128;
 
     // Copy the raw row out first: style lookups below may grow memory.
-    const raw = this.mem.bytes().slice(cellsPtr, cellsPtr + len * 8);
+    const cellSize = L.cellSize;
+    const raw = this.mem.bytes().slice(cellsPtr, cellsPtr + len * cellSize);
     const rawView = new DataView(raw.buffer);
 
     for (let x = 0; x < this._cols; x++) {
@@ -1944,8 +2200,8 @@ export class GhosttyTerminal {
         this.setBlank(cell);
         continue;
       }
-      const lo = rawView.getUint32(x * 8, true);
-      const hi = rawView.getUint32(x * 8 + 4, true);
+      const lo = rawView.getUint32(x * cellSize, true);
+      const hi = rawView.getUint32(x * cellSize + 4, true);
       const styleId = readBits(lo, hi, L.cell.styleId);
       const tag = readBits(lo, hi, L.cell.contentTag);
 
@@ -2066,19 +2322,22 @@ export class GhosttyTerminal {
   }
 
   private paletteColor(index: number): RGB {
+    const C = this.L.rgb;
     const p = this.palette;
-    return { r: p[index * 3], g: p[index * 3 + 1], b: p[index * 3 + 2] };
+    const at = index * C.size;
+    return { r: p[at + C.r], g: p[at + C.g], b: p[at + C.b] };
   }
 
   /** Resolve a GhosttyStyleColor at `offset`; null means "use the default". */
   private resolveStyleColor(style: DataView, offset: number): RGB | null {
-    const tag = style.getUint8(offset);
-    if (tag === StyleColorTag.PALETTE) return this.paletteColor(style.getUint8(offset + 1));
+    const C = this.L.styleColor;
+    const tag = style.getUint8(offset + C.tag);
+    if (tag === StyleColorTag.PALETTE) return this.paletteColor(style.getUint8(offset + C.value));
     if (tag === StyleColorTag.RGB) {
       return {
-        r: style.getUint8(offset + 1),
-        g: style.getUint8(offset + 2),
-        b: style.getUint8(offset + 3),
+        r: style.getUint8(offset + C.r),
+        g: style.getUint8(offset + C.g),
+        b: style.getUint8(offset + C.b),
       };
     }
     return null;
@@ -2117,41 +2376,49 @@ export class GhosttyTerminal {
    * The offset is clamped to the scrollback length.
    */
   setViewportOffset(offset: number): void {
-    const ex = this.exports;
-    const ptr = this.scratch + 448;
-    ex.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
-    let view = this.mem.view();
-    const total = Number(view.getBigUint64(ptr, true));
-    const top = Number(view.getBigUint64(ptr + 8, true));
-    const len = Number(view.getBigUint64(ptr + 16, true));
+    const { total, offset: top, len } = this.scrollbar();
     const maxOffset = Math.max(0, total - len);
     const target = Math.max(0, Math.min(maxOffset, Math.floor(offset)));
     const current = maxOffset - top;
     if (target === current && this.atBottom === (target === 0)) return;
 
-    const behaviorPtr = this.scratch + 480;
-    view = this.mem.view();
-    for (let i = 0; i < 24; i += 4) view.setUint32(behaviorPtr + i, 0, true);
-    if (target === 0) {
-      view.setInt32(behaviorPtr, ScrollViewport.BOTTOM, true);
-    } else {
-      view.setInt32(behaviorPtr, ScrollViewport.ROW, true);
-      view.setUint32(behaviorPtr + 8, maxOffset - target, true);
-    }
-    ex.ghostty_terminal_scroll_viewport(this.handle, behaviorPtr);
+    if (target === 0) this.scrollViewport(ScrollViewport.BOTTOM, 0);
+    else this.scrollViewport(ScrollViewport.ROW, maxOffset - target);
     this.atBottom = target === 0;
+  }
+
+  /** The terminal's GhosttyTerminalScrollbar: rows in total, top of the viewport, its height. */
+  private scrollbar(): { total: number; offset: number; len: number } {
+    const S = this.L.scrollbar;
+    const ptr = this.scratch + 448;
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
+    const view = this.mem.view();
+    return {
+      total: Number(view.getBigUint64(ptr + S.total, true)),
+      offset: Number(view.getBigUint64(ptr + S.offset, true)),
+      len: Number(view.getBigUint64(ptr + S.len, true)),
+    };
+  }
+
+  /**
+   * Scroll libghostty's viewport (GhosttyTerminalScrollViewport). `value` is
+   * the delta for DELTA and DELTA_PROMPT and the row for ROW.
+   */
+  private scrollViewport(tag: number, value: number): void {
+    const S = this.L.scrollViewport;
+    const ptr = this.scratch + 480;
+    this.mem.bytes().fill(0, ptr, ptr + S.size);
+    const view = this.mem.view();
+    view.setInt32(ptr + S.tag, tag, true);
+    if (tag === ScrollViewport.ROW) view.setUint32(ptr + S.row, value, true);
+    else view.setInt32(ptr + S.delta, value, true);
+    this.exports.ghostty_terminal_scroll_viewport(this.handle, ptr);
     this.pendingUpdate = true;
   }
 
   private scrollBy(tag: number, amount: number): void {
-    const behaviorPtr = this.scratch + 480;
-    const view = this.mem.view();
-    for (let i = 0; i < 24; i += 4) view.setUint32(behaviorPtr + i, 0, true);
-    view.setInt32(behaviorPtr, tag, true);
-    view.setInt32(behaviorPtr + 8, amount, true);
-    this.exports.ghostty_terminal_scroll_viewport(this.handle, behaviorPtr);
+    this.scrollViewport(tag, amount);
     this.atBottom = this.getViewportOffset() === 0;
-    this.pendingUpdate = true;
   }
 
   /**
@@ -2175,13 +2442,8 @@ export class GhosttyTerminal {
 
   /** Rows the viewport is scrolled above the bottom (0 when pinned). */
   getViewportOffset(): number {
-    const ptr = this.scratch + 448;
-    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBAR, ptr);
-    const view = this.mem.view();
-    const total = Number(view.getBigUint64(ptr, true));
-    const top = Number(view.getBigUint64(ptr + 8, true));
-    const len = Number(view.getBigUint64(ptr + 16, true));
-    return Math.max(0, total - len - top);
+    const { total, offset, len } = this.scrollbar();
+    return Math.max(0, total - len - offset);
   }
 
   /**
@@ -2686,7 +2948,7 @@ export class GhosttyTerminal {
 
   /** Create a search over this terminal's scrollback and screen. */
   createSearch(): TerminalSearch {
-    return new TerminalSearch(this.exports, this.mem, this);
+    return new TerminalSearch(this.exports, this.mem, this.L, this);
   }
 
   /** Create a selection gesture: Ghostty's click, double-click and drag rules. */
@@ -2950,8 +3212,7 @@ export class SelectionGesture {
     this.setRectangle(event, rectangle);
     const coord = this.scratch + 80;
     const view = this.mem.view();
-    view.setUint32(coord, 0, true);
-    view.setUint32(coord + 4, 0, true);
+    this.mem.bytes().fill(0, coord, coord + this.L.coordinate.size);
     view.setUint16(coord + this.L.coordinate.x, col, true);
     view.setUint32(coord + this.L.coordinate.y, row, true);
     ex.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_VIEWPORT, coord);
@@ -3002,7 +3263,6 @@ const SearchData = {
   SELECTED_MATCH: 5,
   VIEWPORT_MATCHES: 7,
 } as const;
-const SELECTION_SIZE = 20;
 
 /**
  * A search for literal text over a terminal's scrollback and screen, using
@@ -3018,6 +3278,7 @@ export class TerminalSearch {
   constructor(
     private exports: GhosttyWasmExports,
     private mem: Memory,
+    private L: Layout,
     private term: GhosttyTerminal
   ) {
     const ex = exports;
@@ -3129,29 +3390,29 @@ export class TerminalSearch {
     const ex = this.exports;
     if (!this.needle) return [];
     ex.ghostty_search_feed(this.search);
-    const buf = this.scratch + 16; // GhosttySelectionBuffer { ptr, cap, len }
-    const view = this.mem.view();
-    view.setUint32(buf, 0, true);
-    view.setUint32(buf + 4, 0, true);
-    view.setUint32(buf + 8, 0, true);
+    // A first call with no buffer reports how many matches there are.
+    const B = this.L.selectionBuffer;
+    const selectionSize = this.L.selection.size;
+    const buf = this.scratch + 16;
+    this.mem.bytes().fill(0, buf, buf + B.size);
     ex.ghostty_search_get(this.search, SearchData.VIEWPORT_MATCHES, buf);
-    const count = this.mem.view().getUint32(buf + 8, true);
+    const count = this.mem.view().getUint32(buf + B.len, true);
     if (count === 0) return [];
-    const bytes = count * SELECTION_SIZE;
+    const bytes = count * selectionSize;
     const arr = ex.ghostty_wasm_alloc(bytes);
     try {
       const v = this.mem.view();
-      v.setUint32(buf, arr, true);
-      v.setUint32(buf + 4, count, true);
+      v.setUint32(buf + B.ptr, arr, true);
+      v.setUint32(buf + B.cap, count, true);
       if (
         ex.ghostty_search_get(this.search, SearchData.VIEWPORT_MATCHES, buf) !== GHOSTTY_SUCCESS
       ) {
         return [];
       }
-      const written = this.mem.view().getUint32(buf + 8, true);
+      const written = this.mem.view().getUint32(buf + B.len, true);
       const out: SelectionRange[] = [];
       for (let i = 0; i < Math.min(written, count); i++) {
-        const range = this.term.selectionRangeAt(arr + i * SELECTION_SIZE);
+        const range = this.term.selectionRangeAt(arr + i * selectionSize);
         if (range) out.push(range);
       }
       return out;
