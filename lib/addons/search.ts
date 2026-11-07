@@ -66,7 +66,7 @@ export interface ISearchResultChangeEvent {
 interface SearchableTerminal extends ITerminalCore {
   wasmTerm?: GhosttyTerminal;
   getViewportY(): number;
-  scrollToLine(line: number): void;
+  scrollToViewportOffset(offset: number): void;
   clearSelection(): void;
 }
 
@@ -178,7 +178,7 @@ export class SearchAddon implements ITerminalAddon {
     if (found) {
       search.selectMatchAsSelection();
       // libghostty scrolled its viewport to the match; follow it.
-      terminal.scrollToLine(terminal.wasmTerm!.getViewportOffset());
+      terminal.scrollToViewportOffset(terminal.wasmTerm!.getViewportOffset());
     }
 
     this.decorations = options.decorations;

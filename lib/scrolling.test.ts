@@ -527,37 +527,57 @@ describe('Scrolling Methods', () => {
       term.write(`Line ${i}\r\n`);
     }
 
-    // Scroll to line 15
+    // Line 15 of the buffer (0 = oldest scrollback line) becomes the top row,
+    // as in xterm.js.
     term.scrollToLine(15);
 
-    expect((term as any).viewportY).toBe(15);
+    const scrollbackLength = term.wasmTerm!.getScrollbackLength();
+    expect(term.buffer.active.viewportY).toBe(15);
+    expect(term.viewportY).toBe(scrollbackLength - 15);
+    expect(term.buffer.active.getLine(15)!.translateToString(true)).toBe('Line 15');
   });
 
-  test('scrollToLine() should clamp to valid range', async () => {
-    // Write limited content
-    for (let i = 0; i < 10; i++) {
+  test('scrollToLine() past the end scrolls to the bottom', async () => {
+    for (let i = 0; i < 50; i++) {
       term.write(`Line ${i}\r\n`);
     }
+    term.scrollLines(-10);
 
-    // Try to scroll beyond buffer
     term.scrollToLine(1000);
 
-    // Should be clamped
-    const scrollbackLength = term.wasmTerm!.getScrollbackLength();
-    expect((term as any).viewportY).toBeLessThanOrEqual(scrollbackLength);
+    expect(term.viewportY).toBe(0);
+    expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
   });
 
-  test('scrollToLine() should handle negative values', async () => {
-    // Write content
+  test('scrollToLine() before the start scrolls to the top', async () => {
     for (let i = 0; i < 50; i++) {
       term.write(`Line ${i}\r\n`);
     }
 
-    // Try negative line
     term.scrollToLine(-5);
 
-    // Should be clamped to 0 (bottom)
-    expect((term as any).viewportY).toBe(0);
+    expect(term.viewportY).toBe(term.wasmTerm!.getScrollbackLength());
+    expect(term.buffer.active.viewportY).toBe(0);
+  });
+
+  test('immediate scrolls stop a running smooth scroll', async () => {
+    for (let i = 0; i < 100; i++) {
+      term.write(`Line ${i}\r\n`);
+    }
+    // Start a smooth scroll up with the wheel...
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, cancelable: true }));
+    expect((term as any).scrollAnimationFrame).toBeDefined();
+
+    // ...then jump to the bottom before it finishes.
+    term.scrollToBottom();
+    expect((term as any).scrollAnimationFrame).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(term.viewportY).toBe(0);
+
+    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, cancelable: true }));
+    term.scrollToLine(10);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(term.buffer.active.viewportY).toBe(10);
   });
 });
 
@@ -583,21 +603,42 @@ describe('Scroll Events', () => {
     let scrollPosition = -1;
     let fireCount = 0;
 
-    term.onScroll((position) => {
-      scrollPosition = position;
-      fireCount++;
-    });
-
     // Write content
     for (let i = 0; i < 50; i++) {
       term.write(`Line ${i}\r\n`);
     }
 
+    term.onScroll((position) => {
+      scrollPosition = position;
+      fireCount++;
+    });
+
     // Scroll up
     term.scrollLines(-5);
 
+    // Reports the top line, like xterm.js (buffer.active.viewportY)
     expect(fireCount).toBe(1);
-    expect(scrollPosition).toBe(5);
+    expect(scrollPosition).toBe(term.buffer.active.viewportY);
+    expect(scrollPosition).toBe(term.wasmTerm!.getScrollbackLength() - 5);
+  });
+
+  test('onScroll fires as output scrolls the view at the bottom', async () => {
+    const positions: number[] = [];
+    term.onScroll((position) => positions.push(position));
+    for (let i = 0; i < 30; i++) {
+      term.write(`Line ${i}\r\n`);
+    }
+    expect(positions.length).toBeGreaterThan(0);
+    expect(positions.at(-1)).toBe(term.buffer.active.baseY);
+  });
+
+  test('onScroll does not fire for output while scrolled up', async () => {
+    for (let i = 0; i < 50; i++) term.write(`Line ${i}\r\n`);
+    term.scrollLines(-5);
+    const positions: number[] = [];
+    term.onScroll((position) => positions.push(position));
+    for (let i = 0; i < 5; i++) term.write(`More ${i}\r\n`);
+    expect(positions).toEqual([]);
   });
 
   test('onScroll should not fire if position unchanged', async () => {
@@ -616,24 +657,22 @@ describe('Scroll Events', () => {
   test('onScroll should fire multiple times for multiple scrolls', async () => {
     const positions: number[] = [];
 
-    term.onScroll((position) => {
-      positions.push(position);
-    });
-
     // Write content
     for (let i = 0; i < 100; i++) {
       term.write(`Line ${i}\r\n`);
     }
+    const base = term.buffer.active.baseY;
+
+    term.onScroll((position) => {
+      positions.push(position);
+    });
 
     // Multiple scrolls
     term.scrollLines(-5);
     term.scrollLines(-3);
     term.scrollLines(2);
 
-    expect(positions.length).toBe(3);
-    expect(positions[0]).toBe(5);
-    expect(positions[1]).toBe(8);
-    expect(positions[2]).toBe(6);
+    expect(positions).toEqual([base - 5, base - 8, base - 6]);
   });
 
   // Note: onRender event implementation uses dirty tracking for performance

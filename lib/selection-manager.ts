@@ -540,7 +540,7 @@ export class SelectionManager {
         this.geometry(),
         this.rectangle
       );
-      this.terminal.scrollToLine(this.wasmTerm.getViewportOffset());
+      this.terminal.scrollToViewportOffset(this.wasmTerm.getViewportOffset());
       if (!ok || this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
         this.stopAutoScroll();
       }
