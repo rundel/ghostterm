@@ -59,9 +59,6 @@ export class SelectionManager {
   /** The textarea's own style while it is borrowed for a context menu. */
   private textareaStyle: string | null = null;
 
-  // Track rows that need redraw for clearing old selection
-  private dirtySelectionRows: Set<number> = new Set();
-
   // Event emitter
   private selectionChangedEmitter = new EventEmitter<void>();
 
@@ -179,7 +176,6 @@ export class SelectionManager {
    */
   clearSelection(): void {
     if (!this.hasSelection()) return;
-    this.markCurrentSelectionDirty();
     this.wasmTerm.clearSelection();
     this.isSelecting = false;
     this.stopAutoScroll();
@@ -190,9 +186,7 @@ export class SelectionManager {
    * Select all text in the terminal, scrollback included
    */
   selectAll(): void {
-    this.markCurrentSelectionDirty();
     this.wasmTerm.selectAll();
-    this.markCurrentSelectionDirty();
     this.selectionChangedEmitter.fire();
   }
 
@@ -259,9 +253,7 @@ export class SelectionManager {
    * @internal
    */
   setSelectionAbsolute(startCol: number, startRow: number, endCol: number, endRow: number): void {
-    this.markCurrentSelectionDirty();
     this.wasmTerm.setSelectionRange(startCol, startRow, endCol, endRow);
-    this.markCurrentSelectionDirty();
   }
 
   /**
@@ -304,20 +296,6 @@ export class SelectionManager {
    */
   getSelectionCoords(): SelectionCoordinates | null {
     return this.normalizeSelection();
-  }
-
-  /**
-   * Get dirty selection rows that need redraw (for clearing old highlight)
-   */
-  getDirtySelectionRows(): Set<number> {
-    return this.dirtySelectionRows;
-  }
-
-  /**
-   * Clear the dirty selection rows tracking (after redraw)
-   */
-  clearDirtySelectionRows(): void {
-    this.dirtySelectionRows.clear();
   }
 
   /**
@@ -402,11 +380,9 @@ export class SelectionManager {
   private dragTo(x: number, y: number, altKey: boolean): void {
     this.lastPointer = { x, y };
     this.rectangle = altKey;
-    this.markCurrentSelectionDirty();
     this.syncViewport();
     const cell = this.pixelToCell(x, y);
     this.getGesture().drag(cell.col, cell.row, x, y, this.geometry(), this.rectangle);
-    this.markCurrentSelectionDirty();
 
     if (this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
       this.stopAutoScroll();
@@ -443,12 +419,10 @@ export class SelectionManager {
         canvas.parentElement.focus();
       }
 
-      this.markCurrentSelectionDirty();
       this.syncViewport();
       const cell = this.pixelToCell(e.offsetX, e.offsetY);
       const time = e.timeStamp > 0 ? e.timeStamp : performance.now();
       this.getGesture().press(cell.col, cell.row, e.offsetX, e.offsetY, time);
-      this.markCurrentSelectionDirty();
       this.isSelecting = true;
       this.lastPointer = { x: e.offsetX, y: e.offsetY };
     });
@@ -585,18 +559,6 @@ export class SelectionManager {
   };
 
   /**
-   * Mark current selection rows as dirty for redraw
-   */
-  private markCurrentSelectionDirty(): void {
-    const coords = this.normalizeSelection();
-    if (coords) {
-      for (let row = coords.startRow; row <= coords.endRow; row++) {
-        this.dirtySelectionRows.add(row);
-      }
-    }
-  }
-
-  /**
    * Keep ticking the gesture while it asks for autoscroll. Each tick scrolls
    * libghostty's viewport one row and extends the selection; ghostty-web's
    * viewport then follows.
@@ -621,7 +583,6 @@ export class SelectionManager {
         this.rectangle
       );
       (this.terminal as any).scrollToLine(this.wasmTerm.getViewportOffset());
-      this.markCurrentSelectionDirty();
       if (!ok || this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
         this.stopAutoScroll();
       }

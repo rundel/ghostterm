@@ -212,3 +212,26 @@ describe('underline drawing', () => {
     expect(dashes).toContainEqual([1, 2]);
   });
 });
+
+describe('selection drawing', () => {
+  test('selected cells are painted with the selection background', () => {
+    term.write('select me please');
+    (term as any).selectionManager.select(7, 0, 2);
+    const renderer = (term as any).renderer;
+    const ctx = renderer.ctx;
+    const selectionColor = renderer.theme.selectionBackground;
+    const painted: number[] = [];
+    const fillRect = ctx.fillRect;
+    ctx.fillRect = (x: number, y: number, w: number, h: number) => {
+      if (ctx.fillStyle === selectionColor && y === 0)
+        painted.push(Math.round(x / renderer.charWidth));
+      return fillRect.call(ctx, x, y, w, h);
+    };
+    try {
+      renderer.render(term.wasmTerm, true, 0, term);
+    } finally {
+      ctx.fillRect = fillRect;
+    }
+    expect(painted).toEqual([7, 8]);
+  });
+});

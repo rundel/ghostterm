@@ -80,6 +80,7 @@ const RenderData = {
 const RowData = {
   DIRTY: 1,
   CELLS: 3,
+  SELECTION: 4,
   CELLS_RAW: 5,
 } as const;
 
@@ -1747,7 +1748,17 @@ export class GhosttyTerminal {
             }
             return cellsHandle();
           };
-          this.readRow(y, viewPtr, rowCells);
+          // The row's selected columns (inclusive), from the terminal's selection.
+          const selPtr = this.scratch + 192;
+          this.mem.view().setUint32(selPtr, 8, true);
+          const selected =
+            ex.ghostty_render_state_row_get(iter, RowData.SELECTION, selPtr) === GHOSTTY_SUCCESS
+              ? ([
+                  this.mem.view().getUint16(selPtr + 4, true),
+                  this.mem.view().getUint16(selPtr + 6, true),
+                ] as const)
+              : null;
+          this.readRow(y, viewPtr, rowCells, selected);
         }
         this.rowStale[y] = 0;
       }
@@ -1757,7 +1768,12 @@ export class GhosttyTerminal {
   }
 
   /** Decode one viewport row from its raw cells view into the cell pool. */
-  private readRow(y: number, viewPtr: number, rowCells: () => number): void {
+  private readRow(
+    y: number,
+    viewPtr: number,
+    rowCells: () => number,
+    selected: readonly [number, number] | null
+  ): void {
     const ex = this.exports;
     const L = this.L;
     const view = this.mem.view();
@@ -1797,6 +1813,7 @@ export class GhosttyTerminal {
         }
       }
       this.decodeCell(cell, lo, hi, style, graphemeLen);
+      cell.selected = selected !== null && x >= selected[0] && x <= selected[1];
     }
   }
 
@@ -1815,6 +1832,7 @@ export class GhosttyTerminal {
     cell.underline_style = UnderlineStyle.NONE;
     cell.underline_color = undefined;
     cell.overline = false;
+    cell.selected = false;
   }
 
   /**
@@ -2120,6 +2138,7 @@ export class GhosttyTerminal {
         graphemeLen = Math.max(0, view.getUint32(writtenPtr, true) - 1);
       }
       this.decodeCell(cell, lo, hi, style, graphemeLen);
+      cell.selected = false;
       cells.push(cell);
     }
     return cells;

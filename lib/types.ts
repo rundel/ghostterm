@@ -599,6 +599,8 @@ export interface GhosttyCell {
   underline_color?: number;
   /** Overline (SGR 53). */
   overline?: boolean;
+  /** Inside the terminal's selection (viewport rows only). */
+  selected?: boolean;
 }
 
 /** Underline styles (SGR 4:x), as libghostty reports them. */

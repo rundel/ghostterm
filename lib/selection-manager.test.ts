@@ -77,8 +77,6 @@ describe('SelectionManager', () => {
       expect(typeof selMgr.selectAll).toBe('function');
       expect(typeof selMgr.getSelectionCoords).toBe('function');
       expect(typeof selMgr.dispose).toBe('function');
-      expect(typeof selMgr.getDirtySelectionRows).toBe('function');
-      expect(typeof selMgr.clearDirtySelectionRows).toBe('function');
 
       term.dispose();
     });
@@ -147,9 +145,9 @@ describe('SelectionManager', () => {
       selMgr.clearSelection();
 
       expect(selMgr.hasSelection()).toBe(false);
-      // Dirty rows should be marked for redraw
-      const dirtyRows = selMgr.getDirtySelectionRows();
-      expect(dirtyRows.size).toBeGreaterThan(0);
+      // libghostty marks the rows for redraw so the highlight is cleared
+      term.wasmTerm!.update();
+      expect(term.wasmTerm!.isRowDirty(0)).toBe(true);
 
       term.dispose();
     });
@@ -362,58 +360,22 @@ describe('SelectionManager', () => {
     });
   });
 
-  describe('Dirty row tracking', () => {
-    test('getDirtySelectionRows returns empty set initially', async () => {
+  describe('Selection highlight', () => {
+    test('selected cells are flagged in the viewport, and cleared with the selection', async () => {
       if (!container) return;
 
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
+      term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
 
       const selMgr = (term as any).selectionManager;
-      expect(selMgr.getDirtySelectionRows().size).toBe(0);
+      selMgr.select(2, 0, 4);
+      const row = term.wasmTerm!.getViewportLine(0)!;
+      expect(row.map((c) => (c.selected ? 1 : 0)).slice(0, 8)).toEqual([0, 0, 1, 1, 1, 1, 0, 0]);
+      expect(term.wasmTerm!.getViewportLine(1)!.some((c) => c.selected)).toBe(false);
 
-      term.dispose();
-    });
-
-    test('clearSelection marks selection rows as dirty', async () => {
-      if (!container) return;
-
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Test content\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      setSelectionAbsolute(term, 0, scrollbackLen, 5, scrollbackLen + 3);
-
-      const selMgr = (term as any).selectionManager;
       selMgr.clearSelection();
-
-      const dirtyRows = selMgr.getDirtySelectionRows();
-      expect(dirtyRows.size).toBeGreaterThan(0);
-
-      term.dispose();
-    });
-
-    test('clearDirtySelectionRows clears the set', async () => {
-      if (!container) return;
-
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      term.write('Test\r\n');
-
-      const scrollbackLen = term.wasmTerm!.getScrollbackLength();
-      setSelectionAbsolute(term, 0, scrollbackLen, 5, scrollbackLen);
-
-      const selMgr = (term as any).selectionManager;
-      selMgr.clearSelection();
-
-      expect(selMgr.getDirtySelectionRows().size).toBeGreaterThan(0);
-
-      selMgr.clearDirtySelectionRows();
-
-      expect(selMgr.getDirtySelectionRows().size).toBe(0);
+      expect(term.wasmTerm!.getViewportLine(0)!.some((c) => c.selected)).toBe(false);
 
       term.dispose();
     });
@@ -821,13 +783,11 @@ describe('SelectionManager block selection (Alt-drag)', () => {
     expect(selMgr().getSelectionCoords().rectangle).toBe(false);
   });
 
-  test('the renderer highlights only the block columns', () => {
+  test('only the block columns are highlighted', () => {
     mouse('mousedown', 1, 0, true);
     mouse('mousemove', 3, 2, true);
     mouse('mouseup', 3, 2, true, document);
-    const renderer = (term as any).renderer;
-    renderer.currentSelectionCoords = selMgr().getSelectionCoords();
-    const inSel = (x: number, y: number) => renderer.isInSelection(x, y);
+    const inSel = (x: number, y: number) => term.wasmTerm!.getViewportLine(y)![x].selected;
     expect([inSel(0, 1), inSel(1, 1), inSel(3, 1), inSel(4, 1)]).toEqual([
       false,
       true,

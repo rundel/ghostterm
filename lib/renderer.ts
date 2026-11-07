@@ -153,15 +153,6 @@ export class CanvasRenderer {
   private currentBuffer: IRenderable | null = null;
 
   // Selection manager (for rendering selection)
-  private selectionManager?: SelectionManager;
-  // Cached selection coordinates for current render pass (viewport-relative)
-  private currentSelectionCoords: {
-    startCol: number;
-    startRow: number;
-    endCol: number;
-    endRow: number;
-    rectangle?: boolean;
-  } | null = null;
 
   // Link rendering state
   private hoveredHyperlinkId: number = 0;
@@ -385,34 +376,6 @@ export class CanvasRenderer {
       }
     }
 
-    // Check if we need to redraw selection-related lines
-    const hasSelection = this.selectionManager && this.selectionManager.hasSelection();
-    const selectionRows = new Set<number>();
-
-    // Cache selection coordinates for use during cell rendering
-    // This is used by isInSelection() to determine if a cell needs selection colors
-    this.currentSelectionCoords = hasSelection ? this.selectionManager!.getSelectionCoords() : null;
-
-    // Mark current selection rows for redraw (includes programmatic selections)
-    if (this.currentSelectionCoords) {
-      const coords = this.currentSelectionCoords;
-      for (let row = coords.startRow; row <= coords.endRow; row++) {
-        selectionRows.add(row);
-      }
-    }
-
-    // Always mark dirty selection rows for redraw (to clear old overlay)
-    if (this.selectionManager) {
-      const dirtyRows = this.selectionManager.getDirtySelectionRows();
-      if (dirtyRows.size > 0) {
-        for (const row of dirtyRows) {
-          selectionRows.add(row);
-        }
-        // Clear the dirty rows tracking after marking for redraw
-        this.selectionManager.clearDirtySelectionRows();
-      }
-    }
-
     // Track rows with hyperlinks that need redraw when hover changes
     const hyperlinkRows = new Set<number>();
     const hyperlinkChanged = this.hoveredHyperlinkId !== this.previousHoveredHyperlinkId;
@@ -476,7 +439,7 @@ export class CanvasRenderer {
       const needsRender =
         viewportY > 0 && !ownsViewport
           ? true
-          : forceAll || buffer.isRowDirty(y) || selectionRows.has(y) || hyperlinkRows.has(y);
+          : forceAll || buffer.isRowDirty(y) || hyperlinkRows.has(y);
 
       if (needsRender) {
         rowsToRender.add(y);
@@ -600,7 +563,7 @@ export class CanvasRenderer {
     const cellWidth = this.metrics.width * cell.width;
 
     // Check if this cell is selected
-    const isSelected = this.isInSelection(x, y);
+    const isSelected = cell.selected === true;
 
     if (isSelected) {
       // Draw selection background (solid color, not overlay)
@@ -645,7 +608,7 @@ export class CanvasRenderer {
     }
 
     // Check if this cell is selected
-    const isSelected = this.isInSelection(x, y);
+    const isSelected = cell.selected === true;
 
     // Set text style
     let fontStyle = '';
@@ -1033,51 +996,10 @@ export class CanvasRenderer {
   }
 
   /**
-   * Set selection manager (for rendering selection)
+   * @deprecated Selection is drawn from the cells' `selected` flag, which
+   * libghostty sets from the terminal's selection. Kept for compatibility.
    */
-  public setSelectionManager(manager: SelectionManager): void {
-    this.selectionManager = manager;
-  }
-
-  /**
-   * Check if a cell at (x, y) is within the current selection.
-   * Uses cached selection coordinates for performance.
-   */
-  private isInSelection(x: number, y: number): boolean {
-    const sel = this.currentSelectionCoords;
-    if (!sel) return false;
-
-    const { startCol, startRow, endCol, endRow } = sel;
-
-    // Block selection: the same columns on every row
-    if (sel.rectangle) {
-      return (
-        y >= startRow &&
-        y <= endRow &&
-        x >= Math.min(startCol, endCol) &&
-        x <= Math.max(startCol, endCol)
-      );
-    }
-
-    // Single line selection
-    if (startRow === endRow) {
-      return y === startRow && x >= startCol && x <= endCol;
-    }
-
-    // Multi-line selection
-    if (y === startRow) {
-      // First line: from startCol to end of line
-      return x >= startCol;
-    } else if (y === endRow) {
-      // Last line: from start of line to endCol
-      return x <= endCol;
-    } else if (y > startRow && y < endRow) {
-      // Middle lines: entire line is selected
-      return true;
-    }
-
-    return false;
-  }
+  public setSelectionManager(_manager: SelectionManager): void {}
 
   /**
    * Set the currently hovered hyperlink ID for rendering underlines
