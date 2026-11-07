@@ -91,7 +91,14 @@ The renderer draws rows, then the cursor (shape, blink and color from the render
 
 ## Tests
 
-Tests run under happy-dom with a mock 2D canvas (`happydom.ts`); there is no real drawing. To test rendering, replace `ctx.fillRect`/`fillText`/`stroke` on `(term as any).renderer.ctx` and inspect the calls. Use `createIsolatedTerminal()` from `lib/test-helpers.ts`, `open()` it in a container, and `dispose()` it. Bridge-level behavior is tested directly against `Ghostty.load()` in `lib/ghostty.test.ts`.
+Tests run under happy-dom (`happydom.ts`, preloaded by `bunfig.toml`); there is no real drawing. Tests are typechecked by `tsconfig.test.json` (part of `bun run typecheck`).
+
+- Fixture: call `terminalFixture()` once per file (or describe) from `lib/test-helpers.ts`. It loads the module once, and `fixture.open(opts)` returns `{ term, container, sent }` (an opened terminal with every `onData` payload in `sent`); `fixture.create()` gives an unopened terminal, `fixture.wasm()` a bridge `GhosttyTerminal`, `fixture.defer(fn)` registers cleanup. Everything is disposed, freed and removed after each test.
+- Drawing: the 2D context records every call with the fill/stroke style, alpha, font and line dash in effect. `render(term)` draws one frame and returns the calls; `drawnText(term)`, `paintedRects(term, color?)` and `strokes(term)` read them (text by cell, filled rectangles, stroked paths such as underlines).
+- Internals: `internals(term)` returns the renderer, input handler, selection manager, bridge terminal, canvas and textarea with non-null types; other private members are reached with typed bracket access (`term['renderFrame']`), never `as any`.
+- Events and globals: `keyDown`, `mouseEvent` and `wheelEvent` build dispatchable events with the happy-dom workarounds below; `stub(obj, key, value)` replaces a global and returns its restore function (pass it to `fixture.defer`). `nextFrame()` waits for one animation frame (the render and smooth-scroll loops); prefer it, or fake timers (`jest.useFakeTimers()` with the typed `timers.advanceTimersByTime`), to fixed sleeps.
+- After every test `happydom.ts` fails the test if a `Terminal` was left open, elements were left in `document.body`, or anything was written to the console. A test that expects a warning spies on `console.warn` and asserts it.
+- Bridge-level behavior (libghostty conformance, dirty tracking, viewport reads) is tested against `fixture.wasm()` in `lib/ghostty.test.ts`; `Terminal` behavior in the `lib/terminal-*.test.ts` files by public API area (lifecycle, options, input, effects, drawing); cell attributes, cursors and decorations as drawn in `lib/renderer.test.ts`; selection in `lib/selection-manager.test.ts`; key encoding as one table in `lib/input-handler.test.ts`. Assert what a program receives (`sent`), what is drawn, or values read through the public API.
 
 happy-dom quirks: `WheelEvent` ignores `clientX`/`clientY`; set `offsetX`/`offsetY` on synthetic mouse events with `Object.defineProperty`; synthetic events need `cancelable: true` for `defaultPrevented` to mean anything.
 

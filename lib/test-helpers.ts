@@ -209,11 +209,6 @@ export function strokes(source: Terminal | DrawCall[]): StrokedPath[] {
   return result;
 }
 
-/** Text of active row `y` (trailing blanks trimmed). */
-export function lineText(term: Terminal, y: number): string {
-  return term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? '';
-}
-
 /** Dispatch a keydown on `target` and return it (check defaultPrevented). */
 export function keyDown(
   target: EventTarget,
@@ -273,13 +268,6 @@ export function stub<T extends object, K extends keyof T>(obj: T, key: K, value:
       Object.defineProperty(obj, key, { value: original, configurable: true, writable: true });
     else Reflect.deleteProperty(obj, key);
   };
-}
-
-/** A terminal with its own module instance (prefer terminalFixture()). Not opened; dispose it. */
-export async function createIsolatedTerminal(
-  options: Omit<ITerminalOptions, 'ghostty'> = {}
-): Promise<Terminal> {
-  return new Terminal({ ...options, ghostty: await Ghostty.load() });
 }
 
 /** Resolve after the next animation frame (the render and smooth scroll loops run on them). */
