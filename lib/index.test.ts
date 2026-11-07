@@ -11,7 +11,19 @@ describe('init()', () => {
     );
   });
 
-  test('concurrent calls load the module once, and Terminal works afterwards', async () => {
+  test('a failed load rejects and lets a later call try again', async () => {
+    const load = spyOn(Ghostty, 'load').mockImplementation(() =>
+      Promise.reject(new Error('no such module'))
+    );
+    try {
+      await expect(init({ wasmPath: './missing.wasm' })).rejects.toThrow('no such module');
+      expect(() => new Terminal()).toThrow('ghostterm not initialized');
+    } finally {
+      load.mockRestore();
+    }
+  });
+
+  test('concurrent calls load the default module once, and Terminal works afterwards', async () => {
     const load = spyOn(Ghostty, 'load');
     try {
       const first = init();
@@ -19,6 +31,7 @@ describe('init()', () => {
       expect(second).toBe(first);
       await Promise.all([first, second]);
       expect(load).toHaveBeenCalledTimes(1);
+      expect(load.mock.calls[0][0]).toBeUndefined();
     } finally {
       load.mockRestore();
     }
@@ -44,7 +57,10 @@ describe('init()', () => {
       expect(warn).not.toHaveBeenCalled();
       await init({ wasmPath: './ghostty-vt-fast.wasm' });
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0][0])).toContain('ghostty-vt-fast.wasm');
+      expect(String(warn.mock.calls[0][0])).toBe(
+        'ghostterm: init() was already called with the bundled module; ' +
+          'ignoring wasmPath ./ghostty-vt-fast.wasm.'
+      );
       expect(load).not.toHaveBeenCalled();
     } finally {
       load.mockRestore();

@@ -1,27 +1,42 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import type { GhosttyTerminal } from '../ghostty';
+import { DEFAULT_THEME } from '../renderer';
 import type { Terminal } from '../terminal';
-import { createIsolatedTerminal } from '../test-helpers';
+import { drawnText, internals, paintedRects, render, terminalFixture } from '../test-helpers';
 import { SearchAddon } from './search';
 
-let container: HTMLElement;
+const fixture = terminalFixture();
 let term: Terminal;
+let wasm: GhosttyTerminal;
 let search: SearchAddon;
 
-beforeEach(async () => {
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  term = await createIsolatedTerminal({ cols: 30, rows: 4 });
-  term.open(container);
+beforeEach(() => {
+  term = fixture.open({ cols: 30, rows: 4 }).term;
+  wasm = internals(term).wasmTerm;
   search = new SearchAddon();
   term.loadAddon(search);
   for (let i = 0; i < 10; i++) term.write(`item ${i} Needle\r\n`);
   term.write('$ ');
 });
 
-afterEach(() => {
-  term.dispose();
-  container.remove();
-});
+/** Start row of the selection (an absolute row); fails without one. */
+function selectedRow(): number {
+  const range = term.wasmTerm?.getSelectionRange();
+  if (!range) throw new Error('no selection');
+  return range.startRow;
+}
+
+/** Columns painted in `color`, by viewport row. */
+function paintedCells(color: string): Record<number, number[]> {
+  const w = internals(term).renderer.charWidth;
+  const h = internals(term).renderer.charHeight;
+  const cells: Record<number, number[]> = {};
+  for (const r of paintedRects(term, color)) {
+    const row = r.y / h;
+    cells[row] = [...(cells[row] ?? []), r.x / w];
+  }
+  return cells;
+}
 
 describe('SearchAddon', () => {
   test('findNext selects matches from newest to oldest, case-insensitively', () => {
@@ -42,8 +57,8 @@ describe('SearchAddon', () => {
     const results: { resultIndex: number }[] = [];
     search.onDidChangeResults((r) => results.push(r));
     search.findPrevious('needle');
-    expect(results.at(-1)!.resultIndex).toBe(0);
-    expect(term.wasmTerm!.getSelectionRange()!.startRow).toBe(0);
+    expect(results.at(-1)?.resultIndex).toBe(0);
+    expect(selectedRow()).toBe(0);
   });
 
   test('counts every match, not just those found before the first one is selected', () => {
@@ -59,15 +74,16 @@ describe('SearchAddon', () => {
   test('scrolls the view to a match in scrollback', () => {
     for (let i = 0; i < 6; i++) search.findNext('needle');
     expect(term.getViewportY()).toBeGreaterThan(0);
-    expect(term.getViewportY()).toBe(term.wasmTerm!.getViewportOffset());
-    // The selected match ('item 4 Needle') is on screen.
-    const rows = Array.from({ length: 4 }, (_, y) =>
-      term
-        .wasmTerm!.getViewportLine(y)!
-        .map((c) => String.fromCodePoint(c.codepoint || 32))
-        .join('')
-    );
-    expect(rows.some((r) => r.startsWith('item 4 Needle'))).toBe(true);
+    expect(term.getViewportY()).toBe(wasm.getViewportOffset());
+    // The selected match ('item 4 Needle') is drawn on screen.
+    const row = drawnText(term).find((t) => t.text === 'N' && t.col === 7);
+    const rowText = drawnText(term)
+      .filter((t) => t.row === row?.row)
+      .map((t) => t.text)
+      .join('');
+    expect(rowText).toBe('item4Needle');
+    expect(term.getSelection()).toBe('Needle');
+    expect(selectedRow()).toBe(4);
   });
 
   test('no match', () => {
@@ -77,41 +93,56 @@ describe('SearchAddon', () => {
     expect(results.at(-1)).toEqual({ resultIndex: -1, resultCount: 0 });
   });
 
+  test('an empty term ends the search and reports no results', () => {
+    search.findNext('needle', { decorations: { matchBackground: '#444400' } });
+    const results: { resultIndex: number; resultCount: number }[] = [];
+    search.onDidChangeResults((r) => results.push(r));
+    expect(search.findNext('')).toBe(false);
+    expect(results).toEqual([{ resultIndex: -1, resultCount: 0 }]);
+    expect(paintedRects(term, '#444400')).toEqual([]);
+  });
+
+  test('clearActiveDecoration() clears the selected match', () => {
+    search.findNext('needle');
+    expect(term.hasSelection()).toBe(true);
+    search.clearActiveDecoration();
+    expect(term.hasSelection()).toBe(false);
+  });
+
   test('incremental search keeps the selected match while the term is resubmitted', () => {
     search.findNext('needle', { incremental: true });
     search.findNext('needle', { incremental: true });
     const results: { resultIndex: number }[] = [];
     search.onDidChangeResults((r) => results.push(r));
     search.findNext('needle', { incremental: true });
-    expect(results.at(-1)!.resultIndex).toBe(9);
+    expect(results.at(-1)?.resultIndex).toBe(9);
   });
 
   test('incremental search keeps the selected match while the term grows', () => {
     search.findNext('item');
     search.findNext('item');
     search.findNext('item');
-    const start = term.wasmTerm!.getSelectionRange()!.startRow;
+    const start = selectedRow();
     expect(term.getSelection()).toBe('item');
 
     search.findNext('item 7', { incremental: true });
     expect(term.getSelection()).toBe('item 7');
-    expect(term.wasmTerm!.getSelectionRange()!.startRow).toEqual(start);
+    expect(selectedRow()).toEqual(start);
   });
 
   test('incremental search moves on from a match that no longer matches', () => {
-    const row = () => term.wasmTerm!.getSelectionRange()!.startRow;
     search.findNext('item 5');
-    const row5 = row();
+    const row5 = selectedRow();
 
     // findNext looks for the nearest older match, findPrevious the nearest newer one.
     search.findNext('item 4', { incremental: true });
     expect(term.getSelection()).toBe('item 4');
-    expect(row()).toBe(row5 - 1);
+    expect(selectedRow()).toBe(row5 - 1);
 
     search.findPrevious('item 5');
     search.findPrevious('item 6', { incremental: true });
     expect(term.getSelection()).toBe('item 6');
-    expect(row()).toBe(row5 + 1);
+    expect(selectedRow()).toBe(row5 + 1);
 
     // Without an older match, the nearest newer one.
     search.findNext('item 0');
@@ -120,38 +151,31 @@ describe('SearchAddon', () => {
   });
 
   test('warns once about the unsupported regex, wholeWord and caseSensitive options', () => {
-    const warn = console.warn;
-    const warnings: unknown[][] = [];
-    console.warn = (...args: unknown[]) => warnings.push(args);
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       search.findNext('needle', { regex: true, caseSensitive: true });
       search.findNext('needle', { wholeWord: true });
       search.findNext('needle');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('regex, caseSensitive');
     } finally {
-      console.warn = warn;
+      warn.mockRestore();
     }
-    expect(warnings).toHaveLength(1);
-    expect(String(warnings[0][0])).toContain('regex, caseSensitive');
   });
 
   test('decorations highlight every match on screen, the active one differently', () => {
     search.findNext('needle', {
       decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
     });
-    const renderer = (term as any).renderer;
-    renderer.render(term.wasmTerm, true, term.viewportY);
-    const rows = renderer.highlightRows as Map<
-      number,
-      { start: number; end: number; color: string }[]
-    >;
-    const all = [...rows.values()].flat();
-    expect(all.length).toBeGreaterThanOrEqual(3);
-    expect(all.every((r) => r.start === 7 && r.end === 12)).toBe(true);
-    expect(all.filter((r) => r.color === '#ff8800')).toHaveLength(1);
+    // Rows: item 7, item 8, item 9 (the active match), '$ '; 'Needle' is columns 7-12.
+    const needle = [7, 8, 9, 10, 11, 12];
+    expect(paintedCells('#444400')).toEqual({ 0: needle, 1: needle });
+    expect(paintedCells('#ff8800')).toEqual({ 2: needle });
 
     search.clearDecorations();
-    renderer.render(term.wasmTerm, true, term.viewportY);
-    expect(renderer.highlightRows.size).toBe(0);
+    const calls = render(term);
+    expect(paintedRects(calls, '#444400')).toEqual([]);
+    expect(paintedRects(calls, '#ff8800')).toEqual([]);
   });
 
   test('keeps working after reset()', () => {
@@ -168,36 +192,13 @@ describe('SearchAddon active match', () => {
     search.findNext('needle', {
       decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
     });
-    const renderer = (term as any).renderer;
-    const ctx = renderer.ctx;
-    const fills: { x: number; y: number; style: string }[] = [];
-    const texts: { col: number; row: number; style: string }[] = [];
-    const fillRect = ctx.fillRect;
-    const fillText = ctx.fillText;
-    ctx.fillRect = (x: number, y: number, w: number, h: number) => {
-      fills.push({ x, y, style: String(ctx.fillStyle) });
-      return fillRect.call(ctx, x, y, w, h);
-    };
-    ctx.fillText = (t: string, x: number, y: number) => {
-      texts.push({
-        col: Math.floor(x / renderer.charWidth),
-        row: Math.floor(y / renderer.charHeight),
-        style: String(ctx.fillStyle),
-      });
-      return fillText.call(ctx, t, x, y);
-    };
-    try {
-      renderer.render(term.wasmTerm, true, term.viewportY);
-    } finally {
-      ctx.fillRect = fillRect;
-      ctx.fillText = fillText;
-    }
-    const selection = renderer.theme.selectionBackground;
-    expect(fills.some((f) => f.style === '#ff8800')).toBe(true);
-    expect(fills.some((f) => f.style === selection)).toBe(false);
-    // Text in the active match (row 2, columns 7-12) keeps its normal color.
-    const matchText = texts.filter((t) => t.row === 2 && t.col >= 7 && t.col <= 12);
-    expect(matchText.length).toBeGreaterThan(0);
-    expect(matchText.some((t) => t.style === renderer.theme.selectionForeground)).toBe(false);
+    expect(term.getSelection()).toBe('Needle');
+    const calls = render(term);
+    expect(paintedRects(calls, '#ff8800')).toHaveLength(6);
+    expect(paintedRects(calls, DEFAULT_THEME.selectionBackground)).toEqual([]);
+    // Text in the active match (row 2) keeps its normal color.
+    const matchText = drawnText(term, calls).filter((t) => t.row === 2 && t.col >= 7);
+    expect(matchText.map((t) => t.text).join('')).toBe('Needle');
+    for (const t of matchText) expect(t.fillStyle).toBe('rgb(212, 212, 212)');
   });
 });

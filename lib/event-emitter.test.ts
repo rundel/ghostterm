@@ -2,6 +2,21 @@ import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from './event-emitter';
 
 describe('EventEmitter', () => {
+  test('listeners get the value until they or the emitter are disposed', () => {
+    const emitter = new EventEmitter<number>();
+    const a: number[] = [];
+    const b: number[] = [];
+    const subA = emitter.event((v) => a.push(v));
+    emitter.event((v) => b.push(v));
+    emitter.fire(1);
+    subA.dispose();
+    emitter.fire(2);
+    emitter.dispose();
+    emitter.fire(3);
+    expect(a).toEqual([1]);
+    expect(b).toEqual([1, 2]);
+  });
+
   test('a listener disposing itself does not make the next one miss the event', () => {
     const emitter = new EventEmitter<number>();
     const seen: string[] = [];

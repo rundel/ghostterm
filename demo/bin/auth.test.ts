@@ -59,15 +59,7 @@ describe('demo auth helper', () => {
     expect(rejection(result)).toBe(401);
   });
 
-  test('rejects different-length tokens without throwing', () => {
-    expect(() =>
-      validateWebSocketRequest(testConfig(), {
-        host: 'localhost:8080',
-        origin: 'http://localhost:8080',
-        token: 'short',
-      })
-    ).not.toThrow();
-
+  test('rejects different-length tokens (rather than throwing in timingSafeEqual)', () => {
     const result = validateWebSocketRequest(testConfig(), {
       host: 'localhost:8080',
       origin: 'http://localhost:8080',

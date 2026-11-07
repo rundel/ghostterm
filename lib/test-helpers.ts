@@ -6,7 +6,7 @@
  * the recording canvas in happydom.ts saw.
  */
 
-import { afterAll, afterEach, beforeAll } from 'bun:test';
+import { afterAll, afterEach, beforeAll, jest } from 'bun:test';
 import type { DrawCall, RecordingContext } from '../happydom';
 import { Ghostty, type GhosttyTerminal, type GhosttyTerminalConfig } from './ghostty';
 import type { InputHandler } from './input-handler';
@@ -281,3 +281,11 @@ export async function createIsolatedTerminal(
 ): Promise<Terminal> {
   return new Terminal({ ...options, ghostty: await Ghostty.load() });
 }
+
+/** Resolve after the next animation frame (the render and smooth scroll loops run on them). */
+export function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/** bun:test's jest object; Bun implements advanceTimersByTime, but bun-types doesn't declare it. */
+export const timers = jest as typeof jest & { advanceTimersByTime(ms: number): void };

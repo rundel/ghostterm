@@ -5,25 +5,17 @@
  * found with ranges in cells.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import type { ILink } from './interfaces';
 import { UrlRegexProvider } from './providers/url-regex-provider';
 import type { Terminal } from './terminal';
-import { createIsolatedTerminal } from './test-helpers';
+import { terminalFixture } from './test-helpers';
 
-let container: HTMLElement;
+const fixture = terminalFixture();
 let term: Terminal;
 
-beforeEach(async () => {
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  term = await createIsolatedTerminal({ cols: 80, rows: 5 });
-  term.open(container);
-});
-
-afterEach(() => {
-  term.dispose();
-  container.remove();
+beforeEach(() => {
+  term = fixture.open({ cols: 80, rows: 5 }).term;
 });
 
 function linksOn(row: number): ILink[] | undefined {
@@ -46,7 +38,7 @@ describe('URL Detection', () => {
   test('detects HTTPS URLs with an inclusive cell range', () => {
     const links = getLinks('Visit https://github.com for code');
     expect(texts(links)).toEqual(['https://github.com']);
-    expect(links![0].range).toEqual({ start: { x: 6, y: 0 }, end: { x: 23, y: 0 } });
+    expect(links?.[0].range).toEqual({ start: { x: 6, y: 0 }, end: { x: 23, y: 0 } });
   });
 
   test('detects http, ftp and mailto links', () => {
@@ -95,20 +87,18 @@ describe('URL Detection', () => {
     const links = getLinks('🎉 日本 https://example.com');
     expect(texts(links)).toEqual(['https://example.com']);
     // 🎉 and 日本 take two cells each: "🎉 " is 3 cells, "日本 " is 5.
-    expect(links![0].range.start.x).toBe(8);
-    expect(links![0].range.end.x).toBe(26);
+    expect(links?.[0].range.start.x).toBe(8);
+    expect(links?.[0].range.end.x).toBe(26);
   });
 
-  test('a URL that soft-wraps is one link spanning the rows', async () => {
-    term.dispose();
-    term = await createIsolatedTerminal({ cols: 20, rows: 5 });
-    term.open(container);
+  test('a URL that soft-wraps is one link spanning the rows', () => {
+    term = fixture.open({ cols: 20, rows: 5 }).term;
     const url = 'https://example.com/a/very/long/path';
     term.write(`see ${url} end`);
     for (const row of [0, 1]) {
       const links = linksOn(row);
       expect(texts(links)).toEqual([url]);
-      expect(links![0].range).toEqual({ start: { x: 4, y: 0 }, end: { x: 19, y: 1 } });
+      expect(links?.[0].range).toEqual({ start: { x: 4, y: 0 }, end: { x: 19, y: 1 } });
     }
     expect(linksOn(2)).toBeUndefined();
   });
