@@ -50,6 +50,53 @@ describe('Ghostty module', () => {
   });
 });
 
+describe('freeing', () => {
+  test('freeing a terminal twice leaves the allocator intact', () => {
+    const term = ghostty.createTerminal(20, 3);
+    term.free();
+    term.free();
+    const a = ghostty.createTerminal(20, 3);
+    const b = ghostty.createTerminal(20, 3);
+    try {
+      expect(a.handle).not.toBe(b.handle);
+      a.write('a');
+      b.write('b');
+      expect(a.getLine(0)![0].codepoint).toBe(0x61);
+      expect(b.getLine(0)![0].codepoint).toBe(0x62);
+    } finally {
+      a.free();
+      b.free();
+    }
+  });
+
+  test('encoders, gestures and searches can be disposed twice', () => {
+    const keys = ghostty.createKeyEncoder();
+    const mouse = ghostty.createMouseEncoder();
+    const term = ghostty.createTerminal(20, 3);
+    const gesture = term.createSelectionGesture();
+    const search = term.createSearch();
+    for (const d of [keys, mouse, gesture, search]) {
+      d.dispose();
+      d.dispose();
+    }
+    term.free();
+    const a = ghostty.createKeyEncoder();
+    const b = ghostty.createKeyEncoder();
+    try {
+      a.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, true);
+      expect(
+        new TextDecoder().decode(a.encode({ action: KeyAction.PRESS, key: Key.UP, mods: 0 }))
+      ).toBe('\x1bOA');
+      expect(
+        new TextDecoder().decode(b.encode({ action: KeyAction.PRESS, key: Key.UP, mods: 0 }))
+      ).toBe('\x1b[A');
+    } finally {
+      a.dispose();
+      b.dispose();
+    }
+  });
+});
+
 describe('terminal replies (write_pty)', () => {
   test('answers a cursor position report', () => {
     const term = ghostty.createTerminal(80, 24);

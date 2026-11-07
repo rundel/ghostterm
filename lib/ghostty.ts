@@ -1199,6 +1199,7 @@ export class GhosttyTerminal {
   /** Separate scratch for selection and formatter calls (see selectionScratch). */
   private selScratch = 0;
   private onFree: (() => void) | null = null;
+  private freed = false;
 
   /** Dirty flags since the last markClean(), mirroring the render state's. */
   private dirty: DirtyState = DirtyState.FULL;
@@ -1706,7 +1707,10 @@ export class GhosttyTerminal {
     this.initCellPool();
   }
 
+  /** Release the terminal and everything it holds. Calling it again does nothing. */
   free(): void {
+    if (this.freed) return;
+    this.freed = true;
     const ex = this.exports;
     this.onFree?.();
     this.onFree = null;
