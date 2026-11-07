@@ -24,6 +24,7 @@ import {
   validateTokenRequest,
   validateWebSocketRequest,
 } from './auth.js';
+import { servedPaths } from './served-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,14 +47,7 @@ if (!fs.existsSync(path.join(repoRoot, 'ghostty-vt.wasm'))) {
   process.exit(1);
 }
 
-// What the page needs; everything else in the repo (.git, scripts, ...) is not served.
-const SERVED_PATHS = [
-  path.join(repoRoot, 'demo'),
-  path.join(repoRoot, 'lib'),
-  path.join(repoRoot, 'node_modules'),
-  path.join(repoRoot, 'ghostty-vt.wasm'),
-  path.join(repoRoot, 'ghostty-vt-fast.wasm'),
-];
+const SERVED_PATHS = servedPaths(repoRoot, 'demo');
 
 // ============================================================================
 // HTTP helpers
