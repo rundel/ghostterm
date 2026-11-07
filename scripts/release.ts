@@ -3,7 +3,7 @@
  *
  * A plain version (0.2.0) becomes a GitHub release; one with a suffix (0.2.0-rc.1) becomes a
  * prerelease. The script checks the version, the working tree and that CHANGELOG.md has entries under
- * Unreleased, runs the checks, sets the version in package.json, moves the Unreleased entries under the
+ * Unreleased, runs the checks and the build, sets the version in package.json, moves the Unreleased entries under the
  * version (a release only; see scripts/changelog.ts), commits and creates the tag. Pushing the tag starts .github/workflows/release.yml,
  * which builds and publishes the GitHub release. Without --push it prints the push command instead.
  */
@@ -60,7 +60,7 @@ function main(): void {
   if (!unreleasedNotes(changelog))
     fail(`Add the changes to ${CHANGELOG} under "## Unreleased" first`);
 
-  for (const script of ['fmt', 'lint', 'typecheck', 'test']) run(['bun', 'run', script]);
+  for (const script of ['fmt', 'lint', 'typecheck', 'test', 'build']) run(['bun', 'run', script]);
 
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   pkg.version = version;
