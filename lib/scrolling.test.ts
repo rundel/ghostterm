@@ -104,7 +104,7 @@ describe('Terminal Scrolling', () => {
         rows[row][Math.round(x / renderer.charWidth)] = char;
       };
       try {
-        renderer.render(terminal.wasmTerm, true, terminal.viewportY, terminal);
+        renderer.render(terminal.wasmTerm, true, terminal.viewportY);
       } finally {
         ctx.fillText = original;
       }

@@ -11,20 +11,18 @@
  */
 
 import type { ITheme } from './interfaces';
-import type { SelectionManager } from './selection-manager';
-import type { GhosttyCell, ILink } from './types';
+import type { GhosttyCell, RGB } from './types';
 import { CellFlags, UnderlineStyle } from './types';
 
-// Interface for objects that can be rendered
+/**
+ * What the renderer draws: a terminal whose viewport it can scroll and read
+ * row by row (GhosttyTerminal).
+ */
 export interface IRenderable {
-  getLine(y: number): GhosttyCell[] | null;
-  /**
-   * Row y of the viewport as displayed, including scrollback rows when
-   * scrolled. Falls back to getLine() when not implemented.
-   */
-  getViewportLine?(y: number): GhosttyCell[] | null;
+  /** Row y of the viewport as displayed, including scrollback rows when scrolled. */
+  getViewportLine(y: number): GhosttyCell[] | null;
   /** Scroll the buffer's own viewport to this many rows above the bottom. */
-  setViewportOffset?(offset: number): void;
+  setViewportOffset(offset: number): void;
   getCursor(): {
     x: number;
     y: number;
@@ -34,24 +32,19 @@ export interface IRenderable {
     /** Whether it blinks (the program may have changed it); overrides cursorBlink. */
     blinking?: boolean;
   };
-  /** Colors in effect; a cursor color set by the program (OSC 12) overrides the theme's. */
-  getColors?(): { cursor: { r: number; g: number; b: number } | null };
+  /**
+   * Colors in effect. The background is the default cell background (a
+   * program can change it with OSC 11); a cursor color set by the program
+   * (OSC 12) overrides the theme's.
+   */
+  getColors?(): { background?: RGB; cursor: RGB | null };
   getDimensions(): { cols: number; rows: number };
+  /** Rows of history above the active area, for the scrollbar. */
+  getScrollbackLength?(): number;
   isRowDirty(y: number): boolean;
   /** Returns true if a full redraw is needed (e.g., screen change) */
   needsFullRedraw?(): boolean;
   clearDirty(): void;
-  /**
-   * Get the full grapheme string for a cell at (row, col).
-   * For cells with grapheme_len > 0, this returns all codepoints combined.
-   * For simple cells, returns the single character.
-   */
-  getGraphemeString?(row: number, col: number): string;
-}
-
-export interface IScrollbackProvider {
-  getScrollbackLine(offset: number): GhosttyCell[] | null;
-  getScrollbackLength(): number;
 }
 
 // ============================================================================
@@ -71,6 +64,16 @@ export interface FontMetrics {
   width: number; // Character cell width in CSS pixels
   height: number; // Character cell height in CSS pixels
   baseline: number; // Distance from top to text baseline
+}
+
+/** Scrollbar geometry in CSS px, relative to the canvas. */
+export interface ScrollbarThumb {
+  x: number;
+  width: number;
+  trackY: number;
+  trackHeight: number;
+  y: number;
+  height: number;
 }
 
 // ============================================================================
@@ -94,6 +97,8 @@ export interface HighlightRange {
 }
 const SCROLLBAR_THUMB_WIDTH = 8;
 const SCROLLBAR_RIGHT_INSET = 3;
+const SCROLLBAR_PADDING = 4;
+const SCROLLBAR_MIN_THUMB = 20;
 
 export const DEFAULT_THEME: Required<ITheme> = {
   foreground: '#d4d4d4',
@@ -122,6 +127,29 @@ export const DEFAULT_THEME: Required<ITheme> = {
   brightWhite: '#ffffff',
 };
 
+/** Parse a CSS hex or rgb() color to 0xRRGGBB (alpha ignored), or undefined. */
+export function parseCssColor(color: string | undefined): number | undefined {
+  if (!color) return undefined;
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
+  if (hex) {
+    const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
+    return Number.parseInt(full, 16);
+  }
+  const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  if (rgb) return (+rgb[1] << 16) | (+rgb[2] << 8) | +rgb[3];
+  return undefined;
+}
+
+/** How the cursor was last drawn, to know when its old cell needs repainting. */
+interface DrawnCursor {
+  x: number;
+  y: number;
+  /** Cells covered (2 on a wide character). */
+  width: number;
+  shape: 'block' | 'underline' | 'bar';
+  color: string;
+}
+
 // ============================================================================
 // CanvasRenderer Class
 // ============================================================================
@@ -136,7 +164,6 @@ export class CanvasRenderer {
   private theme: Required<ITheme>;
   private devicePixelRatio: number;
   private metrics: FontMetrics;
-  private palette: string[];
 
   // Cursor blinking state
   private cursorVisible: boolean = true;
@@ -146,7 +173,11 @@ export class CanvasRenderer {
   private cursorColor = '';
   /** Whether the blink timer is running. */
   private blinkActive = false;
-  private lastCursorPosition: { x: number; y: number } = { x: 0, y: 0 };
+  /** The cursor as drawn on the canvas, or null when it isn't. */
+  private drawnCursor: DrawnCursor | null = null;
+
+  /** Default cell background in effect (the theme's, or what the program set). */
+  private background: string;
 
   // Viewport tracking (for scrolling)
   private lastViewportY: number = 0;
@@ -154,13 +185,16 @@ export class CanvasRenderer {
   private scrollbarGutter = SCROLLBAR_GUTTER;
   private gridCols = 0;
   private gridRows = 0;
+  /** Canvas size in CSS px and in device pixels, as set by resize(). */
+  private cssWidth = 0;
+  private cssHeight = 0;
+  private backingWidth = 0;
+  private backingHeight = 0;
   /** Set when the canvas was cleared outside render(), e.g. by resize(). */
   private needsFullRender = false;
 
   // Current buffer being rendered (for grapheme lookups)
   private currentBuffer: IRenderable | null = null;
-
-  // Selection manager (for rendering selection)
 
   // Link rendering state
   private hoveredHyperlinkId: number = 0;
@@ -190,27 +224,8 @@ export class CanvasRenderer {
     this.cursorStyle = options.cursorStyle ?? 'block';
     this.cursorBlink = options.cursorBlink ?? false;
     this.theme = { ...DEFAULT_THEME, ...options.theme };
+    this.background = this.theme.background;
     this.devicePixelRatio = options.devicePixelRatio ?? window.devicePixelRatio ?? 1;
-
-    // Build color palette (16 ANSI colors)
-    this.palette = [
-      this.theme.black,
-      this.theme.red,
-      this.theme.green,
-      this.theme.yellow,
-      this.theme.blue,
-      this.theme.magenta,
-      this.theme.cyan,
-      this.theme.white,
-      this.theme.brightBlack,
-      this.theme.brightRed,
-      this.theme.brightGreen,
-      this.theme.brightYellow,
-      this.theme.brightBlue,
-      this.theme.brightMagenta,
-      this.theme.brightCyan,
-      this.theme.brightWhite,
-    ];
 
     // Measure font metrics
     this.metrics = this.measureFont();
@@ -248,10 +263,18 @@ export class CanvasRenderer {
   }
 
   /**
-   * Remeasure font metrics (call after font loads or changes)
+   * Measure the font again, e.g. after a web font finished loading. Returns
+   * whether the cell size changed (the caller then resizes).
    */
-  public remeasureFont(): void {
+  public remeasureFont(): boolean {
+    const old = this.metrics;
     this.metrics = this.measureFont();
+    this.needsFullRender = true;
+    return (
+      old.width !== this.metrics.width ||
+      old.height !== this.metrics.height ||
+      old.baseline !== this.metrics.baseline
+    );
   }
 
   // ==========================================================================
@@ -260,6 +283,17 @@ export class CanvasRenderer {
 
   private rgbToCSS(r: number, g: number, b: number): string {
     return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  /**
+   * The default background to paint: the theme's own CSS color (which keeps
+   * transparent themes transparent) unless the program set another (OSC 11).
+   */
+  private resolveBackground(rgb: RGB | undefined): string {
+    if (!rgb) return this.theme.background;
+    const hex = (rgb.r << 16) | (rgb.g << 8) | rgb.b;
+    if (hex === (parseCssColor(this.theme.background) ?? 0)) return this.theme.background;
+    return this.rgbToCSS(rgb.r, rgb.g, rgb.b);
   }
 
   // ==========================================================================
@@ -273,27 +307,40 @@ export class CanvasRenderer {
     this.gridCols = cols;
     this.gridRows = rows;
     this.needsFullRender = true;
+    this.drawnCursor = null;
     const cssWidth = cols * this.metrics.width + this.scrollbarGutter;
     const cssHeight = rows * this.metrics.height;
+    this.cssWidth = cssWidth;
+    this.cssHeight = cssHeight;
 
     // Set CSS size (what user sees)
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
 
-    // Set actual canvas size (scaled for DPI)
-    this.canvas.width = cssWidth * this.devicePixelRatio;
-    this.canvas.height = cssHeight * this.devicePixelRatio;
+    // Backing store in device pixels. canvas.width truncates, so round once
+    // and keep the values render() compares against.
+    this.backingWidth = Math.round(cssWidth * this.devicePixelRatio);
+    this.backingHeight = Math.round(cssHeight * this.devicePixelRatio);
+    this.canvas.width = this.backingWidth;
+    this.canvas.height = this.backingHeight;
 
-    // Scale context to match DPI (setting canvas.width/height resets the context)
-    this.ctx.scale(this.devicePixelRatio, this.devicePixelRatio);
+    // Draw in CSS pixels (setting canvas.width/height resets the context)
+    this.ctx.setTransform(this.devicePixelRatio, 0, 0, this.devicePixelRatio, 0, 0);
 
     // Set text rendering properties for crisp text
     this.ctx.textBaseline = 'alphabetic';
     this.ctx.textAlign = 'left';
 
     // Fill background after resize
-    this.ctx.fillStyle = this.theme.background;
+    this.ctx.fillStyle = this.background;
     this.ctx.fillRect(0, 0, cssWidth, cssHeight);
+  }
+
+  /** Use another device pixel ratio (the window moved to another screen, or zoom). */
+  public setDevicePixelRatio(dpr: number): void {
+    if (!(dpr > 0) || dpr === this.devicePixelRatio) return;
+    this.devicePixelRatio = dpr;
+    if (this.gridCols > 0 && this.gridRows > 0) this.resize(this.gridCols, this.gridRows);
   }
 
   // ==========================================================================
@@ -307,16 +354,15 @@ export class CanvasRenderer {
     buffer: IRenderable,
     forceAll: boolean = false,
     viewportY: number = 0,
-    scrollbackProvider?: IScrollbackProvider,
     scrollbarOpacity: number = 1
   ): void {
     // Store buffer reference for grapheme lookups in renderCell
     this.currentBuffer = buffer;
 
-    // Buffers that own their viewport (libghostty) scroll it here, so every
-    // visible row, scrollback included, is read the same way below.
-    const ownsViewport = typeof buffer.setViewportOffset === 'function';
-    if (ownsViewport) buffer.setViewportOffset!(Math.max(0, Math.floor(viewportY)));
+    // The buffer owns its viewport; scroll it here, so every visible row,
+    // scrollback included, is read the same way below.
+    const offset = Math.max(0, Math.floor(viewportY));
+    buffer.setViewportOffset(offset);
 
     // getCursor() calls update() internally to ensure fresh state.
     // Multiple update() calls are safe - dirty state persists until clearDirty().
@@ -324,32 +370,35 @@ export class CanvasRenderer {
     const dims = buffer.getDimensions();
     this.cursorShape = cursor.style ?? this.cursorStyle;
     this.applyCursorBlink(cursor.blinking ?? this.cursorBlink);
-    const programCursor = buffer.getColors?.().cursor;
-    this.cursorColor = programCursor
-      ? `rgb(${programCursor.r}, ${programCursor.g}, ${programCursor.b})`
+    const colors = buffer.getColors?.();
+    this.cursorColor = colors?.cursor
+      ? this.rgbToCSS(colors.cursor.r, colors.cursor.g, colors.cursor.b)
       : this.theme.cursor;
-    const scrollbackLength = scrollbackProvider ? scrollbackProvider.getScrollbackLength() : 0;
+    const background = this.resolveBackground(colors?.background);
+    if (background !== this.background) {
+      this.background = background;
+      forceAll = true;
+    }
+    const scrollbackLength = buffer.getScrollbackLength?.() ?? 0;
 
     // Check if buffer needs full redraw (e.g., screen change between normal/alternate)
     if (buffer.needsFullRedraw?.()) {
       forceAll = true;
     }
 
-    // Resize canvas if dimensions changed
+    if (
+      dims.cols !== this.gridCols ||
+      dims.rows !== this.gridRows ||
+      this.canvas.width !== this.backingWidth ||
+      this.canvas.height !== this.backingHeight
+    ) {
+      this.resize(dims.cols, dims.rows);
+    }
     if (this.needsFullRender) {
       forceAll = true;
       this.needsFullRender = false;
     }
     if (this.refreshHighlights()) forceAll = true;
-    const needsResize =
-      this.canvas.width !==
-        (dims.cols * this.metrics.width + this.scrollbarGutter) * this.devicePixelRatio ||
-      this.canvas.height !== dims.rows * this.metrics.height * this.devicePixelRatio;
-
-    if (needsResize) {
-      this.resize(dims.cols, dims.rows);
-      forceAll = true; // Force full render after resize
-    }
 
     // Force re-render when viewport changes (scrolling)
     if (viewportY !== this.lastViewportY) {
@@ -357,32 +406,24 @@ export class CanvasRenderer {
       this.lastViewportY = viewportY;
     }
 
-    // Check if cursor position changed or if blinking (need to redraw cursor line)
-    const cursorMoved =
-      cursor.x !== this.lastCursorPosition.x || cursor.y !== this.lastCursorPosition.y;
-    if ((cursorMoved || this.blinkActive) && (viewportY === 0 || !ownsViewport)) {
-      // Mark cursor lines as needing redraw
-      if (!forceAll && !buffer.isRowDirty(cursor.y)) {
-        // Need to redraw cursor line
-        const line = this.viewportLine(buffer, cursor.y, viewportY, scrollbackProvider);
-        if (line) {
-          this.renderLine(line, cursor.y, dims.cols);
-        }
-      }
-      if (cursorMoved && this.lastCursorPosition.y !== cursor.y) {
-        // Also redraw old cursor line if cursor moved to different line
-        if (!forceAll && !buffer.isRowDirty(this.lastCursorPosition.y)) {
-          const line = this.viewportLine(
-            buffer,
-            this.lastCursorPosition.y,
-            viewportY,
-            scrollbackProvider
-          );
-          if (line) {
-            this.renderLine(line, this.lastCursorPosition.y, dims.cols);
-          }
-        }
-      }
+    // The cursor is drawn only at the bottom, while shown (and in the visible
+    // phase of a blink). When anything about it changes, the row it was drawn
+    // on is repainted to erase it.
+    let nextCursor: DrawnCursor | null = null;
+    if (offset === 0 && cursor.visible && this.cursorVisible && cursor.y < dims.rows) {
+      const line = buffer.getViewportLine(cursor.y);
+      nextCursor = {
+        x: cursor.x,
+        y: cursor.y,
+        width: line?.[cursor.x]?.width === 2 ? 2 : 1,
+        shape: this.cursorShape,
+        color: this.cursorColor,
+      };
+    }
+    const cursorRows = new Set<number>();
+    if (!sameCursor(nextCursor, this.drawnCursor)) {
+      if (this.drawnCursor) cursorRows.add(this.drawnCursor.y);
+      if (nextCursor) cursorRows.add(nextCursor.y);
     }
 
     // Track rows with hyperlinks that need redraw when hover changes
@@ -393,9 +434,8 @@ export class CanvasRenderer {
 
     if (hyperlinkChanged) {
       // Find rows containing the old or new hovered hyperlink
-      // Must check the correct buffer based on viewportY (scrollback vs screen)
       for (let y = 0; y < dims.rows; y++) {
-        const line = this.viewportLine(buffer, y, viewportY, scrollbackProvider);
+        const line = buffer.getViewportLine(y);
 
         if (line) {
           for (const cell of line) {
@@ -434,89 +474,44 @@ export class CanvasRenderer {
       this.previousHoveredLinkRange = this.hoveredLinkRange;
     }
 
-    // Track if anything was actually rendered
-    let anyLinesRendered = false;
-
     // Determine which rows need rendering.
     // We also include adjacent rows (above and below) for each dirty row to handle
     // glyph overflow - tall glyphs like Devanagari vowel signs can extend into
     // adjacent rows' visual space.
     const rowsToRender = new Set<number>();
     for (let y = 0; y < dims.rows; y++) {
-      // A buffer that owns its viewport reports scrollback rows' dirtiness
-      // itself; otherwise scrolled frames are always redrawn in full.
-      const needsRender =
-        viewportY > 0 && !ownsViewport
-          ? true
-          : forceAll || buffer.isRowDirty(y) || hyperlinkRows.has(y);
-
-      if (needsRender) {
+      if (forceAll || buffer.isRowDirty(y) || hyperlinkRows.has(y)) {
         rowsToRender.add(y);
         // Include adjacent rows to handle glyph overflow
         if (y > 0) rowsToRender.add(y - 1);
         if (y < dims.rows - 1) rowsToRender.add(y + 1);
       }
     }
+    for (const y of cursorRows) if (y < dims.rows) rowsToRender.add(y);
 
     // Render each line
     for (let y = 0; y < dims.rows; y++) {
-      if (!rowsToRender.has(y)) {
-        continue;
-      }
-
-      anyLinesRendered = true;
-
-      const line = this.viewportLine(buffer, y, viewportY, scrollbackProvider);
-
+      if (!rowsToRender.has(y)) continue;
+      const line = buffer.getViewportLine(y);
       if (line) {
         this.renderLine(line, y, dims.cols);
       }
     }
 
-    // Selection highlighting is now integrated into renderCellBackground/renderCellText
-    // No separate overlay pass needed - this fixes z-order issues with complex glyphs
+    // Selection highlighting is integrated into renderCellBackground/renderCellText,
+    // link underlines into renderCellText.
 
-    // Link underlines are drawn during cell rendering (see renderCell)
+    if (nextCursor) this.renderCursor(nextCursor);
+    this.drawnCursor = nextCursor;
 
-    // Render cursor (only if we're at the bottom, not scrolled)
-    if (viewportY === 0 && cursor.visible && this.cursorVisible) {
-      this.renderCursor(cursor.x, cursor.y);
-    }
-
-    // Render scrollbar if scrolled or scrollback exists (with opacity for fade effect)
-    // Also called at zero opacity: the gutter isn't covered by row redraws, so
+    // Also drawn at zero opacity: the gutter isn't covered by row redraws, so
     // the faded-out bar has to be cleared here.
-    if (scrollbackProvider) {
-      this.renderScrollbar(viewportY, scrollbackLength, dims.rows, scrollbarOpacity);
-    }
-
-    // Update last cursor position
-    this.lastCursorPosition = { x: cursor.x, y: cursor.y };
+    this.renderScrollbar(viewportY, scrollbackLength, dims.rows, scrollbarOpacity);
 
     // ALWAYS clear dirty flags after rendering, regardless of forceAll.
     // This is critical - if we don't clear after a full redraw, the dirty
     // state persists and the next frame might not detect new changes properly.
     buffer.clearDirty();
-  }
-
-  /**
-   * The line shown at viewport row y. Buffers that own their viewport return it
-   * directly; for others it is stitched from scrollback and the screen.
-   */
-  private viewportLine(
-    buffer: IRenderable,
-    y: number,
-    viewportY: number,
-    scrollbackProvider?: IScrollbackProvider
-  ): GhosttyCell[] | null {
-    if (buffer.getViewportLine && buffer.setViewportOffset) return buffer.getViewportLine(y);
-    const offset = Math.floor(viewportY);
-    if (offset <= 0) return buffer.getLine(y);
-    if (y < offset && scrollbackProvider) {
-      const scrollbackLength = scrollbackProvider.getScrollbackLength();
-      return scrollbackProvider.getScrollbackLine(scrollbackLength - offset + y);
-    }
-    return buffer.getLine(y - offset);
   }
 
   /**
@@ -540,7 +535,7 @@ export class CanvasRenderer {
     // clearRect is needed because fillRect composites rather than replaces,
     // so transparent/translucent backgrounds wouldn't clear previous content.
     this.ctx.clearRect(0, lineY, lineWidth, this.metrics.height);
-    this.ctx.fillStyle = this.theme.background;
+    this.ctx.fillStyle = this.background;
     this.ctx.fillRect(0, lineY, lineWidth, this.metrics.height);
 
     // PASS 1: Draw all cell backgrounds first
@@ -605,9 +600,9 @@ export class CanvasRenderer {
       bg_b = cell.fg_b;
     }
 
-    // Cells without a background of their own show the theme background (drawn
-    // with the row), which keeps transparent themes transparent. Any explicit
-    // background is painted, black included; inverse always paints.
+    // Cells without a background of their own show the default background
+    // (drawn with the row), which keeps transparent themes transparent. Any
+    // explicit background is painted, black included; inverse always paints.
     const isDefaultBg =
       !(cell.flags & CellFlags.INVERSE) &&
       (cell.bg_default ?? (bg_r === 0 && bg_g === 0 && bg_b === 0));
@@ -670,17 +665,8 @@ export class CanvasRenderer {
     const textX = cellX;
     const textY = cellY + this.metrics.baseline;
 
-    // Get the character to render - use grapheme lookup for complex scripts
-    let char: string;
-    if (cell.chars) {
-      char = cell.chars;
-    } else if (cell.grapheme_len > 0 && this.currentBuffer?.getGraphemeString) {
-      // Cell has additional codepoints - get full grapheme cluster
-      char = this.currentBuffer.getGraphemeString(y, x);
-    } else {
-      // Simple cell - single codepoint
-      char = String.fromCodePoint(cell.codepoint || 32); // Default to space if null
-    }
+    // The full grapheme cluster (cells carry it), else the single codepoint
+    const char = cell.chars || String.fromCodePoint(cell.codepoint || 32);
     this.ctx.fillText(char, textX, textY);
 
     // Reset alpha
@@ -838,46 +824,48 @@ export class CanvasRenderer {
   /**
    * Render cursor
    */
-  private renderCursor(x: number, y: number): void {
-    const cursorX = x * this.metrics.width;
-    const cursorY = y * this.metrics.height;
+  private renderCursor(c: DrawnCursor): void {
+    const cursorX = c.x * this.metrics.width;
+    const cursorY = c.y * this.metrics.height;
+    const width = this.metrics.width * c.width;
 
-    this.ctx.fillStyle = this.cursorColor;
+    this.ctx.fillStyle = c.color;
 
-    switch (this.cursorShape) {
-      case 'block':
-        // Full cell block
-        this.ctx.fillRect(cursorX, cursorY, this.metrics.width, this.metrics.height);
+    switch (c.shape) {
+      case 'block': {
+        // Full cell block (both cells of a wide character)
+        this.ctx.fillRect(cursorX, cursorY, width, this.metrics.height);
         // Re-draw character under cursor with cursorAccent color
-        {
-          const line = this.currentBuffer?.getLine(y);
-          if (line?.[x]) {
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.rect(cursorX, cursorY, this.metrics.width, this.metrics.height);
-            this.ctx.clip();
-            this.renderCellText(line[x], x, y, this.theme.cursorAccent);
-            this.ctx.restore();
-          }
+        const line = this.currentBuffer?.getViewportLine(c.y);
+        if (line?.[c.x]) {
+          this.ctx.save();
+          this.ctx.beginPath();
+          this.ctx.rect(cursorX, cursorY, width, this.metrics.height);
+          this.ctx.clip();
+          this.renderCellText(line[c.x], c.x, c.y, this.theme.cursorAccent);
+          this.ctx.restore();
         }
         break;
+      }
 
-      case 'underline':
+      case 'underline': {
         // Underline at bottom of cell
         const underlineHeight = Math.max(2, Math.floor(this.metrics.height * 0.15));
         this.ctx.fillRect(
           cursorX,
           cursorY + this.metrics.height - underlineHeight,
-          this.metrics.width,
+          width,
           underlineHeight
         );
         break;
+      }
 
-      case 'bar':
+      case 'bar': {
         // Vertical bar at left of cell
         const barWidth = Math.max(2, Math.floor(this.metrics.width * 0.15));
         this.ctx.fillRect(cursorX, cursorY, barWidth, this.metrics.height);
         break;
+      }
     }
   }
 
@@ -886,10 +874,9 @@ export class CanvasRenderer {
   // ==========================================================================
 
   private startCursorBlink(): void {
-    // xterm.js uses ~530ms blink interval
+    // xterm.js uses ~530ms blink interval; the render loop redraws the cursor row.
     this.cursorBlinkInterval = window.setInterval(() => {
       this.cursorVisible = !this.cursorVisible;
-      // Note: Render loop should redraw cursor line automatically
     }, 530);
   }
 
@@ -910,26 +897,8 @@ export class CanvasRenderer {
    */
   public setTheme(theme: ITheme): void {
     this.theme = { ...DEFAULT_THEME, ...theme };
-
-    // Rebuild palette
-    this.palette = [
-      this.theme.black,
-      this.theme.red,
-      this.theme.green,
-      this.theme.yellow,
-      this.theme.blue,
-      this.theme.magenta,
-      this.theme.cyan,
-      this.theme.white,
-      this.theme.brightBlack,
-      this.theme.brightRed,
-      this.theme.brightGreen,
-      this.theme.brightYellow,
-      this.theme.brightBlue,
-      this.theme.brightMagenta,
-      this.theme.brightCyan,
-      this.theme.brightWhite,
-    ];
+    this.background = this.theme.background;
+    this.needsFullRender = true;
   }
 
   /**
@@ -976,12 +945,7 @@ export class CanvasRenderer {
   }
 
   /**
-   * Get current font metrics
-   */
-
-  /**
-   * Render scrollbar (Phase 2)
-   * Shows scroll position and allows click/drag interaction
+   * Draw the scrollbar in the gutter right of the grid.
    * @param opacity Opacity level (0-1) for fade in/out effect
    */
   private renderScrollbar(
@@ -991,48 +955,61 @@ export class CanvasRenderer {
     opacity: number = 1
   ): void {
     const ctx = this.ctx;
-    const canvasHeight = this.canvas.height / this.devicePixelRatio;
-    const canvasWidth = this.canvas.width / this.devicePixelRatio;
-
-    // Scrollbar dimensions: drawn in the gutter right of the cell grid
-    const { x: scrollbarX, width: scrollbarWidth } = this.getScrollbarRect();
-    const scrollbarPadding = 4;
-    const scrollbarTrackHeight = canvasHeight - scrollbarPadding * 2;
 
     // Always clear the gutter first (fixes ghosting when fading out)
-    const gutterX = canvasWidth - this.scrollbarGutter;
-    ctx.clearRect(gutterX, 0, this.scrollbarGutter, canvasHeight);
-    ctx.fillStyle = this.theme.background;
-    ctx.fillRect(gutterX, 0, this.scrollbarGutter, canvasHeight);
+    const gutterX = this.cssWidth - this.scrollbarGutter;
+    ctx.clearRect(gutterX, 0, this.scrollbarGutter, this.cssHeight);
+    ctx.fillStyle = this.background;
+    ctx.fillRect(gutterX, 0, this.scrollbarGutter, this.cssHeight);
 
     // Don't draw scrollbar if fully transparent or no scrollback
     if (opacity <= 0 || scrollbackLength === 0) return;
 
-    // Calculate scrollbar thumb size and position
-    const totalLines = scrollbackLength + visibleRows;
-    const thumbHeight = Math.max(20, (visibleRows / totalLines) * scrollbarTrackHeight);
-
-    // Position: 0 = at bottom, scrollbackLength = at top
-    const scrollPosition = viewportY / scrollbackLength; // 0 to 1
-    const thumbY = scrollbarPadding + (scrollbarTrackHeight - thumbHeight) * (1 - scrollPosition);
+    const bar = this.getScrollbarThumb(viewportY, scrollbackLength, visibleRows);
 
     // Draw scrollbar track (subtle background) with opacity
     ctx.fillStyle = `rgba(128, 128, 128, ${0.1 * opacity})`;
-    ctx.fillRect(scrollbarX, scrollbarPadding, scrollbarWidth, scrollbarTrackHeight);
+    ctx.fillRect(bar.x, bar.trackY, bar.width, bar.trackHeight);
 
     // Draw scrollbar thumb with opacity
-    const isScrolled = viewportY > 0;
-    const baseOpacity = isScrolled ? 0.5 : 0.3;
+    const baseOpacity = viewportY > 0 ? 0.5 : 0.3;
     ctx.fillStyle = `rgba(128, 128, 128, ${baseOpacity * opacity})`;
-    ctx.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight);
+    ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
   }
+
   /** Horizontal position of the scrollbar in CSS px, for drawing and hit-testing. */
   public getScrollbarRect(): { x: number; width: number } {
-    const canvasWidth = this.canvas.width / this.devicePixelRatio;
     return {
-      x: canvasWidth - SCROLLBAR_RIGHT_INSET - SCROLLBAR_THUMB_WIDTH,
+      x: this.cssWidth - SCROLLBAR_RIGHT_INSET - SCROLLBAR_THUMB_WIDTH,
       width: SCROLLBAR_THUMB_WIDTH,
     };
+  }
+
+  /**
+   * Scrollbar track and thumb in CSS px for a view scrolled `viewportY` rows
+   * above the bottom of `scrollbackLength` rows of history. Used for drawing,
+   * hit-testing and dragging.
+   */
+  public getScrollbarThumb(
+    viewportY: number,
+    scrollbackLength: number,
+    visibleRows: number
+  ): ScrollbarThumb {
+    const { x, width } = this.getScrollbarRect();
+    const trackY = SCROLLBAR_PADDING;
+    const trackHeight = Math.max(0, this.cssHeight - SCROLLBAR_PADDING * 2);
+    if (scrollbackLength <= 0) {
+      return { x, width, trackY, trackHeight, y: trackY, height: trackHeight };
+    }
+    const totalLines = scrollbackLength + visibleRows;
+    const height = Math.min(
+      trackHeight,
+      Math.max(SCROLLBAR_MIN_THUMB, (visibleRows / totalLines) * trackHeight)
+    );
+    // 0 = at bottom, 1 = at top
+    const position = Math.max(0, Math.min(1, viewportY / scrollbackLength));
+    const y = trackY + (trackHeight - height) * (1 - position);
+    return { x, width, trackY, trackHeight, y, height };
   }
 
   /**
@@ -1047,6 +1024,9 @@ export class CanvasRenderer {
     if (this.gridCols > 0 && this.gridRows > 0) this.resize(this.gridCols, this.gridRows);
   }
 
+  /**
+   * Get current font metrics
+   */
   public getMetrics(): FontMetrics {
     return { ...this.metrics };
   }
@@ -1059,16 +1039,15 @@ export class CanvasRenderer {
   }
 
   /**
-   * @deprecated Selection is drawn from the cells' `selected` flag, which
-   * libghostty sets from the terminal's selection. Kept for compatibility.
-   */
-  public setSelectionManager(_manager: SelectionManager): void {}
-
-  /**
    * Set the currently hovered hyperlink ID for rendering underlines
    */
   public setHoveredHyperlinkId(hyperlinkId: number): void {
     this.hoveredHyperlinkId = hyperlinkId;
+  }
+
+  /** The hovered hyperlink ID (0 for none). */
+  public getHoveredHyperlinkId(): number {
+    return this.hoveredHyperlinkId;
   }
 
   /**
@@ -1101,14 +1080,16 @@ export class CanvasRenderer {
   }
 
   /**
-   * Clear entire canvas
+   * Clear the canvas; the next render() redraws every row.
    */
   public clear(): void {
     // clearRect first because fillRect composites rather than replaces,
     // so transparent/translucent backgrounds wouldn't clear previous content.
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.ctx.fillStyle = this.theme.background;
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    this.ctx.fillStyle = this.background;
+    this.ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
+    this.drawnCursor = null;
+    this.needsFullRender = true;
   }
 
   /**
@@ -1117,4 +1098,11 @@ export class CanvasRenderer {
   public dispose(): void {
     this.stopCursorBlink();
   }
+}
+
+function sameCursor(a: DrawnCursor | null, b: DrawnCursor | null): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.x === b.x && a.y === b.y && a.width === b.width && a.shape === b.shape && a.color === b.color
+  );
 }

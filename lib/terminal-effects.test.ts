@@ -133,6 +133,17 @@ describe('theme', () => {
     expect(firstCell(term).fg_r).not.toBe(0xdc);
   });
 
+  test('programs asking for the colors get the defaults even without a theme', () => {
+    const replies: string[] = [];
+    term.onData((d) => replies.push(d));
+    term.write('\x1b]10;?\x07\x1b]11;?\x07');
+    expect(replies.join('')).toBe('\x1b]10;rgb:d4d4/d4d4/d4d4\x07\x1b]11;rgb:1e1e/1e1e/1e1e\x07');
+    // The default background is dark
+    replies.length = 0;
+    term.write('\x1b[?996n');
+    expect(replies).toEqual(['\x1b[?997;1n']);
+  });
+
   test('the color scheme answer follows a theme change', () => {
     const replies: string[] = [];
     term.onData((d) => replies.push(d));
@@ -146,7 +157,7 @@ describe('cursor', () => {
   /** Render one frame and capture how the cursor was drawn. */
   function drawnCursor() {
     const renderer = (term as any).renderer;
-    renderer.render(term.wasmTerm, true, term.viewportY, term);
+    renderer.render(term.wasmTerm, true, term.viewportY);
     return {
       shape: renderer.cursorShape,
       color: renderer.cursorColor,
@@ -199,7 +210,7 @@ describe('underline drawing', () => {
     ctx.setLineDash = (d: number[]) => dashes.push(d);
     ctx.quadraticCurveTo = () => curves++;
     try {
-      renderer.render(term.wasmTerm, true, 0, term);
+      renderer.render(term.wasmTerm, true, 0);
     } finally {
       Object.assign(ctx, {
         stroke: orig.stroke,
@@ -228,7 +239,7 @@ describe('selection drawing', () => {
       return fillRect.call(ctx, x, y, w, h);
     };
     try {
-      renderer.render(term.wasmTerm, true, 0, term);
+      renderer.render(term.wasmTerm, true, 0);
     } finally {
       ctx.fillRect = fillRect;
     }
@@ -336,7 +347,7 @@ describe('cell backgrounds', () => {
       return fillRect.call(ctx, x, y, width, h);
     };
     try {
-      renderer.render(t.wasmTerm, true, 0, t);
+      renderer.render(t.wasmTerm, true, 0);
     } finally {
       ctx.fillRect = fillRect;
     }

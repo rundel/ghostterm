@@ -1372,10 +1372,11 @@ describe('Buffer Access API', () => {
     const restoredViewport = term.wasmTerm?.getViewport();
     const firstCell = restoredViewport![0];
 
-    // Main screen cells should have default background (0, 0, 0 = black)
-    expect(firstCell.bg_r).toBe(0);
-    expect(firstCell.bg_g).toBe(0);
-    expect(firstCell.bg_b).toBe(0);
+    // Main screen cells should have the default background (DEFAULT_THEME's #1e1e1e)
+    expect(firstCell.bg_default).toBe(true);
+    expect(firstCell.bg_r).toBe(0x1e);
+    expect(firstCell.bg_g).toBe(0x1e);
+    expect(firstCell.bg_b).toBe(0x1e);
 
     // Verify text is also restored
     expect(String.fromCodePoint(firstCell.codepoint)).toBe('M');

@@ -1,13 +1,14 @@
 /**
  * Tests for Canvas Renderer
  *
- * Note: Most renderer tests are visual and require a browser environment.
- * These tests verify non-visual aspects like theme configuration.
- * Full visual tests are in examples/renderer-demo.html
+ * There is no real drawing under happy-dom: drawing tests replace methods of
+ * the renderer's 2D context and inspect the calls.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { DEFAULT_THEME } from './renderer';
+import type { Terminal } from './terminal';
+import { createIsolatedTerminal } from './test-helpers';
 
 describe('CanvasRenderer', () => {
   describe('Default Theme', () => {
@@ -60,5 +61,102 @@ describe('CanvasRenderer', () => {
       expect(DEFAULT_THEME.background).toMatch(hexPattern);
       expect(DEFAULT_THEME.cursor).toMatch(hexPattern);
     });
+  });
+});
+
+describe('CanvasRenderer drawing', () => {
+  let term: Terminal;
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    term.open(container);
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+  });
+
+  /** Render one frame, recording which rows were repainted and what was filled. */
+  function frame(force = false) {
+    const renderer = (term as any).renderer;
+    const ctx = renderer.ctx;
+    const rows = new Set<number>();
+    const fills: Array<{ style: string; x: number; y: number; w: number; h: number }> = [];
+    const orig = { clearRect: ctx.clearRect, fillRect: ctx.fillRect };
+    ctx.clearRect = (x: number, y: number, w: number, _h: number) => {
+      if (x === 0 && w === term.cols * renderer.charWidth) rows.add(y / renderer.charHeight);
+    };
+    ctx.fillRect = (x: number, y: number, w: number, h: number) => {
+      fills.push({ style: String(ctx.fillStyle), x, y, w, h });
+    };
+    try {
+      renderer.render(term.wasmTerm, force, term.viewportY, 0);
+    } finally {
+      Object.assign(ctx, orig);
+    }
+    return { rows, fills, cursorColor: renderer.cursorColor as string };
+  }
+
+  test('a fractional device pixel ratio does not resize the canvas every frame', () => {
+    const renderer = (term as any).renderer;
+    renderer.setDevicePixelRatio(1.25);
+    const canvas: HTMLCanvasElement = renderer.getCanvas();
+    const cssWidth = Number.parseFloat(canvas.style.width);
+    expect(canvas.width).toBe(Math.round(cssWidth * 1.25));
+    frame(true);
+    let resizes = 0;
+    const resize = renderer.resize;
+    renderer.resize = (...args: unknown[]) => {
+      resizes++;
+      return resize.apply(renderer, args);
+    };
+    try {
+      for (let i = 0; i < 3; i++) expect(frame().rows.size).toBe(0);
+    } finally {
+      renderer.resize = resize;
+    }
+    expect(resizes).toBe(0);
+  });
+
+  test('hiding the cursor repaints its row', () => {
+    term.write('abc');
+    const first = frame(true);
+    expect(first.fills.some((f) => f.style === first.cursorColor)).toBe(true);
+    term.write('\x1b[?25l');
+    const next = frame();
+    expect(next.rows.has(0)).toBe(true);
+    expect(next.fills.some((f) => f.style === next.cursorColor)).toBe(false);
+    // Nothing changed since: the row is left alone.
+    expect(frame().rows.size).toBe(0);
+  });
+
+  test('changing the cursor shape or color without moving repaints its row', () => {
+    term.write('abc');
+    frame(true);
+    term.write('\x1b[6 q');
+    expect(frame().rows.has(0)).toBe(true);
+    term.write('\x1b]12;#ff0000\x07');
+    const recolored = frame();
+    expect(recolored.rows.has(0)).toBe(true);
+    expect(recolored.cursorColor).toBe('rgb(255, 0, 0)');
+  });
+
+  test('a block cursor on a wide character covers both cells', () => {
+    term.write('漢\x1b[1G');
+    const { fills, cursorColor } = frame(true);
+    const renderer = (term as any).renderer;
+    const cursor = fills.find((f) => f.style === cursorColor);
+    expect(cursor?.w).toBe(2 * renderer.charWidth);
+  });
+
+  test('cells with the default background use the color a program set (OSC 11)', () => {
+    term.write('x');
+    term.write('\x1b]11;#102030\x07');
+    const { fills } = frame();
+    expect(fills.some((f) => f.style === 'rgb(16, 32, 48)' && f.x === 0 && f.y === 0)).toBe(true);
   });
 });

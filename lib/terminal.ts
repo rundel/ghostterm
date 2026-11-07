@@ -20,7 +20,6 @@ import { EventEmitter } from './event-emitter';
 import type {
   ClipboardLocation,
   Ghostty,
-  GhosttyCell,
   GhosttyTerminal,
   GhosttyTerminalConfig,
   ProgramStatus,
@@ -45,7 +44,7 @@ import type {
 import { LinkDetector } from './link-detector';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
-import { CanvasRenderer } from './renderer';
+import { CanvasRenderer, DEFAULT_THEME, parseCssColor } from './renderer';
 import { SelectionManager } from './selection-manager';
 import type { ILink, ILinkProvider } from './types';
 import { Key } from './types';
@@ -242,7 +241,7 @@ export class Terminal implements ITerminalCore {
         this.wasmTerm?.setColors(this.themeColors());
         if (this.renderer && this.wasmTerm) {
           this.renderer.setTheme(this.options.theme);
-          this.renderer.render(this.wasmTerm, true, this.viewportY, this);
+          this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
         }
         break;
 
@@ -286,7 +285,7 @@ export class Terminal implements ITerminalCore {
     this.syncCellPixelSize();
 
     // Force full re-render with new font
-    this.renderer.render(this.wasmTerm, true, this.viewportY, this);
+    this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
   }
 
   /**
@@ -297,13 +296,18 @@ export class Terminal implements ITerminalCore {
     return { scrollbackLimit: this.options.scrollback };
   }
 
-  /** The theme as libghostty default colors; unset entries use the built-in ones. */
+  /**
+   * The theme as libghostty default colors, with DEFAULT_THEME for unset
+   * entries, so libghostty and the renderer agree and programs asking for the
+   * colors (OSC 10/11/4) get an answer. A background that isn't an RGB color
+   * ('transparent') counts as black, as the renderer assumes.
+   */
   private themeColors(): TerminalColors {
-    const theme = this.options.theme ?? {};
-    const color = (c?: string) => (c ? this.parseColor(c) : undefined);
+    const theme = { ...DEFAULT_THEME, ...this.options.theme };
+    const color = (c?: string) => parseCssColor(c);
     return {
       foreground: color(theme.foreground),
-      background: color(theme.background),
+      background: color(theme.background) ?? 0,
       cursor: color(theme.cursor),
       // Order: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones
       palette: [
@@ -325,18 +329,6 @@ export class Terminal implements ITerminalCore {
         theme.brightWhite,
       ].map(color),
     };
-  }
-
-  /** Parse a CSS hex or rgb() color to 0xRRGGBB, or undefined if unrecognized. */
-  private parseColor(color: string): number | undefined {
-    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
-    if (hex) {
-      const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
-      return Number.parseInt(full, 16);
-    }
-    const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
-    if (rgb) return (+rgb[1] << 16) | (+rgb[2] << 8) | +rgb[3];
-    return undefined;
   }
 
   // ==========================================================================
@@ -503,9 +495,6 @@ export class Terminal implements ITerminalCore {
         this.textarea
       );
 
-      // Connect selection manager to renderer
-      this.renderer.setSelectionManager(this.selectionManager);
-
       // Forward selection change events
       this.selectionManager.onSelectionChange(() => {
         this.selectionChangeEmitter.fire();
@@ -535,7 +524,7 @@ export class Terminal implements ITerminalCore {
       parent.addEventListener('wheel', this.handleWheel, { passive: false, capture: true });
 
       // Render initial blank screen (force full redraw)
-      this.renderer.render(this.wasmTerm, true, this.viewportY, this, this.scrollbarOpacity);
+      this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
 
       // Start render loop
       this.startRenderLoop();
@@ -608,7 +597,7 @@ export class Terminal implements ITerminalCore {
     if (this.awaitingEcho) {
       this.awaitingEcho = false;
       if (this.renderer && this.wasmTerm) {
-        this.renderer.render(this.wasmTerm, false, this.viewportY, this, this.scrollbarOpacity);
+        this.renderer.render(this.wasmTerm, false, this.viewportY, this.scrollbarOpacity);
       }
     }
 
@@ -698,21 +687,14 @@ export class Terminal implements ITerminalCore {
       // Resize WASM terminal (may reallocate buffers, invalidating TypedArray views)
       this.wasmTerm!.resize(cols, rows);
 
-      // Resize renderer
+      // Resize renderer (sizes the canvas for the device pixel ratio and gutter)
       this.renderer!.resize(cols, rows);
-
-      // Update canvas dimensions
-      const metrics = this.renderer!.getMetrics();
-      this.canvas!.width = metrics.width * cols;
-      this.canvas!.height = metrics.height * rows;
-      this.canvas!.style.width = `${metrics.width * cols}px`;
-      this.canvas!.style.height = `${metrics.height * rows}px`;
 
       // Fire resize event
       this.resizeEmitter.fire({ cols, rows });
 
       // Force full render
-      this.renderer!.render(this.wasmTerm!, true, this.viewportY, this);
+      this.renderer!.render(this.wasmTerm!, true, this.viewportY, this.scrollbarOpacity);
     } catch (e) {
       console.error('Terminal resize failed:', e);
     }
@@ -1220,7 +1202,7 @@ export class Terminal implements ITerminalCore {
         // 1. Calls update() once to sync state and check dirty flags
         // 2. Only redraws dirty rows when forceAll=false
         // 3. Always calls clearDirty() at the end
-        this.renderer!.render(this.wasmTerm!, false, this.viewportY, this, this.scrollbarOpacity);
+        this.renderer!.render(this.wasmTerm!, false, this.viewportY, this.scrollbarOpacity);
 
         // Check for cursor movement (Phase 2: onCursorMove event)
         // Note: getCursor() reads from already-updated render state (from render() above)
@@ -1240,19 +1222,7 @@ export class Terminal implements ITerminalCore {
     loop();
   }
 
-  /**
-   * Get a line from native WASM scrollback buffer
-   * Implements IScrollbackProvider
-   */
-  public getScrollbackLine(offset: number): GhosttyCell[] | null {
-    if (!this.wasmTerm) return null;
-    return this.wasmTerm.getScrollbackLine(offset);
-  }
-
-  /**
-   * Get scrollback length from native WASM
-   * Implements IScrollbackProvider
-   */
+  /** Rows of history above the active area. */
   public getScrollbackLength(): number {
     if (!this.wasmTerm) return 0;
     return this.wasmTerm.getScrollbackLength();
@@ -1405,7 +1375,7 @@ export class Terminal implements ITerminalCore {
     }
 
     // Update renderer for underline rendering
-    const previousHyperlinkId = (this.renderer as any).hoveredHyperlinkId || 0;
+    const previousHyperlinkId = this.renderer.getHoveredHyperlinkId();
     if (hyperlinkId !== previousHyperlinkId) {
       this.renderer.setHoveredHyperlinkId(hyperlinkId);
 
@@ -1474,7 +1444,7 @@ export class Terminal implements ITerminalCore {
   private handleMouseLeave = (): void => {
     // Clear hyperlink underline
     if (this.renderer && this.wasmTerm) {
-      const previousHyperlinkId = (this.renderer as any).hoveredHyperlinkId || 0;
+      const previousHyperlinkId = this.renderer.getHoveredHyperlinkId();
       if (previousHyperlinkId > 0) {
         this.renderer.setHoveredHyperlinkId(0);
 
@@ -1756,7 +1726,7 @@ export class Terminal implements ITerminalCore {
 
       // Trigger render to show updated opacity
       if (this.renderer && this.wasmTerm) {
-        this.renderer.render(this.wasmTerm, false, this.viewportY, this, this.scrollbarOpacity);
+        this.renderer.render(this.wasmTerm, false, this.viewportY, this.scrollbarOpacity);
       }
 
       if (progress < 1) {
@@ -1779,7 +1749,7 @@ export class Terminal implements ITerminalCore {
 
       // Trigger render to show updated opacity
       if (this.renderer && this.wasmTerm) {
-        this.renderer.render(this.wasmTerm, false, this.viewportY, this, this.scrollbarOpacity);
+        this.renderer.render(this.wasmTerm, false, this.viewportY, this.scrollbarOpacity);
       }
 
       if (progress < 1) {
@@ -1789,7 +1759,7 @@ export class Terminal implements ITerminalCore {
         this.scrollbarOpacity = 0;
         // Final render to clear scrollbar completely
         if (this.renderer && this.wasmTerm) {
-          this.renderer.render(this.wasmTerm, false, this.viewportY, this, 0);
+          this.renderer.render(this.wasmTerm, false, this.viewportY, 0);
         }
       }
     };
@@ -1890,12 +1860,10 @@ export class Terminal implements ITerminalCore {
     if (m && this.wasmTerm) this.wasmTerm.setCellPixelSize(m.width, m.height);
   }
 
-  /** Light or dark, from the theme's background luminance. */
+  /** Light or dark, from the default background's luminance (the one libghostty has). */
   private colorScheme(): 'light' | 'dark' {
-    const bg = this.options.theme?.background ?? '#000000';
-    const hex = /^#?([0-9a-f]{6})$/i.exec(bg.trim())?.[1];
-    if (!hex) return 'dark';
-    const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+    const bg = this.themeColors().background ?? 0;
+    const [r, g, b] = [16, 8, 0].map((shift) => ((bg >> shift) & 0xff) / 255);
     return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 'light' : 'dark';
   }
 
