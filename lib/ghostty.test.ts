@@ -6,7 +6,7 @@
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { Ghostty, KeyEncoderOption } from './ghostty';
+import { Ghostty, KeyEncoderOption, SelectionAutoscroll } from './ghostty';
 import { Key, KeyAction, Mods } from './types';
 
 let ghostty: Ghostty;
@@ -331,6 +331,139 @@ describe('library-owned viewport', () => {
       expect(term.getViewportOffset()).toBe(0);
       expect(rowText(term.getViewportLine(2))).toBe('more');
     } finally {
+      term.free();
+    }
+  });
+});
+
+describe('library selection', () => {
+  const geometry = { columns: 40, cellWidth: 10, screenHeight: 100 };
+
+  test('selects absolute ranges and copies them as Ghostty does', () => {
+    const term = ghostty.createTerminal(40, 5);
+    try {
+      term.write('alpha beta   \r\ngamma\r\n');
+      expect(term.hasSelection()).toBe(false);
+      expect(term.setSelectionRange(6, 0, 4, 1)).toBe(true);
+      expect(term.getSelectionRange()).toEqual({
+        startCol: 6,
+        startRow: 0,
+        endCol: 4,
+        endRow: 1,
+        rectangle: false,
+      });
+      expect(term.getSelectionText()).toBe('beta\ngamma');
+      term.clearSelection();
+      expect(term.hasSelection()).toBe(false);
+      expect(term.getSelectionText()).toBe('');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('orders backward selections', () => {
+    const term = ghostty.createTerminal(40, 5);
+    try {
+      term.write('hello world');
+      term.setSelectionRange(10, 0, 6, 0);
+      const range = term.getSelectionRange()!;
+      expect([range.startCol, range.endCol]).toEqual([6, 10]);
+      expect(term.getSelectionText()).toBe('world');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('joins soft-wrapped lines when copying', () => {
+    const term = ghostty.createTerminal(10, 5);
+    try {
+      term.write('0123456789abcdef');
+      term.setSelectionRange(0, 0, 5, 1);
+      expect(term.getSelectionText()).toBe('0123456789abcdef');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('selectAll covers scrollback', () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      for (let i = 0; i < 6; i++) term.write(`row ${i}\r\n`);
+      expect(term.selectAll()).toBe(true);
+      expect(term.getSelectionText()).toBe('row 0\nrow 1\nrow 2\nrow 3\nrow 4\nrow 5');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('selection follows content into scrollback', () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      term.write('keep me\r\n');
+      term.setSelectionRange(0, 0, 3, 0);
+      for (let i = 0; i < 5; i++) term.write(`row ${i}\r\n`);
+      expect(term.getSelectionText()).toBe('keep');
+      expect(term.getSelectionRange()!.startRow).toBe(0);
+    } finally {
+      term.free();
+    }
+  });
+
+  test('gesture: drag selects cells, a plain click selects nothing', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const gesture = term.createSelectionGesture();
+    try {
+      term.write('hello world');
+      expect(gesture.press(0, 0, 2, 5, 1000)).toBe(false);
+      gesture.release();
+      expect(term.hasSelection()).toBe(false);
+
+      gesture.press(0, 0, 2, 5, 5000);
+      gesture.drag(4, 0, 48, 5, geometry);
+      gesture.release();
+      expect(term.getSelectionText()).toBe('hello');
+    } finally {
+      gesture.dispose();
+      term.free();
+    }
+  });
+
+  test('gesture: double-click selects a word, triple-click a line', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const gesture = term.createSelectionGesture();
+    try {
+      term.write('cat /tmp/some-file.txt now');
+      const click = (t: number) => {
+        gesture.press(8, 0, 85, 5, t);
+        gesture.release();
+      };
+      click(1000);
+      click(1100);
+      expect(term.getSelectionText()).toBe('/tmp/some-file.txt');
+      click(1200);
+      expect(term.getSelectionText()).toBe('cat /tmp/some-file.txt now');
+    } finally {
+      gesture.dispose();
+      term.free();
+    }
+  });
+
+  test('gesture: dragging above the top asks to autoscroll and extends upward', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const gesture = term.createSelectionGesture();
+    try {
+      for (let i = 0; i < 20; i++) term.write(`row ${i}\r\n`);
+      term.write('last');
+      gesture.press(2, 4, 25, 45, 1000);
+      gesture.drag(0, 0, 5, -10, geometry);
+      expect(gesture.autoscroll()).toBe(SelectionAutoscroll.UP);
+      const before = term.getViewportOffset();
+      expect(gesture.autoscrollTick(0, 0, 5, -10, geometry)).toBe(true);
+      expect(term.getViewportOffset()).toBe(before + 1);
+      expect(term.getSelectionText().startsWith('row 15')).toBe(true);
+      gesture.release();
+    } finally {
+      gesture.dispose();
       term.free();
     }
   });

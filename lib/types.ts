@@ -416,6 +416,52 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
   /** Takes a pointer to a GhosttyTerminalScrollViewport. */
   ghostty_terminal_scroll_viewport(terminal: TerminalHandle, behaviorPtr: number): number;
 
+  ghostty_free(allocator: number, ptr: number, len: number): void;
+
+  // Selection
+  ghostty_terminal_point_from_grid_ref(
+    terminal: TerminalHandle,
+    refPtr: number,
+    tag: number,
+    outCoord: number
+  ): number;
+  ghostty_terminal_selection_ordered(
+    terminal: TerminalHandle,
+    selectionPtr: number,
+    desired: number,
+    outSelection: number
+  ): number;
+  ghostty_terminal_select_all(terminal: TerminalHandle, outSelection: number): number;
+  ghostty_selection_gesture_new(allocator: number, slot: number): number;
+  ghostty_selection_gesture_free(gesture: number, terminal: TerminalHandle): void;
+  ghostty_selection_gesture_reset(gesture: number, terminal: TerminalHandle): void;
+  ghostty_selection_gesture_get(
+    gesture: number,
+    terminal: TerminalHandle,
+    data: number,
+    out: number
+  ): number;
+  ghostty_selection_gesture_event_new(allocator: number, slot: number, type: number): number;
+  ghostty_selection_gesture_event_free(event: number): void;
+  ghostty_selection_gesture_event_set(event: number, option: number, value: number): number;
+  ghostty_selection_gesture_event(
+    gesture: number,
+    terminal: TerminalHandle,
+    event: number,
+    outSelection: number
+  ): number;
+
+  // Formatter
+  ghostty_formatter_terminal_new(allocator: number, slot: number, terminal: TerminalHandle): number;
+  ghostty_formatter_set(formatter: number, option: number, value: number): number;
+  ghostty_formatter_format_alloc(
+    formatter: number,
+    allocator: number,
+    outPtr: number,
+    outLen: number
+  ): number;
+  ghostty_formatter_free(formatter: number): void;
+
   // Grid references, cells and rows
   ghostty_grid_ref_cell(refPtr: number, outCell: number): number;
   ghostty_grid_ref_row(refPtr: number, outRow: number): number;
