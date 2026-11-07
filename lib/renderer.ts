@@ -84,6 +84,14 @@ export interface FontMetrics {
  * scrollbar, so it never covers the last column. FitAddon reserves it.
  */
 export const SCROLLBAR_GUTTER = 15;
+
+/** Columns start..end (inclusive) of a viewport row painted in `color`. */
+export interface HighlightRange {
+  row: number;
+  start: number;
+  end: number;
+  color: string;
+}
 const SCROLLBAR_THUMB_WIDTH = 8;
 const SCROLLBAR_RIGHT_INSET = 3;
 
@@ -332,6 +340,7 @@ export class CanvasRenderer {
       forceAll = true;
       this.needsFullRender = false;
     }
+    if (this.refreshHighlights()) forceAll = true;
     const needsResize =
       this.canvas.width !==
         (dims.cols * this.metrics.width + this.scrollbarGutter) * this.devicePixelRatio ||
@@ -572,6 +581,14 @@ export class CanvasRenderer {
       return; // Selection background replaces cell background
     }
 
+    // Search match highlight (SearchAddon decorations)
+    const highlight = this.highlightAt(x, y);
+    if (highlight) {
+      this.ctx.fillStyle = highlight;
+      this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
+      return;
+    }
+
     // Extract background color and handle inverse
     let bg_r = cell.bg_r,
       bg_g = cell.bg_g,
@@ -725,6 +742,45 @@ export class CanvasRenderer {
         this.ctx.stroke();
       }
     }
+  }
+
+  /**
+   * Highlight ranges to draw this frame (search matches), by viewport row.
+   * The provider is asked once per frame; when its answer changes the whole
+   * viewport is redrawn.
+   */
+  private highlightProvider?: () => HighlightRange[];
+  private highlightRows = new Map<number, HighlightRange[]>();
+  private highlightKey = '';
+
+  /** Set (or clear) where cell highlights come from, e.g. the SearchAddon. */
+  public setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void {
+    this.highlightProvider = provider;
+    this.needsFullRender = true;
+  }
+
+  /** Refresh highlights for this frame; true when they changed. */
+  private refreshHighlights(): boolean {
+    const ranges = this.highlightProvider?.() ?? [];
+    const key = JSON.stringify(ranges);
+    if (key === this.highlightKey) return false;
+    this.highlightKey = key;
+    this.highlightRows.clear();
+    for (const r of ranges) {
+      const row = this.highlightRows.get(r.row) ?? [];
+      row.push(r);
+      this.highlightRows.set(r.row, row);
+    }
+    return true;
+  }
+
+  private highlightAt(x: number, y: number): string | null {
+    const ranges = this.highlightRows.get(y);
+    if (!ranges) return null;
+    for (const r of ranges) {
+      if (x >= r.start && x <= r.end) return r.color;
+    }
+    return null;
   }
 
   /**

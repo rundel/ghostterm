@@ -2334,11 +2334,18 @@ export class GhosttyTerminal {
 
   /** The active selection in absolute screen rows, start before end. */
   getSelectionRange(): SelectionRange | null {
+    const sel = this.selScratch;
+    if (this.exports.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) {
+      return null;
+    }
+    return this.selectionRangeAt(sel);
+  }
+
+  /** @internal A GhosttySelection snapshot at `sel` as an absolute range. */
+  selectionRangeAt(sel: number): SelectionRange | null {
     const ex = this.exports;
     const S = this.L.selection;
-    const sel = this.selScratch;
-    const ordered = sel + 32;
-    if (ex.ghostty_terminal_get(this.handle, SELECTION_DATA, sel) !== GHOSTTY_SUCCESS) return null;
+    const ordered = this.selScratch + 32;
     if (
       ex.ghostty_terminal_selection_ordered(this.handle, sel, SELECTION_ORDER_FORWARD, ordered) !==
       GHOSTTY_SUCCESS
@@ -2460,6 +2467,11 @@ export class GhosttyTerminal {
     } finally {
       ex.ghostty_formatter_free(formatter);
     }
+  }
+
+  /** Create a search over this terminal's scrollback and screen. */
+  createSearch(): TerminalSearch {
+    return new TerminalSearch(this.exports, this.mem, this);
   }
 
   /** Create a selection gesture: Ghostty's click, double-click and drag rules. */
@@ -2761,5 +2773,182 @@ export class SelectionGesture {
     ex.ghostty_selection_gesture_free(this.gesture, terminalAlive ? this.term.handle : 0);
     this.gesture = 0;
     ex.ghostty_wasm_free(this.scratch, 256);
+  }
+}
+
+// ============================================================================
+// Search
+// ============================================================================
+
+const SearchOpt = { NEEDLE: 1, SELECT_SCROLL: 4 } as const;
+const SearchData = {
+  STATUS: 1,
+  TOTAL_MATCHES: 3,
+  SELECTED_INDEX: 4,
+  SELECTED_MATCH: 5,
+  VIEWPORT_MATCHES: 7,
+} as const;
+const SELECTION_SIZE = 20;
+
+/**
+ * A search for literal text over a terminal's scrollback and screen, using
+ * libghostty's search. Matching is byte-exact except that ASCII letters
+ * compare case-insensitively. Results stay valid as the terminal changes
+ * (new output, pruning, resize). "Next" moves toward older content.
+ */
+export class TerminalSearch {
+  private search = 0;
+  private scratch = 0;
+  private needle = '';
+
+  constructor(
+    private exports: GhosttyWasmExports,
+    private mem: Memory,
+    private term: GhosttyTerminal
+  ) {
+    const ex = exports;
+    const slot = ex.ghostty_wasm_alloc_opaque();
+    try {
+      if (ex.ghostty_search_new(0, slot, term.handle) !== GHOSTTY_SUCCESS) {
+        throw new Error('libghostty-vt: failed to create search');
+      }
+      this.search = ex.ghostty_wasm_take_opaque(slot);
+    } finally {
+      ex.ghostty_wasm_free_opaque(slot);
+    }
+    this.scratch = ex.ghostty_wasm_alloc(64);
+  }
+
+  /** Set what to search for; '' clears the search. Same text keeps results. */
+  setNeedle(text: string): void {
+    const ex = this.exports;
+    this.needle = text;
+    if (!text) {
+      ex.ghostty_search_set(this.search, SearchOpt.NEEDLE, 0);
+      return;
+    }
+    const bytes = new TextEncoder().encode(text);
+    const ptr = ex.ghostty_wasm_alloc(bytes.length);
+    this.mem.bytes().set(bytes, ptr);
+    const str = this.scratch;
+    const view = this.mem.view();
+    view.setUint32(str, ptr, true);
+    view.setUint32(str + 4, bytes.length, true);
+    ex.ghostty_search_set(this.search, SearchOpt.NEEDLE, str);
+    ex.ghostty_wasm_free(ptr, bytes.length);
+  }
+
+  getNeedle(): string {
+    return this.needle;
+  }
+
+  /** Whether selecting a match scrolls the viewport to it (default true). */
+  setScrollToMatch(scroll: boolean): void {
+    this.mem.view().setUint32(this.scratch, scroll ? 0 : 1, true);
+    this.exports.ghostty_search_set(this.search, SearchOpt.SELECT_SCROLL, this.scratch);
+  }
+
+  /** Bring the search up to date with the terminal (blocking). */
+  run(): void {
+    if (this.needle) this.exports.ghostty_search_run(this.search);
+  }
+
+  /** Select the next (older) match. Returns false when there is none. */
+  next(): boolean {
+    return (
+      !!this.needle && this.exports.ghostty_search_select_next(this.search) === GHOSTTY_SUCCESS
+    );
+  }
+
+  /** Select the previous (newer) match. Returns false when there is none. */
+  previous(): boolean {
+    return (
+      !!this.needle && this.exports.ghostty_search_select_prev(this.search) === GHOSTTY_SUCCESS
+    );
+  }
+
+  private getU32(data: number): number | null {
+    const out = this.scratch;
+    if (this.exports.ghostty_search_get(this.search, data, out) !== GHOSTTY_SUCCESS) return null;
+    return this.mem.view().getUint32(out, true);
+  }
+
+  /** Matches found so far on the active screen. */
+  get totalMatches(): number {
+    return this.getU32(SearchData.TOTAL_MATCHES) ?? 0;
+  }
+
+  /** Index of the selected match, 0 being the newest; -1 when none. */
+  get selectedIndex(): number {
+    return this.getU32(SearchData.SELECTED_INDEX) ?? -1;
+  }
+
+  /** The selected match in absolute screen rows, or null. */
+  selectedMatch(): SelectionRange | null {
+    const sel = this.scratch + 32;
+    if (
+      this.exports.ghostty_search_get(this.search, SearchData.SELECTED_MATCH, sel) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return null;
+    }
+    return this.term.selectionRangeAt(sel);
+  }
+
+  /** Make the selected match the terminal's selection. */
+  selectMatchAsSelection(): boolean {
+    const sel = this.scratch + 32;
+    if (
+      this.exports.ghostty_search_get(this.search, SearchData.SELECTED_MATCH, sel) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return false;
+    }
+    return this.term.installSelection(sel);
+  }
+
+  /**
+   * Matches on and around the viewport, in absolute screen rows, for drawing
+   * highlights. Reflects the terminal as of the last feed, so this feeds first.
+   */
+  viewportMatches(): SelectionRange[] {
+    const ex = this.exports;
+    if (!this.needle) return [];
+    ex.ghostty_search_feed(this.search);
+    const buf = this.scratch + 16; // GhosttySelectionBuffer { ptr, cap, len }
+    const view = this.mem.view();
+    view.setUint32(buf, 0, true);
+    view.setUint32(buf + 4, 0, true);
+    view.setUint32(buf + 8, 0, true);
+    ex.ghostty_search_get(this.search, SearchData.VIEWPORT_MATCHES, buf);
+    const count = this.mem.view().getUint32(buf + 8, true);
+    if (count === 0) return [];
+    const bytes = count * SELECTION_SIZE;
+    const arr = ex.ghostty_wasm_alloc(bytes);
+    try {
+      const v = this.mem.view();
+      v.setUint32(buf, arr, true);
+      v.setUint32(buf + 4, count, true);
+      if (
+        ex.ghostty_search_get(this.search, SearchData.VIEWPORT_MATCHES, buf) !== GHOSTTY_SUCCESS
+      ) {
+        return [];
+      }
+      const written = this.mem.view().getUint32(buf + 8, true);
+      const out: SelectionRange[] = [];
+      for (let i = 0; i < Math.min(written, count); i++) {
+        const range = this.term.selectionRangeAt(arr + i * SELECTION_SIZE);
+        if (range) out.push(range);
+      }
+      return out;
+    } finally {
+      ex.ghostty_wasm_free(arr, bytes);
+    }
+  }
+
+  dispose(): void {
+    if (this.search) this.exports.ghostty_search_free(this.search);
+    if (this.scratch) this.exports.ghostty_wasm_free(this.scratch, 64);
+    this.search = this.scratch = 0;
   }
 }

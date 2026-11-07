@@ -478,6 +478,16 @@ export interface GhosttyWasmExports extends WebAssembly.Exports {
     outSelection: number
   ): number;
 
+  // Search
+  ghostty_search_new(allocator: number, slot: number, terminal: TerminalHandle): number;
+  ghostty_search_free(search: number): void;
+  ghostty_search_feed(search: number): number;
+  ghostty_search_run(search: number): number;
+  ghostty_search_select_next(search: number): number;
+  ghostty_search_select_prev(search: number): number;
+  ghostty_search_set(search: number, option: number, value: number): number;
+  ghostty_search_get(search: number, data: number, out: number): number;
+
   // Formatter
   ghostty_formatter_terminal_new(allocator: number, slot: number, terminal: TerminalHandle): number;
   ghostty_formatter_set(formatter: number, option: number, value: number): number;
