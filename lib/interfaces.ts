@@ -90,6 +90,47 @@ export interface IMarker extends IDisposable {
   readonly onDispose: IEvent<void>;
 }
 
+/** Overview ruler options (xterm.js); kept on the decoration, not drawn. */
+export interface IDecorationOverviewRulerOptions {
+  color: string;
+  position?: 'left' | 'center' | 'right' | 'full';
+}
+
+/** Where and how a decoration is shown (xterm.js IDecorationOptions). */
+export interface IDecorationOptions {
+  /** The line the decoration is on. */
+  readonly marker: IMarker;
+  /** The edge x counts from (default 'left'). */
+  readonly anchor?: 'right' | 'left';
+  /** Offset from the anchor, in cells (default 0). */
+  readonly x?: number;
+  /** Width in cells (default 1). */
+  readonly width?: number;
+  /** Height of the element in cells (default 1). */
+  readonly height?: number;
+  /** Background of the marker line's cells under the decoration (`#RRGGBB`). */
+  readonly backgroundColor?: string;
+  /** Text color of the marker line's cells under the decoration (`#RRGGBB`). */
+  readonly foregroundColor?: string;
+  /** 'top' draws the background over the selection; default 'bottom'. */
+  readonly layer?: 'bottom' | 'top';
+  /** Accepted for xterm.js compatibility; ghostterm has no overview ruler. */
+  overviewRulerOptions?: IDecorationOverviewRulerOptions;
+}
+
+/** A decoration on a marker's line (xterm.js IDecoration). */
+export interface IDecoration extends IDisposable {
+  readonly marker: IMarker;
+  /** Fires when the decoration is rendered, with its element (hidden while off screen). */
+  readonly onRender: IEvent<HTMLElement>;
+  /** The element over the canvas, created when the line is first on screen. */
+  element: HTMLElement | undefined;
+  /** The options the decoration was registered with. */
+  readonly options: IDecorationOptions;
+  readonly isDisposed: boolean;
+  readonly onDispose: IEvent<void>;
+}
+
 export interface ITerminalAddon {
   activate(terminal: ITerminalCore): void;
   dispose(): void;

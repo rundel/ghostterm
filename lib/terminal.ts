@@ -16,6 +16,7 @@
  */
 
 import { BufferNamespace } from './buffer';
+import { DecorationService } from './decorations';
 import { EventEmitter } from './event-emitter';
 import type {
   ClipboardLocation,
@@ -34,6 +35,8 @@ import type {
   IAddonTerminal,
   IBufferNamespace,
   IBufferRange,
+  IDecoration,
+  IDecorationOptions,
   IDisposable,
   IEvent,
   IKeyEvent,
@@ -163,6 +166,14 @@ export class Terminal implements ITerminalCore {
 
   /** Markers made with registerMarker() (and decorations' markers). */
   private markerRegistry = new MarkerRegistry();
+  private decorationService = new DecorationService({
+    gridSize: () => ({ cols: this.cols, rows: this.rows }),
+    cellSize: () => this.renderer?.getMetrics(),
+    topLine: () => this.topLine(),
+    isAlternateScreen: () => this.wasmTerm?.isAlternateScreen() ?? false,
+  });
+  /** Search highlights (SearchAddon), drawn with the decorations' cell colors. */
+  private searchHighlights?: () => HighlightRange[];
 
   // Custom event handlers
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
@@ -331,6 +342,7 @@ export class Terminal implements ITerminalCore {
     // canvas for the device pixel ratio and the scrollbar gutter.
     this.renderer.resize(this.cols, this.rows);
     this.syncCellPixelSize();
+    this.decorationService.invalidate();
 
     // Force full re-render with new font
     this.renderFrame(true);
@@ -494,6 +506,11 @@ export class Terminal implements ITerminalCore {
 
       // Size canvas to terminal dimensions (use renderer.resize for proper DPI scaling)
       this.renderer.resize(this.cols, this.rows);
+      this.renderer.setHighlightProvider(() => [
+        ...(this.searchHighlights?.() ?? []),
+        ...this.decorationService.highlights(),
+      ]);
+      this.decorationService.attach(parent, this.canvas);
 
       // The cursor is drawn hollow while the terminal doesn't have focus.
       this.renderer.setFocused(document.activeElement === this.textarea);
@@ -1033,7 +1050,7 @@ export class Terminal implements ITerminalCore {
 
   /** @internal Set where the renderer gets search highlights from (for SearchAddon). */
   public setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void {
-    this.renderer?.setHighlightProvider(provider);
+    this.searchHighlights = provider;
   }
 
   /**
@@ -1097,6 +1114,15 @@ export class Terminal implements ITerminalCore {
     const wasmTerm = this.wasmTerm!;
     const line = wasmTerm.getScrollbackLength() + wasmTerm.getCursor().y + cursorYOffset;
     return this.markerRegistry.create(wasmTerm, line);
+  }
+
+  /**
+   * Decorate a marker's line: an element over the canvas (created when the
+   * line is first on screen, passed to onRender) and optional cell colors.
+   * Returns undefined for a disposed marker. Disposed with its marker.
+   */
+  public registerDecoration(options: IDecorationOptions): IDecoration | undefined {
+    return this.decorationService.register(options);
   }
 
   // ==========================================================================
@@ -1369,6 +1395,7 @@ export class Terminal implements ITerminalCore {
   private renderFrame(force: boolean): void {
     if (!this.renderer || !this.wasmTerm) return;
     const rows = this.renderer.render(this.wasmTerm, force, this.viewportY, this.scrollbarOpacity);
+    this.decorationService.refresh(rows !== null);
     if (rows) this.renderEmitter.fire(rows);
   }
 
@@ -1471,6 +1498,7 @@ export class Terminal implements ITerminalCore {
       this.linkDetector = undefined;
     }
 
+    this.decorationService.dispose();
     this.markerRegistry.dispose();
 
     // Free WASM terminal

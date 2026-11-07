@@ -123,7 +123,7 @@ With shell integration, `term.scrollToPrompt(-1)` and `term.scrollToPrompt(1)` j
 
 Programs can also query the terminal's light or dark color scheme and its cell size in pixels, change the cursor shape, blink and color, set the mouse pointer shape (OSC 22) and use synchronized output (mode 2026). ghostterm answers and applies all of these.
 
-### Markers
+### Markers and decorations
 
 `term.registerMarker(cursorYOffset)` marks the cursor's line (or one above or below it) and returns an xterm.js `IMarker`. Its `line` follows the content as output scrolls, history is pruned and the screen reflows, because libghostty tracks it (a tracked grid reference). A marker is disposed, firing `onDispose`, when its line leaves the buffer; as in xterm.js, `reset()` and `clear()` dispose every marker, and leaving the alternate screen disposes the markers made on it. `term.markers` lists the live ones.
 
@@ -131,6 +131,16 @@ Programs can also query the terminal's light or dark color scheme and its cell s
 const marker = term.registerMarker();
 marker.onDispose(() => console.log('line gone'));
 term.scrollToLine(marker.line);
+```
+
+`term.registerDecoration({ marker, x, width, height, anchor, backgroundColor, foregroundColor, layer })` attaches an `IDecoration` to a marker's line. Its `element` is an absolutely positioned div over the canvas, created the first time the line is on screen and passed to `onRender` each time it is placed; style it or add content to it. It follows the line as the view scrolls and output arrives, is hidden while the line is off screen, and is removed when the decoration or its marker is disposed. `backgroundColor` and `foregroundColor` color the marker line's cells under the decoration (on the `top` layer the background is drawn over the selection); where decorations overlap, the last registered one's colors win.
+
+```javascript
+const marker = term.registerMarker();
+const decoration = term.registerDecoration({ marker, width: 2, backgroundColor: '#2a4d2a' });
+decoration?.onRender((el) => {
+  el.title = 'command succeeded';
+});
 ```
 
 ### Behavior worth knowing
@@ -157,6 +167,7 @@ Other differences from xterm.js:
 
 - `buffer.normal` while a full-screen program has the alternate screen: its lines, `length` and `baseY` are those of the normal screen, but `cursorX` and `cursorY` read 0 (libghostty keeps that cursor only as the saved cursor). `buffer.alternate` is empty while the normal screen is active, as in xterm.js.
 - No password indicator: Ghostty marks password prompts (a lock at the cursor) from the PTY's terminal settings (echo off), which only its own PTY code can see. libghostty-vt has no way to be told, so ghostterm can't show one.
+- Decorations: `overviewRulerOptions` is accepted and not drawn (there is no overview ruler). Decoration elements are always above the canvas, whatever their layer. A decoration on the normal screen is hidden while the alternate screen is shown, and one made on the alternate screen is shown there (xterm.js hides every decoration on the alternate screen).
 - Markers are disposed when their line leaves the buffer, not when the line is erased in place (xterm.js also disposes markers on lines erased with ED or EL). Since libghostty prunes scrollback a page at a time, a marker on an old line can be disposed some lines before the `scrollback` limit alone would drop it.
 
 ## Development

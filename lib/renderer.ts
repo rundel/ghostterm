@@ -99,7 +99,10 @@ export interface HighlightRange {
   row: number;
   start: number;
   end: number;
+  /** Background ('' for none). */
   color: string;
+  /** Text color (decorations), unless the cell is selected. */
+  foreground?: string;
   /** The current match: drawn over the selection, with its normal text color. */
   active?: boolean;
 }
@@ -607,7 +610,7 @@ export class CanvasRenderer {
     // Search highlight (SearchAddon decorations). The active match is drawn
     // over the selection; other matches under it.
     const highlight = this.highlightAt(x, y);
-    if (highlight?.active) {
+    if (highlight?.active && highlight.color) {
       this.ctx.fillStyle = highlight.color;
       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
       return;
@@ -620,7 +623,7 @@ export class CanvasRenderer {
       return; // Selection background replaces cell background
     }
 
-    if (highlight) {
+    if (highlight?.color) {
       this.ctx.fillStyle = highlight.color;
       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
       return;
@@ -665,7 +668,8 @@ export class CanvasRenderer {
     }
 
     // Selected, unless the active search match is drawn over the selection
-    const isSelected = cell.selected === true && !this.highlightAt(x, y)?.active;
+    const highlight = this.highlightAt(x, y);
+    const isSelected = cell.selected === true && !highlight?.active;
 
     // Set text style
     let fontStyle = '';
@@ -678,6 +682,8 @@ export class CanvasRenderer {
       this.ctx.fillStyle = colorOverride;
     } else if (isSelected) {
       this.ctx.fillStyle = this.theme.selectionForeground;
+    } else if (highlight?.foreground) {
+      this.ctx.fillStyle = highlight.foreground;
     } else {
       // Extract colors and handle inverse
       let fg_r = cell.fg_r,
