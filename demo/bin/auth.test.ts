@@ -4,12 +4,20 @@ import {
   generateSessionToken,
   validateTokenRequest,
   validateWebSocketRequest,
-} from '../demo/bin/auth.js';
+} from './auth.js';
 
 const TOKEN = '0123456789abcdef0123456789abcdef';
 
-function testConfig(options = {}) {
+type AuthDecision = { ok: true } | { ok: false; status: number; reason: string };
+
+function testConfig(options: Parameters<typeof createAuthConfig>[0] = {}) {
   return createAuthConfig({ env: {}, token: TOKEN, ...options });
+}
+
+/** The HTTP status of a rejected request; fails if it was accepted. */
+function rejection(result: AuthDecision): number {
+  if (result.ok) throw new Error('expected the request to be rejected');
+  return result.status;
 }
 
 describe('demo auth helper', () => {
@@ -38,8 +46,7 @@ describe('demo auth helper', () => {
       origin: 'http://localhost:8080',
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(401);
+    expect(rejection(result)).toBe(401);
   });
 
   test('rejects invalid websocket token', () => {
@@ -49,8 +56,7 @@ describe('demo auth helper', () => {
       token: 'invalid-token',
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(401);
+    expect(rejection(result)).toBe(401);
   });
 
   test('rejects different-length tokens without throwing', () => {
@@ -68,8 +74,7 @@ describe('demo auth helper', () => {
       token: 'short',
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(401);
+    expect(rejection(result)).toBe(401);
   });
 
   test('rejects foreign websocket origin even with a valid token', () => {
@@ -79,8 +84,7 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
+    expect(rejection(result)).toBe(403);
   });
 
   test('rejects missing websocket origin', () => {
@@ -89,8 +93,7 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
+    expect(rejection(result)).toBe(403);
   });
 
   test('rejects malformed websocket origin', () => {
@@ -100,8 +103,7 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(400);
+    expect(rejection(result)).toBe(400);
   });
 
   test('rejects missing hosts for token and websocket requests', () => {
@@ -111,10 +113,8 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(tokenResult.ok).toBe(false);
-    expect(tokenResult.status).toBe(400);
-    expect(wsResult.ok).toBe(false);
-    expect(wsResult.status).toBe(400);
+    expect(rejection(tokenResult)).toBe(400);
+    expect(rejection(wsResult)).toBe(400);
   });
 
   test('rejects malformed hosts for token and websocket requests', () => {
@@ -125,10 +125,8 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(tokenResult.ok).toBe(false);
-    expect(tokenResult.status).toBe(400);
-    expect(wsResult.ok).toBe(false);
-    expect(wsResult.status).toBe(400);
+    expect(rejection(tokenResult)).toBe(400);
+    expect(rejection(wsResult)).toBe(400);
   });
 
   test('rejects unallowed hosts for token and websocket requests', () => {
@@ -139,10 +137,8 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(tokenResult.ok).toBe(false);
-    expect(tokenResult.status).toBe(403);
-    expect(wsResult.ok).toBe(false);
-    expect(wsResult.status).toBe(403);
+    expect(rejection(tokenResult)).toBe(403);
+    expect(rejection(wsResult)).toBe(403);
   });
 
   test('allows token requests from an allowed host with no origin', () => {
@@ -157,8 +153,7 @@ describe('demo auth helper', () => {
       origin: 'http://evil.example:8080',
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
+    expect(rejection(result)).toBe(403);
   });
 
   test('allows extra hosts only when explicitly configured', () => {
@@ -171,8 +166,7 @@ describe('demo auth helper', () => {
       token: TOKEN,
     });
 
-    expect(defaultResult.ok).toBe(false);
-    expect(defaultResult.status).toBe(403);
+    expect(rejection(defaultResult)).toBe(403);
     expect(tokenResult.ok).toBe(true);
     expect(wsResult.ok).toBe(true);
   });

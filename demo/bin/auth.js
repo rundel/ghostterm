@@ -5,6 +5,16 @@ import { isIP } from 'net';
 const LOOPBACK_HOSTS = Object.freeze(['localhost', '127.0.0.1', '::1']);
 const WILDCARD_BIND_HOSTS = Object.freeze(['0.0.0.0', '::', '*']);
 
+/**
+ * Whether a request may proceed; a rejection carries the HTTP status to answer with.
+ * @typedef {{ ok: true } | { ok: false, status: number, reason: string }} AuthDecision
+ */
+
+/**
+ * @param {number} status
+ * @param {string} reason
+ * @returns {{ ok: false, status: number, reason: string }}
+ */
 function decision(status, reason) {
   return { ok: false, status, reason };
 }
@@ -277,6 +287,10 @@ export function isLoopbackHost(host) {
   return normalized !== null && LOOPBACK_HOSTS.includes(normalized);
 }
 
+/**
+ * @param {{ env?: Record<string, string | undefined>, bindHost?: string, token?: string,
+ *   allowedHosts?: string[] }} [options]
+ */
 export function createAuthConfig(options = {}) {
   const env = options.env ?? process.env;
   const bindHost = options.bindHost ?? env.HOST ?? '127.0.0.1';
@@ -302,6 +316,11 @@ export function createAuthConfig(options = {}) {
   });
 }
 
+/**
+ * @param {{ token: string, allowedHosts: readonly string[] }} config
+ * @param {{ host?: string, origin?: string }} request
+ * @returns {AuthDecision}
+ */
 export function validateTokenRequest(config, request) {
   const hostDecision = validateAllowedHost(config, request.host);
   if (!hostDecision.ok) {
@@ -316,6 +335,11 @@ export function validateTokenRequest(config, request) {
   return { ok: true };
 }
 
+/**
+ * @param {{ token: string, allowedHosts: readonly string[] }} config
+ * @param {{ host?: string, origin?: string, token?: string | null }} request
+ * @returns {AuthDecision}
+ */
 export function validateWebSocketRequest(config, request) {
   const hostDecision = validateAllowedHost(config, request.host);
   if (!hostDecision.ok) {
