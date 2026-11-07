@@ -1,35 +1,38 @@
-/**
- * Comprehensive test suite for FitAddon
- *
- * Note: Most FitAddon tests require DOM APIs (document, window, getComputedStyle).
- * These tests focus on basic functionality that doesn't require DOM.
- * For full integration tests, see examples/terminal-demo.html
- */
-
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { FitAddon } from './fit';
 
-// ============================================================================
-// Mock Terminal Implementation
-// ============================================================================
-
+// A terminal stand-in with a real DOM element whose size is set per test. Cells are 9x16 and the
+// scrollbar gutter takes at least 15px.
 class MockTerminal {
-  public element?: HTMLElement;
+  public element: HTMLElement;
   public cols = 80;
   public rows = 24;
+  public resizes: Array<[number, number]> = [];
+  public gutters: number[] = [];
   public renderer = {
     getMetrics: () => ({ width: 9, height: 16, baseline: 12 }),
+    setScrollbarGutter: (px: number) => {
+      this.gutters.push(px);
+    },
   };
 
-  public resize(cols: number, rows: number): void {
+  constructor(width: number, height: number) {
+    this.element = document.createElement('div');
+    document.body.appendChild(this.element);
+    this.setSize(width, height);
+  }
+
+  setSize(width: number, height: number): void {
+    Object.defineProperty(this.element, 'clientWidth', { value: width, configurable: true });
+    Object.defineProperty(this.element, 'clientHeight', { value: height, configurable: true });
+  }
+
+  resize(cols: number, rows: number): void {
+    this.resizes.push([cols, rows]);
     this.cols = cols;
     this.rows = rows;
   }
 }
-
-// ============================================================================
-// Test Suite
-// ============================================================================
 
 describe('FitAddon', () => {
   let addon: FitAddon;
@@ -37,201 +40,162 @@ describe('FitAddon', () => {
 
   beforeEach(() => {
     addon = new FitAddon();
-    terminal = new MockTerminal();
+    // (900 - 15) / 9 = 98 cols, 480 / 16 = 30 rows
+    terminal = new MockTerminal(900, 480);
   });
 
   afterEach(() => {
     addon.dispose();
+    terminal.element.remove();
   });
 
-  // ==========================================================================
-  // Activation & Disposal Tests
-  // ==========================================================================
-
-  test('activates successfully', () => {
-    expect(() => addon.activate(terminal as any)).not.toThrow();
+  test('proposeDimensions() fits whole cells beside the scrollbar gutter', () => {
+    addon.activate(terminal as any);
+    expect(addon.proposeDimensions()).toEqual({ cols: 98, rows: 30 });
   });
 
-  test('disposes successfully', () => {
-    addon.activate(terminal as any);
-    expect(() => addon.dispose()).not.toThrow();
+  test('proposeDimensions() is undefined without an element or renderer', () => {
+    const bare = { cols: 80, rows: 24 };
+    addon.activate(bare as any);
+    expect(addon.proposeDimensions()).toBeUndefined();
+
+    addon.activate({ ...bare, element: terminal.element } as any);
+    expect(addon.proposeDimensions()).toBeUndefined();
   });
 
-  test('can activate and dispose multiple times', () => {
+  test('proposeDimensions() subtracts the element padding', () => {
+    terminal.element.style.padding = '10px 20px';
     addon.activate(terminal as any);
-    addon.dispose();
-    addon.activate(terminal as any);
-    addon.dispose();
+    // (900 - 40 - 15) / 9 = 93 cols, (480 - 20) / 16 = 28 rows
+    expect(addon.proposeDimensions()).toEqual({ cols: 93, rows: 28 });
   });
 
-  // ==========================================================================
-  // proposeDimensions() Tests
-  // ==========================================================================
-
-  test('proposeDimensions returns undefined without element', () => {
+  test('proposeDimensions() enforces minimum cols and rows', () => {
+    terminal.setSize(16, 4);
     addon.activate(terminal as any);
-    const dims = addon.proposeDimensions();
-    expect(dims).toBeUndefined();
+    expect(addon.proposeDimensions()).toEqual({ cols: 2, rows: 1 });
   });
 
-  test('proposeDimensions returns undefined without renderer', () => {
-    // Remove renderer
-    (terminal as any).renderer = undefined;
-    terminal.element = {} as HTMLElement;
+  test('fit() resizes once and a repeated fit() does not resize again', () => {
     addon.activate(terminal as any);
-
-    const dims = addon.proposeDimensions();
-    expect(dims).toBeUndefined();
-  });
-
-  // ==========================================================================
-  // fit() Tests
-  // ==========================================================================
-
-  test('fit() does nothing without element', () => {
-    addon.activate(terminal as any);
-    const originalCols = terminal.cols;
-    const originalRows = terminal.rows;
-
     addon.fit();
-
-    expect(terminal.cols).toBe(originalCols);
-    expect(terminal.rows).toBe(originalRows);
-  });
-
-  // ==========================================================================
-  // observeResize() Tests
-  // ==========================================================================
-
-  test('observeResize() does not throw without element', () => {
-    addon.activate(terminal as any);
-    expect(() => addon.observeResize()).not.toThrow();
-  });
-
-  // ==========================================================================
-  // Integration Tests
-  // ==========================================================================
-
-  test('full workflow: activate → fit → observeResize → dispose', () => {
-    // Activate
-    addon.activate(terminal as any);
-
-    // Initial fit (no-op without element)
+    expect(terminal.resizes).toEqual([[98, 30]]);
     addon.fit();
-
-    // Setup auto-resize (no-op without element)
-    addon.observeResize();
-
-    // Dispose
-    addon.dispose();
-  });
-
-  test('fit() after dispose does nothing', () => {
-    addon.activate(terminal as any);
-    addon.dispose();
-
-    const originalCols = terminal.cols;
-    const originalRows = terminal.rows;
-
     addon.fit();
-
-    expect(terminal.cols).toBe(originalCols);
-    expect(terminal.rows).toBe(originalRows);
+    expect(terminal.resizes).toEqual([[98, 30]]);
   });
 
-  test('fit() prevents feedback loops by tracking dimensions', () => {
+  test('fit() restores the fitted size after the terminal was resized elsewhere', () => {
     addon.activate(terminal as any);
+    addon.fit();
+    terminal.resize(40, 10);
+    addon.fit();
+    expect(terminal.resizes).toEqual([
+      [98, 30],
+      [40, 10],
+      [98, 30],
+    ]);
+  });
 
-    // Track how many times resize is called
-    let resizeCallCount = 0;
-    const originalResize = terminal.resize.bind(terminal);
+  test('fit() right after a resize still applies a new container size and gutter', () => {
+    addon.activate(terminal as any);
+    addon.fit();
+    terminal.setSize(500, 320);
+    addon.fit();
+    // (500 - 15) / 9 = 53 cols, 320 / 16 = 20 rows, gutter 500 - 53 * 9 = 23
+    expect(terminal.resizes).toEqual([
+      [98, 30],
+      [53, 20],
+    ]);
+    expect(terminal.gutters.at(-1)).toBe(23);
+  });
+
+  test('fit() ignores a re-entrant call made while resizing', () => {
+    addon.activate(terminal as any);
+    const resize = terminal.resize.bind(terminal);
     terminal.resize = (cols: number, rows: number) => {
-      resizeCallCount++;
-      originalResize(cols, rows);
+      resize(cols, rows);
+      terminal.setSize(500, 320);
+      addon.fit();
     };
-
-    // First fit() should call resize
     addon.fit();
-    expect(resizeCallCount).toBe(0); // No element, so no resize
-
-    // Calling fit() multiple times without dimension change should not resize again
+    expect(terminal.resizes).toEqual([[98, 30]]);
+    // The guard is released once resize() returns.
     addon.fit();
-    addon.fit();
-    addon.fit();
-    expect(resizeCallCount).toBe(0); // Still 0 because no element
-  });
-});
-
-// ==========================================================================
-// Dimension Calculation Tests
-// ==========================================================================
-
-describe('Dimension Calculation', () => {
-  let addon: FitAddon;
-
-  beforeEach(() => {
-    addon = new FitAddon();
+    expect(terminal.resizes).toEqual([
+      [98, 30],
+      [53, 20],
+    ]);
   });
 
-  afterEach(() => {
+  test('fit() does nothing after dispose', () => {
+    addon.activate(terminal as any);
     addon.dispose();
-  });
-
-  test('fit() calculates correct dimensions from container', () => {
-    // Create a mock element with known dimensions
-    // FitAddon subtracts 15px for scrollbar, so we need to account for that
-    const mockElement = document.createElement('div');
-    Object.defineProperty(mockElement, 'clientWidth', { value: 900, configurable: true });
-    Object.defineProperty(mockElement, 'clientHeight', { value: 480, configurable: true });
-
-    let resizedCols = 0;
-    let resizedRows = 0;
-
-    const mockTerminal = {
-      cols: 80,
-      rows: 24,
-      element: mockElement,
-      renderer: {
-        // 9px wide chars, 16px tall
-        getMetrics: () => ({ width: 9, height: 16, baseline: 12 }),
-      },
-      resize: (cols: number, rows: number) => {
-        resizedCols = cols;
-        resizedRows = rows;
-        mockTerminal.cols = cols;
-        mockTerminal.rows = rows;
-      },
-    };
-
-    addon.activate(mockTerminal as any);
     addon.fit();
-
-    // Expected: (900 - 15 scrollbar) / 9 = 98 cols, 480 / 16 = 30 rows
-    expect(resizedCols).toBe(98);
-    expect(resizedRows).toBe(30);
+    expect(terminal.resizes).toEqual([]);
   });
 
-  test('proposeDimensions returns correct values', () => {
-    // FitAddon subtracts 15px for scrollbar width
-    const mockElement = document.createElement('div');
-    Object.defineProperty(mockElement, 'clientWidth', { value: 720, configurable: true });
-    Object.defineProperty(mockElement, 'clientHeight', { value: 384, configurable: true });
+  describe('observeResize()', () => {
+    let observers: StubResizeObserver[];
+    const original = globalThis.ResizeObserver;
 
-    const mockTerminal = {
-      cols: 80,
-      rows: 24,
-      element: mockElement,
-      renderer: {
-        getMetrics: () => ({ width: 8, height: 16, baseline: 12 }),
-      },
-      resize: () => {},
-    };
+    class StubResizeObserver {
+      callback: ResizeObserverCallback;
+      observed: Element[] = [];
+      disconnected = false;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      observe(el: Element) {
+        this.observed.push(el);
+      }
+      unobserve() {}
+      disconnect() {
+        this.disconnected = true;
+      }
+      fire() {
+        const entry = { target: this.observed[0] } as unknown as ResizeObserverEntry;
+        this.callback([entry], this as unknown as ResizeObserver);
+      }
+    }
 
-    addon.activate(mockTerminal as any);
-    const dims = addon.proposeDimensions();
+    beforeEach(() => {
+      observers = [];
+      (globalThis as any).ResizeObserver = StubResizeObserver;
+    });
 
-    // Expected: (720 - 15 scrollbar) / 8 = 88 cols, 384 / 16 = 24 rows
-    expect(dims).toEqual({ cols: 88, rows: 24 });
+    afterEach(() => {
+      globalThis.ResizeObserver = original;
+    });
+
+    test('debounces several callbacks into one resize', async () => {
+      addon.activate(terminal as any);
+      addon.observeResize();
+      addon.observeResize();
+      expect(observers.length).toBe(1);
+      expect(observers[0].observed).toEqual([terminal.element]);
+
+      observers[0].fire();
+      terminal.setSize(500, 320);
+      observers[0].fire();
+      observers[0].fire();
+      expect(terminal.resizes).toEqual([]);
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(terminal.resizes).toEqual([[53, 20]]);
+    });
+
+    test('dispose() disconnects and cancels a pending fit', async () => {
+      addon.activate(terminal as any);
+      addon.observeResize();
+      observers[0].fire();
+      addon.dispose();
+      expect(observers[0].disconnected).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(terminal.resizes).toEqual([]);
+    });
   });
 });
 
@@ -262,9 +226,7 @@ describe('FitAddon scrollbar gutter', () => {
       expect(bar.x).toBeGreaterThanOrEqual(gridWidth);
       expect(803 - (bar.x + bar.width)).toBeLessThanOrEqual(4);
 
-      // The gutter tracks width changes too small to change cols. (fit()
-      // ignores calls for 50ms after a resize, so wait that out.)
-      await new Promise((r) => setTimeout(r, 60));
+      // The gutter tracks width changes too small to change cols.
       const cols = term.cols;
       const slack = 803 - 15 - cols * cellWidth;
       const wider = 803 + Math.max(1, Math.floor((cellWidth - slack) / 2));

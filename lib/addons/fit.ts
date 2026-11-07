@@ -41,8 +41,6 @@ export class FitAddon implements ITerminalAddon {
   private _terminal?: ITerminalCore;
   private _resizeObserver?: ResizeObserver;
   private _resizeDebounceTimer?: ReturnType<typeof setTimeout>;
-  private _lastCols?: number;
-  private _lastRows?: number;
   private _isResizing: boolean = false;
 
   /**
@@ -68,10 +66,6 @@ export class FitAddon implements ITerminalAddon {
       this._resizeDebounceTimer = undefined;
     }
 
-    // Clear stored dimensions
-    this._lastCols = undefined;
-    this._lastRows = undefined;
-
     this._terminal = undefined;
   }
 
@@ -82,55 +76,37 @@ export class FitAddon implements ITerminalAddon {
    * Does nothing if dimensions cannot be calculated or haven't changed.
    */
   public fit(): void {
-    // Prevent re-entrant calls during resize
+    // A resize can trigger a synchronous fit() (e.g. from an onResize handler);
+    // ignore it rather than recursing.
     if (this._isResizing) {
       return;
     }
 
-    const dims = this.proposeDimensions();
-    if (!dims || !this._terminal) {
+    const m = this.measure();
+    const terminal = this._terminal as any;
+    if (!m || !terminal) {
       return;
     }
 
     // Give the space left over after whole cells to the scrollbar gutter, so
     // the canvas fills the container. Done even when cols/rows are unchanged.
-    const gutter = this.measure()?.gutter;
-    const renderer = (this._terminal as any).renderer;
-    if (gutter !== undefined && typeof renderer?.setScrollbarGutter === 'function') {
-      renderer.setScrollbarGutter(gutter);
+    const renderer = terminal.renderer;
+    if (typeof renderer?.setScrollbarGutter === 'function') {
+      renderer.setScrollbarGutter(m.gutter);
     }
 
-    // Access terminal to check current dimensions
-    const terminal = this._terminal as any;
-    const currentCols = terminal.cols;
-    const currentRows = terminal.rows;
-
-    // Check if dimensions actually changed (prevent feedback loops)
-    // Compare against BOTH proposed dimensions AND current terminal dimensions
-    if (
-      (dims.cols === this._lastCols && dims.rows === this._lastRows) ||
-      (dims.cols === currentCols && dims.rows === currentRows)
-    ) {
+    if (m.cols === terminal.cols && m.rows === terminal.rows) {
       return;
     }
 
-    // Store dimensions before resize
-    this._lastCols = dims.cols;
-    this._lastRows = dims.rows;
-
-    // Set flag to prevent re-entrant calls
+    if (typeof terminal.resize !== 'function') {
+      return;
+    }
     this._isResizing = true;
-
     try {
-      // Resize terminal
-      if (terminal.resize && typeof terminal.resize === 'function') {
-        terminal.resize(dims.cols, dims.rows);
-      }
+      terminal.resize(m.cols, m.rows);
     } finally {
-      // Clear flag after a short delay to allow DOM to settle
-      setTimeout(() => {
-        this._isResizing = false;
-      }, 50);
+      this._isResizing = false;
     }
   }
 
@@ -236,11 +212,6 @@ export class FitAddon implements ITerminalAddon {
 
     // Create ResizeObserver that watches for external size changes
     this._resizeObserver = new ResizeObserver((entries) => {
-      // Ignore resize events while we're actively resizing
-      if (this._isResizing) {
-        return;
-      }
-
       // Only trigger if the observed element's content rect changed
       const entry = entries[0];
       if (!entry) return;
@@ -251,6 +222,7 @@ export class FitAddon implements ITerminalAddon {
       }
 
       this._resizeDebounceTimer = setTimeout(() => {
+        this._resizeDebounceTimer = undefined;
         this.fit();
       }, RESIZE_DEBOUNCE_MS);
     });
