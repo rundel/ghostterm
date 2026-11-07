@@ -104,6 +104,40 @@ describe('terminal replies (write_pty)', () => {
     expect(term.readResponse()).toBe('\x1b[?62;22c');
   });
 
+  test('reports xterm-ghostty as the terminfo name (XTGETTCAP TN), or nothing when unset', () => {
+    const hex = (s: string) => Buffer.from(s).toString('hex').toUpperCase();
+    const term = fixture.wasm(80, 24);
+    term.write('\x1bP+q544e\x1b\\');
+    expect(term.readResponse()).toBe(`\x1bP1+r544E=${hex('xterm-ghostty')}\x1b\\`);
+    term.reset();
+    term.write('\x1bP+q544e\x1b\\');
+    expect(term.readResponse()).toBe(`\x1bP1+r544E=${hex('xterm-ghostty')}\x1b\\`);
+
+    const custom = fixture.wasm(80, 24, { terminfoName: 'xterm-256color' });
+    custom.write('\x1bP+q544e\x1b\\');
+    expect(custom.readResponse()).toBe(`\x1bP1+r544E=${hex('xterm-256color')}\x1b\\`);
+    const none = fixture.wasm(80, 24, { terminfoName: '' });
+    none.write('\x1bP+q544e\x1b\\');
+    expect(none.readResponse()).toBeNull();
+  });
+
+  test('ENQ sends the answerback, and nothing without one', () => {
+    const term = fixture.wasm(80, 24);
+    term.write('\x05');
+    expect(term.readResponse()).toBeNull();
+    let answerback = 'ghostterm';
+    term.setEffects({ answerback: () => answerback });
+    term.write('a\x05b');
+    expect(term.readResponse()).toBe('ghostterm');
+    answerback = 'a longer answerback than before';
+    term.write('\x05');
+    expect(term.readResponse()).toBe(answerback);
+    answerback = '';
+    term.write('\x05');
+    expect(term.readResponse()).toBeNull();
+    expect(term.getLine(0)!.map((c) => String.fromCodePoint(c.codepoint || 32))[1]).toBe('b');
+  });
+
   test('routes replies to the terminal that produced them', () => {
     const a = fixture.wasm(80, 24);
     const b = fixture.wasm(80, 24);

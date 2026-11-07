@@ -78,6 +78,12 @@ describe('requests from the program', () => {
     expect(sent).toEqual([`\x1b[6;${renderer.charHeight};${renderer.charWidth}t`]);
   });
 
+  test('XTGETTCAP for the terminfo name is answered with xterm-ghostty; ENQ gets no answerback', () => {
+    term.write('\x05\x1bP+q544e\x1b\\');
+    const name = Buffer.from('xterm-ghostty').toString('hex').toUpperCase();
+    expect(sent).toEqual([`\x1bP1+r544E=${name}\x1b\\`]);
+  });
+
   test('programs can change the mouse pointer (OSC 22), and reset it', () => {
     const { canvas } = internals(term);
     expect(canvas.style.cursor).toBe('text');

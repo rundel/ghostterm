@@ -488,6 +488,8 @@ export interface RenderStateColors {
  */
 export interface GhosttyTerminalConfig {
   scrollbackLimit?: number;
+  /** Reported for an XTGETTCAP query of "TN" (default 'xterm-ghostty'; '' reports nothing). */
+  terminfoName?: string;
 }
 
 /**

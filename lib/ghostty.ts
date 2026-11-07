@@ -64,6 +64,7 @@ export const TerminalOpt = {
   SCROLLBACK_MAX_LINES: 29,
   MODE_DEFAULT: 34,
   MODE: 35,
+  TERMINFO_NAME: 38,
 } as const;
 
 /** @internal GhosttyTerminalData. */
@@ -283,6 +284,8 @@ export interface TerminalEffects {
   cellSize?(): { width: number; height: number } | null;
   /** The program performed a full reset (RIS). */
   reset?(): void;
+  /** The answerback sent for ENQ (0x05); nothing is sent when absent or ''. */
+  answerback?(): string;
 }
 
 /** Default colors for a terminal, as 0xRRGGBB; undefined means the built-in default. */
@@ -339,6 +342,7 @@ export interface SelectionGeometry {
 /** @internal GhosttyTerminalOption values that install effect callbacks. */
 export const EffectOpt = {
   BELL: 3,
+  ENQUIRY: 4,
   TITLE_CHANGED: 6,
   SIZE: 7,
   COLOR_SCHEME: 8,
@@ -1006,6 +1010,20 @@ export class Ghostty {
       }
       this.exports.ghostty_terminal_set(term.handle, option, index);
     }
+
+    // The enquiry callback returns a GhosttyString by value, which the wasm32 C ABI turns into
+    // a pointer to fill, passed before the other arguments.
+    let enquiry = this.effectFns.get(EffectOpt.ENQUIRY);
+    if (enquiry === undefined) {
+      const fn = (ret: number, handle: number) => {
+        const t = this.terminals.get(handle);
+        if (t) t.onEnquiry(ret);
+        else this.mem.bytes().fill(0, ret, ret + this.layout.string.size);
+      };
+      enquiry = this.tableFunction(wasmCallback(fn, 3));
+      this.effectFns.set(EffectOpt.ENQUIRY, enquiry);
+    }
+    this.exports.ghostty_terminal_set(term.handle, EffectOpt.ENQUIRY, enquiry);
   }
 
   /** @internal Call a function pointer from the module's function table. */
@@ -1465,6 +1483,13 @@ export class MouseEncoder {
 
 /** Size of the per-terminal scratch area for out-parameters. */
 const SCRATCH_SIZE = 2048;
+/**
+ * Reported for XTGETTCAP "TN", as Ghostty does: libghostty answers the other capabilities from
+ * Ghostty's own terminfo entry.
+ */
+const DEFAULT_TERMINFO_NAME = 'xterm-ghostty';
+/** Longest terminfo name libghostty accepts (bytes). */
+const MAX_TERMINFO_NAME = 128;
 const SELECTION_SCRATCH_SIZE = 256;
 /** How many hyperlink URIs a terminal remembers IDs for. */
 const MAX_LINK_IDS = 4096;
@@ -1743,6 +1768,26 @@ export class GhosttyTerminal {
     });
   }
 
+  /** Where the answerback for ENQ is kept, since libghostty reads it after the callback returns. */
+  private answerbackBuf = 0;
+  private answerbackSize = 0;
+
+  /** @internal Fill the GhosttyString at `ret` with the answerback for ENQ ('' sends nothing). */
+  onEnquiry(ret: number): void {
+    const bytes = new TextEncoder().encode(this.effects.answerback?.() ?? '');
+    const ex = this.exports;
+    if (bytes.length > this.answerbackSize) {
+      if (this.answerbackBuf) ex.ghostty_wasm_free(this.answerbackBuf, this.answerbackSize);
+      this.answerbackBuf = ex.ghostty_wasm_alloc(bytes.length);
+      this.answerbackSize = this.answerbackBuf ? bytes.length : 0;
+    }
+    const len = this.answerbackBuf ? bytes.length : 0;
+    if (len) this.mem.bytes().set(bytes, this.answerbackBuf);
+    const view = this.mem.view();
+    view.setUint32(ret + this.L.string.ptr, len ? this.answerbackBuf : 0, true);
+    view.setUint32(ret + this.L.string.len, len, true);
+  }
+
   /** @internal Fill a GhosttyColorScheme; returning 0 leaves the query unanswered. */
   onColorScheme(ptr: number): number {
     const scheme = this.effects.colorScheme?.();
@@ -1907,9 +1952,23 @@ export class GhosttyTerminal {
     this.exports.ghostty_terminal_set(this.handle, option, this.scratch);
   }
 
-  /** Apply ghostterm's config: the scrollback limit. */
+  /** Apply ghostterm's config: the scrollback limit and terminfo name. */
   private applyConfig(config?: GhosttyTerminalConfig): void {
     this.setScrollbackLimit(config?.scrollbackLimit ?? 10000);
+    this.setTerminfoName(config?.terminfoName ?? DEFAULT_TERMINFO_NAME);
+  }
+
+  /** The terminfo name reported for an XTGETTCAP query of "TN"; '' reports nothing. */
+  private setTerminfoName(name: string): void {
+    const bytes = new TextEncoder().encode(name);
+    if (bytes.length > MAX_TERMINFO_NAME) throw new Error(`terminfo name too long: ${name}`);
+    const str = this.scratch;
+    const data = this.scratch + 16;
+    this.mem.bytes().set(bytes, data);
+    const view = this.mem.view();
+    view.setUint32(str + this.L.string.ptr, data, true);
+    view.setUint32(str + this.L.string.len, bytes.length, true);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.TERMINFO_NAME, str);
   }
 
   /**
@@ -2055,6 +2114,10 @@ export class GhosttyTerminal {
       this.renderState = 0;
     }
     ex.ghostty_terminal_free(this.handle);
+    if (this.answerbackBuf) {
+      ex.ghostty_wasm_free(this.answerbackBuf, this.answerbackSize);
+      this.answerbackBuf = 0;
+    }
     if (this.scratch) {
       ex.ghostty_wasm_free(this.scratch, SCRATCH_SIZE);
       ex.ghostty_wasm_free(this.selScratch, SELECTION_SCRATCH_SIZE);
