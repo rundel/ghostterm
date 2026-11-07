@@ -23,6 +23,7 @@ import {
   type TerminalHandle,
   UnderlineStyle,
 } from './types';
+import { defaultWasmUrl } from './wasm-default';
 
 // Re-export types for convenience
 export {
@@ -1096,9 +1097,9 @@ export class Ghostty {
   /**
    * Load the libghostty-vt module.
    *
-   * Without an argument this loads the size-optimized `ghostty-vt.wasm` (bundled into the library
-   * build). Pass a path or URL to load another copy, such as the speed-optimized
-   * `ghostty-vt-fast.wasm` shipped alongside it.
+   * Without an argument this loads the size-optimized `ghostty-vt.wasm` (inlined into the default
+   * bundle; next to the bundle for `ghostterm/slim`). Pass a path or URL to load another copy,
+   * such as the speed-optimized `ghostty-vt-fast.wasm` shipped alongside it.
    */
   static async load(wasmPath?: string | URL): Promise<Ghostty> {
     if (wasmPath) {
@@ -1108,8 +1109,8 @@ export class Ghostty {
       );
     }
 
-    // Resolve path relative to this module
-    const moduleUrl = new URL('../ghostty-vt.wasm', import.meta.url);
+    // The bundled module (inlined), or the one next to the slim bundle
+    const moduleUrl = defaultWasmUrl();
 
     // Build paths to try, prioritizing file system paths for Node/Bun
     const defaultPaths: string[] = [];

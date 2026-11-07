@@ -55,6 +55,26 @@ await init({ wasmPath: fastWasm });
 
 `Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded. The module is loaded once: later `init()` calls, concurrent ones included, share it, and one asking for a different `wasmPath` logs a warning.
 
+### Smaller bundle
+
+The default entry point inlines `ghostty-vt.wasm` as base64, so it works as a single file but most of it is the module. `ghostterm/slim` is the same library without the inlined module: its `init()` fetches `ghostty-vt.wasm` (shipped as `ghostterm/ghostty-vt.wasm`) by URL instead, so the JavaScript is smaller and the browser caches the module apart from your code.
+
+| Entry point                       | JavaScript             | WebAssembly fetched at `init()` |
+| --------------------------------- | ---------------------- | ------------------------------- |
+| `ghostterm` (`dist/ghostterm.js`) | 1,282 kB (439 kB gzip) | none                            |
+| `ghostterm/slim`                  | 156 kB (40 kB gzip)    | 844 kB (300 kB gzip)            |
+
+Without arguments, the slim `init()` loads `new URL('./ghostty-vt.wasm', import.meta.url)`, the file next to `dist/ghostterm-slim.js`. Bundlers that understand that pattern (Vite and webpack 5 builds) emit the file as an asset. Otherwise, or when a dev server pre-bundles dependencies (Vite's dev server does), pass the URL yourself:
+
+```javascript
+import { init, Terminal } from 'ghostterm/slim';
+import wasm from 'ghostterm/ghostty-vt.wasm?url'; // Vite; or any URL where you serve the file
+
+await init({ wasmPath: wasm });
+```
+
+The fast build works the same way with the slim entry (`ghostterm/ghostty-vt-fast.wasm`). Both entry points share `dist/index.d.ts`.
+
 ### Addons
 
 ```javascript
@@ -139,7 +159,7 @@ bun install
 ./scripts/fetch-wasm.sh
 bun test
 bun run test:e2e         # browser tests (run `bun run test:e2e:install` once first)
-bun run build            # dist/
+bun run build            # dist/: both entry points, both wasm builds, index.d.ts, then checks them
 bun run demo             # a real shell at http://127.0.0.1:8000/demo/ (see demo/README.md)
 ```
 

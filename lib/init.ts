@@ -7,9 +7,11 @@ import { Ghostty } from './ghostty';
 
 export interface InitOptions {
   /**
-   * Where to load the libghostty-vt module from. Defaults to the size-optimized `ghostty-vt.wasm`
-   * bundled into the library. `ghostterm/ghostty-vt-fast.wasm` is the speed-optimized build:
-   * the same features, 10-20% faster on output heavy in escape sequences, and about 1.5x larger.
+   * Where to load the libghostty-vt module from. Defaults to the size-optimized `ghostty-vt.wasm`:
+   * inlined into `ghostterm`, and fetched from next to the bundle by `ghostterm/slim` (pass
+   * `ghostterm/ghostty-vt.wasm`'s URL when your bundler doesn't handle that).
+   * `ghostterm/ghostty-vt-fast.wasm` is the speed-optimized build: the same features, 10-20%
+   * faster on output heavy in escape sequences, and about 1.5x larger.
    */
   wasmPath?: string | URL;
 }

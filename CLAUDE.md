@@ -24,7 +24,7 @@ bun run test:e2e --project chromium  # one browser (chromium, firefox, webkit)
 bun run typecheck
 bun run lint                     # Biome; `bun run lint:fix` to fix
 bun run fmt                      # Prettier check; `bun run fmt:fix` to fix
-bun run build                    # fetch WASM, Vite 8 build into dist/ (ES module, ghostty-vt-fast.wasm, index.d.ts), then scripts/check-dist.ts
+bun run build                    # fetch WASM, Vite 8 build into dist/ (both entry points, both .wasm, index.d.ts), then scripts/check-dist.ts
 bun run demo                     # Vite + PTY server: http://127.0.0.1:8000/demo/
 bun run bench                    # throughput against xterm.js
 bun run release <version>        # see "Releases" below
@@ -32,7 +32,7 @@ bun run release <version>        # see "Releases" below
 
 Before committing: `bun run fmt && bun run lint && bun run typecheck && bun test && bun run build`.
 
-`ghostty-vt.wasm` (ReleaseSmall, the default, inlined into the Vite bundle and not shipped separately) and `ghostty-vt-fast.wasm` (ReleaseFast, opt-in through `init({ wasmPath })`, shipped as a separate file) are gitignored. They have the same features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Don't reference the fast build with a literal `new URL(..., import.meta.url)` in `lib/`: Vite would inline it too. `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
+`ghostty-vt.wasm` (ReleaseSmall, the default) and `ghostty-vt-fast.wasm` (ReleaseFast, opt-in through `init({ wasmPath })`) are gitignored. They have the same features and exports. Tests load them from the repo root, so run `fetch-wasm.sh` once after cloning. Both are shipped in `dist/`. The build has two entry points from the same modules: `dist/ghostterm.js` (`vite build`) inlines `ghostty-vt.wasm` through the `new URL(..., import.meta.url)` in `lib/wasm-default.ts`, and `dist/ghostterm-slim.js` (`vite build --mode slim`, package export `ghostterm/slim`) swaps that module for `lib/wasm-default-slim.ts`, which loads the `ghostty-vt.wasm` next to the bundle by URL (see `vite.config.js`). Nothing else may differ between them. `scripts/check-dist.ts` checks that only the default bundle inlines the module and that the slim one loads the file next to it. Don't reference a wasm file with a literal `new URL(..., import.meta.url)` anywhere else in `lib/`: Vite would inline it too. The bundles use Vite's default build target (`baseline-widely-available`). `bun install` may rewrite `bun.lock`; don't commit that unless dependencies changed.
 
 ## Architecture
 
