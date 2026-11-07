@@ -282,6 +282,34 @@ describe('theme configuration', () => {
     expect(term.isRowDirty(0)).toBe(true);
     expect(fg(term.getViewport()[0])).toEqual([0, 0, 0xaa]);
   });
+
+  test('default colors changed or cleared after a frame apply without new output', () => {
+    const term = fixture.wasm(20, 5);
+    term.setColors({ foreground: 0x111111, background: 0x222222, cursor: 0x333333 });
+    term.write('D');
+    term.getViewport();
+    term.markClean();
+
+    term.setColors({ foreground: 0x444444, background: 0x555555, cursor: 0x666666 });
+    expect(term.getColors()).toEqual({
+      foreground: { r: 0x44, g: 0x44, b: 0x44 },
+      background: { r: 0x55, g: 0x55, b: 0x55 },
+      cursor: { r: 0x66, g: 0x66, b: 0x66 },
+    });
+    expect(fg(term.getViewport()[0])).toEqual([0x44, 0x44, 0x44]);
+    term.markClean();
+
+    // Leaving one out restores the built-in default rather than keeping the old color.
+    term.setColors({ foreground: 0x444444 });
+    expect(term.getColors()).toEqual({
+      foreground: { r: 0x44, g: 0x44, b: 0x44 },
+      background: { r: 0, g: 0, b: 0 },
+      cursor: null,
+    });
+    term.setColors({});
+    expect(term.getColors().foreground).toEqual({ r: 0xff, g: 0xff, b: 0xff });
+    expect(fg(term.getViewport()[0])).toEqual([0xff, 0xff, 0xff]);
+  });
 });
 
 describe('grid access', () => {

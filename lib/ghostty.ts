@@ -1483,6 +1483,9 @@ export class MouseEncoder {
 
 /** Size of the per-terminal scratch area for out-parameters. */
 const SCRATCH_SIZE = 2048;
+/** The render state's own default colors, used when setColors() leaves one out. */
+const DEFAULT_FOREGROUND = 0xffffff;
+const DEFAULT_BACKGROUND = 0x000000;
 /**
  * Reported for XTGETTCAP "TN", as Ghostty does: libghostty answers the other capabilities from
  * Ghostty's own terminfo entry.
@@ -1990,9 +1993,10 @@ export class GhosttyTerminal {
 
   /**
    * Set the terminal's default colors, at any time (a theme change). Colors
-   * are 0xRRGGBB; undefined restores libghostty's built-in default. Palette
-   * entries override the built-in 256-color palette by index. Programs can
-   * still change colors with OSC 4/10/11/12; those overrides are kept.
+   * are 0xRRGGBB; undefined restores the built-in default (white on black,
+   * no cursor color). Palette entries override the built-in 256-color palette
+   * by index. Programs can still change colors with OSC 4/10/11/12; those
+   * overrides are kept.
    */
   setColors(colors: TerminalColors): void {
     const ex = this.exports;
@@ -2000,8 +2004,10 @@ export class GhosttyTerminal {
       if (hex === undefined) ex.ghostty_terminal_set(this.handle, option, 0);
       else this.setColor(option, hex);
     };
-    set(TerminalOpt.COLOR_FOREGROUND, colors.foreground);
-    set(TerminalOpt.COLOR_BACKGROUND, colors.background);
+    // The render state copies the foreground and background only while both are set, so
+    // unsetting one would leave the old colors on screen; the built-in defaults are set instead.
+    this.setColor(TerminalOpt.COLOR_FOREGROUND, colors.foreground ?? DEFAULT_FOREGROUND);
+    this.setColor(TerminalOpt.COLOR_BACKGROUND, colors.background ?? DEFAULT_BACKGROUND);
     set(TerminalOpt.COLOR_CURSOR, colors.cursor);
 
     // Start from the built-in palette, then apply the overrides.
