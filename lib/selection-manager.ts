@@ -112,21 +112,12 @@ export class SelectionManager {
    * Get current viewport Y position (how many lines scrolled into history)
    */
   private getViewportY(): number {
-    const rawViewportY =
-      typeof (this.terminal as any).getViewportY === 'function'
-        ? (this.terminal as any).getViewportY()
-        : (this.terminal as any).viewportY || 0;
-    return Math.max(0, Math.floor(rawViewportY));
+    return Math.max(0, Math.floor(this.terminal.getViewportY()));
   }
 
-  /**
-   * Convert viewport row to absolute buffer row
-   * Absolute row is an index into combined buffer: scrollback (0 to len-1) + screen (len to len+rows-1)
-   */
-  private viewportRowToAbsolute(viewportRow: number): number {
-    const scrollbackLength = this.wasmTerm.getScrollbackLength();
-    const viewportY = this.getViewportY();
-    return scrollbackLength + viewportRow - viewportY;
+  /** Number of rows in the buffer: scrollback, then the screen. */
+  private bufferLength(): number {
+    return this.wasmTerm.getScrollbackLength() + this.wasmTerm.getDimensions().rows;
   }
 
   /**
@@ -172,7 +163,7 @@ export class SelectionManager {
   }
 
   /**
-   * Clear the selection
+   * Clear the selection, firing onSelectionChange if there was one
    */
   clearSelection(): void {
     if (!this.hasSelection()) return;
@@ -180,6 +171,7 @@ export class SelectionManager {
     this.isSelecting = false;
     this.stopAutoScroll();
     this.gesture?.reset();
+    this.selectionChangedEmitter.fire();
   }
 
   /**
@@ -191,59 +183,36 @@ export class SelectionManager {
   }
 
   /**
-   * Select text at specific column and row with length
-   * xterm.js compatible API
+   * Select `length` cells starting at a column of an absolute buffer row
+   * (0 = oldest scrollback row), continuing onto the following rows as
+   * xterm.js does.
    */
   select(column: number, row: number, length: number): void {
-    // Clamp to valid ranges
-    const dims = this.wasmTerm.getDimensions();
-    row = Math.max(0, Math.min(row, dims.rows - 1));
-    column = Math.max(0, Math.min(column, dims.cols - 1));
-
-    // Calculate end position
-    let endRow = row;
-    let endCol = column + Math.max(1, length) - 1;
-
-    // Handle wrapping if selection extends past end of line
-    while (endCol >= dims.cols) {
-      endCol -= dims.cols;
-      endRow++;
-    }
-
-    // Clamp end row
-    endRow = Math.min(endRow, dims.rows - 1);
-
+    const cols = this.wasmTerm.getDimensions().cols;
+    const last = this.bufferLength() * cols - 1;
+    const start = Math.max(0, Math.min(row * cols + Math.max(0, Math.min(column, cols - 1)), last));
+    const end = Math.min(start + Math.max(1, length) - 1, last);
     this.setSelectionAbsolute(
-      column,
-      this.viewportRowToAbsolute(row),
-      endCol,
-      this.viewportRowToAbsolute(endRow)
+      start % cols,
+      Math.floor(start / cols),
+      end % cols,
+      Math.floor(end / cols)
     );
     this.selectionChangedEmitter.fire();
   }
 
   /**
-   * Select entire lines from start to end
+   * Select whole lines between two absolute buffer rows, both included
    * xterm.js compatible API
    */
   selectLines(start: number, end: number): void {
-    const dims = this.wasmTerm.getDimensions();
+    const cols = this.wasmTerm.getDimensions().cols;
+    const maxRow = this.bufferLength() - 1;
+    start = Math.max(0, Math.min(start, maxRow));
+    end = Math.max(0, Math.min(end, maxRow));
+    if (start > end) [start, end] = [end, start];
 
-    // Clamp to valid row ranges
-    start = Math.max(0, Math.min(start, dims.rows - 1));
-    end = Math.max(0, Math.min(end, dims.rows - 1));
-
-    // Ensure start <= end
-    if (start > end) {
-      [start, end] = [end, start];
-    }
-
-    this.setSelectionAbsolute(
-      0,
-      this.viewportRowToAbsolute(start),
-      dims.cols - 1,
-      this.viewportRowToAbsolute(end)
-    );
+    this.setSelectionAbsolute(0, start, cols - 1, end);
     this.selectionChangedEmitter.fire();
   }
 
@@ -257,18 +226,18 @@ export class SelectionManager {
   }
 
   /**
-   * Get selection position as buffer range
-   * xterm.js compatible API
+   * The selection as xterm.js reports it: absolute buffer rows (0 = oldest
+   * scrollback row, whether or not it is on screen), start column included and
+   * end column excluded, so a selection to the end of a row ends at x = cols.
    */
   getSelectionPosition():
     | { start: { x: number; y: number }; end: { x: number; y: number } }
     | undefined {
-    const coords = this.normalizeSelection();
-    if (!coords) return undefined;
-
+    const range = this.wasmTerm.getSelectionRange();
+    if (!range) return undefined;
     return {
-      start: { x: coords.startCol, y: coords.startRow },
-      end: { x: coords.endCol, y: coords.endRow },
+      start: { x: range.startCol, y: range.startRow },
+      end: { x: range.endCol + 1, y: range.endRow },
     };
   }
 
@@ -278,17 +247,6 @@ export class SelectionManager {
    */
   deselect(): void {
     this.clearSelection();
-    this.selectionChangedEmitter.fire();
-  }
-
-  /**
-   * Focus the terminal (make it receive keyboard input)
-   */
-  focus(): void {
-    const canvas = this.renderer.getCanvas();
-    if (canvas.parentElement) {
-      canvas.parentElement.focus();
-    }
   }
 
   /**
@@ -413,17 +371,17 @@ export class SelectionManager {
       // the InputHandler); Shift+drag still selects, as in Ghostty.
       if (this.wasmTerm.hasMouseTracking() && !e.shiftKey) return;
 
-      // CRITICAL: Focus the terminal so it can receive keyboard input
-      // The canvas doesn't have tabindex, but the parent container does
-      if (canvas.parentElement) {
-        canvas.parentElement.focus();
-      }
+      // Keyboard input, IME composition included, goes to the textarea.
+      this.textarea.focus();
 
       this.syncViewport();
       const cell = this.pixelToCell(e.offsetX, e.offsetY);
       const time = e.timeStamp > 0 ? e.timeStamp : performance.now();
+      const hadSelection = this.hasSelection();
       this.getGesture().press(cell.col, cell.row, e.offsetX, e.offsetY, time);
       this.isSelecting = true;
+      // A plain click clears the selection; a double or triple click makes one.
+      if (hadSelection || this.hasSelection()) this.selectionChangedEmitter.fire();
       this.lastPointer = { x: e.offsetX, y: e.offsetY };
     });
 
@@ -582,7 +540,7 @@ export class SelectionManager {
         this.geometry(),
         this.rectangle
       );
-      (this.terminal as any).scrollToLine(this.wasmTerm.getViewportOffset());
+      this.terminal.scrollToLine(this.wasmTerm.getViewportOffset());
       if (!ok || this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
         this.stopAutoScroll();
       }
@@ -710,10 +668,11 @@ export class SelectionManager {
    * Copy using legacy execCommand (fallback for older browsers)
    */
   private copyWithExecCommand(text: string): void {
-    const previouslyFocused = document.activeElement as HTMLElement;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const textarea = this.textarea;
+    const style = textarea.style.cssText;
     try {
       // Position textarea offscreen but in a way that allows selection
-      const textarea = this.textarea;
       textarea.value = text;
       textarea.style.position = 'fixed';
       textarea.style.left = '-9999px';
@@ -727,22 +686,15 @@ export class SelectionManager {
       textarea.select();
       textarea.setSelectionRange(0, text.length);
 
-      const success = document.execCommand('copy');
-
-      // Restore focus
-      if (previouslyFocused) {
-        previouslyFocused.focus();
-      }
-
-      if (!success) {
+      if (!document.execCommand('copy')) {
         console.warn('execCommand copy failed');
       }
     } catch (err) {
       console.warn('execCommand copy threw:', err);
-      // Restore focus on error
-      if (previouslyFocused) {
-        previouslyFocused.focus();
-      }
+    } finally {
+      textarea.value = '';
+      textarea.style.cssText = style;
+      previouslyFocused?.focus();
     }
   }
 }

@@ -40,52 +40,19 @@ function viewportToAbsolute(term: Terminal, viewportRow: number): number {
 }
 
 describe('SelectionManager', () => {
-  let container: HTMLElement | null = null;
+  let container: HTMLElement;
 
-  beforeEach(async () => {
-    if (typeof document !== 'undefined') {
-      container = document.createElement('div');
-      document.body.appendChild(container);
-    }
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
   });
 
   afterEach(() => {
-    if (container && container.parentNode) {
-      container.parentNode.removeChild(container);
-      container = null;
-    }
-  });
-
-  describe('Construction', () => {
-    test('creates without errors', async () => {
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      expect(term).toBeDefined();
-    });
-  });
-
-  describe('API', () => {
-    test('has required public methods', async () => {
-      if (!container) return;
-
-      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
-      term.open(container);
-
-      const selMgr = (term as any).selectionManager;
-      expect(typeof selMgr.getSelection).toBe('function');
-      expect(typeof selMgr.hasSelection).toBe('function');
-      expect(typeof selMgr.clearSelection).toBe('function');
-      expect(typeof selMgr.selectAll).toBe('function');
-      expect(typeof selMgr.getSelectionCoords).toBe('function');
-      expect(typeof selMgr.dispose).toBe('function');
-
-      term.dispose();
-    });
+    container.remove();
   });
 
   describe('Selection with absolute coordinates', () => {
     test('hasSelection returns false when no selection', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -96,8 +63,6 @@ describe('SelectionManager', () => {
     });
 
     test('hasSelection returns true when selection exists', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -113,8 +78,6 @@ describe('SelectionManager', () => {
     });
 
     test('hasSelection returns true for single cell programmatic selection', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -129,8 +92,6 @@ describe('SelectionManager', () => {
     });
 
     test('clearSelection clears selection and marks rows dirty', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -155,8 +116,6 @@ describe('SelectionManager', () => {
 
   describe('Selection text extraction', () => {
     test('getSelection returns empty string when no selection', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -167,8 +126,6 @@ describe('SelectionManager', () => {
     });
 
     test('getSelection extracts text from screen buffer', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -185,8 +142,6 @@ describe('SelectionManager', () => {
     });
 
     test('getSelection extracts multi-line text', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -207,8 +162,6 @@ describe('SelectionManager', () => {
     });
 
     test('getSelection extracts text from scrollback', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
       term.open(container);
 
@@ -234,8 +187,6 @@ describe('SelectionManager', () => {
     });
 
     test('getSelection extracts text spanning scrollback and screen', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
       term.open(container);
 
@@ -262,8 +213,6 @@ describe('SelectionManager', () => {
 
   describe('Selection persistence during scroll', () => {
     test('selection coordinates are preserved when scrolling', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
       term.open(container);
 
@@ -293,8 +242,6 @@ describe('SelectionManager', () => {
     });
 
     test('selection coords convert correctly after scrolling', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
       term.open(container);
 
@@ -329,8 +276,6 @@ describe('SelectionManager', () => {
     });
 
     test('selection outside viewport returns null coords but preserves text', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24, scrollback: 1000 });
       term.open(container);
 
@@ -362,8 +307,6 @@ describe('SelectionManager', () => {
 
   describe('Selection highlight', () => {
     test('selected cells are flagged in the viewport, and cleared with the selection', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
       term.write('Line 1\r\nLine 2\r\nLine 3\r\n');
@@ -383,8 +326,6 @@ describe('SelectionManager', () => {
 
   describe('Backward selection', () => {
     test('handles selection from right to left', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -403,8 +344,6 @@ describe('SelectionManager', () => {
     });
 
     test('handles selection from bottom to top', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -427,8 +366,6 @@ describe('SelectionManager', () => {
 
   describe('selectAll', () => {
     test('selectAll selects all content, scrollback included (as in xterm.js)', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 5 });
       term.open(container);
 
@@ -454,8 +391,6 @@ describe('SelectionManager', () => {
 
   describe('select() API', () => {
     test('select() creates selection at specified position', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -471,10 +406,89 @@ describe('SelectionManager', () => {
     });
   });
 
+  describe('xterm.js selection API in buffer coordinates', () => {
+    async function withScrollback(): Promise<Terminal> {
+      const term = await createIsolatedTerminal({ cols: 10, rows: 3 });
+      term.open(container);
+      for (let i = 0; i < 6; i++) term.write(`line ${i}\r\n`);
+      term.write('last');
+      return term;
+    }
+
+    test('select() takes absolute buffer rows, scrollback included', async () => {
+      const term = await withScrollback();
+      expect(term.buffer.active.baseY).toBe(4);
+
+      term.select(0, 1, 6);
+      expect(term.getSelection()).toBe('line 1');
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 1 }, end: { x: 6, y: 1 } });
+
+      // Continues onto the next rows like xterm.js; a selection to the end of
+      // a row ends at x = cols.
+      term.select(5, 1, 15);
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 10, y: 2 } });
+      term.select(5, 1, 20);
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 5, y: 1 }, end: { x: 5, y: 3 } });
+      term.dispose();
+    });
+
+    test('selectLines() takes absolute buffer rows', async () => {
+      const term = await withScrollback();
+      term.selectLines(2, 3);
+      expect(term.getSelection()).toBe('line 2\nline 3');
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 2 }, end: { x: 10, y: 3 } });
+      term.dispose();
+    });
+
+    test('getSelectionPosition() reports a selection scrolled off screen', async () => {
+      const term = await withScrollback();
+      term.select(0, 6, 4);
+      term.scrollToTop();
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 6 }, end: { x: 4, y: 6 } });
+      expect(term.getSelection()).toBe('last');
+      term.dispose();
+    });
+
+    test('positions past the end of the buffer are clamped', async () => {
+      const term = await withScrollback();
+      term.select(0, 100, 5);
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 9, y: 6 }, end: { x: 10, y: 6 } });
+      term.selectLines(5, 100);
+      expect(term.getSelectionPosition()).toEqual({ start: { x: 0, y: 5 }, end: { x: 10, y: 6 } });
+      term.dispose();
+    });
+  });
+
+  describe('onSelectionChange when the selection is cleared', () => {
+    test('fires for clearSelection() and typing, only when there was a selection', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 3 });
+      term.open(container);
+      term.write('hello');
+      let changes = 0;
+      term.onSelectionChange(() => changes++);
+
+      term.clearSelection();
+      expect(changes).toBe(0);
+
+      term.select(0, 0, 5);
+      expect(changes).toBe(1);
+      term.clearSelection();
+      expect(changes).toBe(2);
+      expect(term.getSelectionPosition()).toBeUndefined();
+
+      term.select(0, 0, 5);
+      const textarea = (term as any).textarea as HTMLTextAreaElement;
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true })
+      );
+      expect(term.hasSelection()).toBe(false);
+      expect(changes).toBe(4);
+      term.dispose();
+    });
+  });
+
   describe('selectLines() API', () => {
     test('selectLines() selects entire lines', async () => {
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -498,8 +512,6 @@ describe('SelectionManager', () => {
       const container = document.createElement('div');
       Object.defineProperty(container, 'clientWidth', { value: 800 });
       Object.defineProperty(container, 'clientHeight', { value: 480 });
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -538,8 +550,6 @@ describe('SelectionManager', () => {
       const container = document.createElement('div');
       Object.defineProperty(container, 'clientWidth', { value: 800 });
       Object.defineProperty(container, 'clientHeight', { value: 480 });
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -561,8 +571,6 @@ describe('SelectionManager', () => {
       const container = document.createElement('div');
       Object.defineProperty(container, 'clientWidth', { value: 800 });
       Object.defineProperty(container, 'clientHeight', { value: 480 });
-      if (!container) return;
-
       const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
       term.open(container);
 
@@ -653,9 +661,92 @@ describe('SelectionManager mouse gestures (libghostty)', () => {
     term.write('hello world');
     selMgr().select(0, 0, 5);
     expect(selMgr().hasSelection()).toBe(true);
+    let changes = 0;
+    term.onSelectionChange(() => changes++);
     mouse('mousedown', 8, 0, 1000);
     mouse('mouseup', 8, 0, 1010, document);
     expect(selMgr().hasSelection()).toBe(false);
+    expect(changes).toBe(1);
+  });
+
+  describe('copy shortcuts', () => {
+    const g = globalThis as any;
+    let savedClipboard: PropertyDescriptor | undefined;
+    let savedClipboardItem: unknown;
+    let savedExecCommand: unknown;
+
+    beforeEach(() => {
+      savedClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+      savedClipboardItem = g.ClipboardItem;
+      savedExecCommand = document.execCommand;
+      g.ClipboardItem = undefined;
+    });
+
+    afterEach(() => {
+      if (savedClipboard) Object.defineProperty(navigator, 'clipboard', savedClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+      g.ClipboardItem = savedClipboardItem;
+      (document as any).execCommand = savedExecCommand;
+    });
+
+    function setClipboard(value: unknown) {
+      Object.defineProperty(navigator, 'clipboard', { value, configurable: true });
+    }
+
+    function key(init: KeyboardEventInit) {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      ((term as any).textarea as HTMLTextAreaElement).dispatchEvent(e);
+      return e;
+    }
+
+    test('Cmd+C and Ctrl+Shift+C copy the selection with the clipboard API', () => {
+      const written: string[] = [];
+      setClipboard({ writeText: async (text: string) => void written.push(text) });
+      const sent: string[] = [];
+      term.onData((d) => sent.push(d));
+      term.write('copy me');
+      term.select(0, 0, 4);
+
+      const cmd = key({ key: 'c', code: 'KeyC', metaKey: true });
+      const ctrlShift = key({ key: 'C', code: 'KeyC', ctrlKey: true, shiftKey: true });
+      expect(written).toEqual(['copy', 'copy']);
+      expect(cmd.defaultPrevented).toBe(true);
+      expect(ctrlShift.defaultPrevented).toBe(true);
+      expect(sent).toEqual([]);
+    });
+
+    test('without the clipboard API, execCommand copies and the textarea is restored', () => {
+      setClipboard(undefined);
+      const textarea = (term as any).textarea as HTMLTextAreaElement;
+      const style = textarea.style.cssText;
+      let valueDuringCopy = '';
+      (document as any).execCommand = (command: string) => {
+        valueDuringCopy = command === 'copy' ? textarea.value : '';
+        return true;
+      };
+      term.write('copy me');
+      term.select(0, 0, 4);
+
+      key({ key: 'c', code: 'KeyC', metaKey: true });
+      expect(valueDuringCopy).toBe('copy');
+      expect(textarea.value).toBe('');
+      expect(textarea.style.cssText).toBe(style);
+    });
+  });
+
+  test('a click focuses the input textarea, so IME composes there', () => {
+    const textarea = (term as any).textarea as HTMLTextAreaElement;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    mouse('mousedown', 1, 1, 1000);
+    mouse('mouseup', 1, 1, 1010, document);
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  test('focusing the terminal element passes focus on to the textarea', () => {
+    const textarea = (term as any).textarea as HTMLTextAreaElement;
+    textarea.blur();
+    container.focus();
+    expect(document.activeElement).toBe(textarea);
   });
 
   test('double-click selects a word using Ghostty word rules', () => {

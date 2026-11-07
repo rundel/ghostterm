@@ -783,7 +783,7 @@ describe('selectLines()', () => {
       expect(pos).toBeTruthy();
       expect(pos!.start.x).toBe(0);
       expect(pos!.start.y).toBe(0);
-      expect(pos!.end.x).toBe(79); // Last column
+      expect(pos!.end.x).toBe(80); // End column is exclusive, as in xterm.js
       expect(pos!.end.y).toBe(2);
       term.dispose();
     });

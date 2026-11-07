@@ -68,7 +68,7 @@ describe('SerializeAddon', () => {
     const html = serializer.serializeAsHTML();
     expect(html).toContain('row 0');
     expect(html).toContain('green');
-    term.select(0, term.rows - 1, 5);
+    term.select(0, term.buffer.active.baseY + term.rows - 1, 5);
     const sel = serializer.serializeAsHTML({ onlySelection: true, includeGlobalBackground: true });
     expect(sel).toContain('green');
     expect(sel).not.toContain('row 0');
