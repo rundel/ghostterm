@@ -328,6 +328,46 @@ describe('cursor', () => {
     term.scrollLines(-2);
     expect(cursorRects(render(term))).toEqual([]);
   });
+
+  test.each(['block', 'underline', 'bar'] as const)(
+    'without focus a %s cursor is a hollow block, and focus restores it',
+    (shape) => {
+      term.options.cursorStyle = shape;
+      term.write('ab\x1b[D');
+      const { w, h } = cell();
+      const focused = cursorRects(render(term));
+      expect(focused).toHaveLength(1);
+
+      // Blurring repaints the cursor's row at once with the outline: four one-pixel edges of
+      // the cell and the character in its own color, not the accent.
+      const { ctx } = internals(term);
+      ctx.calls = [];
+      term.blur();
+      const calls = ctx.calls;
+      expect(cursorRects(calls)).toEqual([
+        { x: 1, y: 0, w, h: 1 },
+        { x: 1, y: (h - 1) / h, w, h: 1 },
+        { x: 1, y: 1 / h, w: 1, h: h - 2 },
+        { x: 1 + (w - 1) / w, y: 1 / h, w: 1, h: h - 2 },
+      ]);
+      expect(drawnText(term, calls).map((t) => [t.text, t.fillStyle])).toEqual([
+        ['a', 'rgb(212, 212, 212)'],
+        ['b', 'rgb(212, 212, 212)'],
+      ]);
+
+      ctx.calls = [];
+      term.focus();
+      expect(cursorRects(ctx.calls)).toEqual(focused);
+    }
+  );
+
+  test('without focus the cursor does not blink', () => {
+    term.options.cursorBlink = true;
+    term.blur();
+    const { renderer } = internals(term);
+    renderer['cursorVisible'] = false;
+    expect(cursorRects(render(term))).toHaveLength(4);
+  });
 });
 
 describe('colors', () => {

@@ -152,7 +152,8 @@ interface DrawnCursor {
   y: number;
   /** Cells covered (2 on a wide character). */
   width: number;
-  shape: 'block' | 'underline' | 'bar';
+  /** 'outline' is the hollow block drawn while the terminal doesn't have focus. */
+  shape: 'block' | 'underline' | 'bar' | 'outline';
   color: string;
 }
 
@@ -181,6 +182,8 @@ export class CanvasRenderer {
   private blinkActive = false;
   /** The cursor as drawn on the canvas, or null when it isn't. */
   private drawnCursor: DrawnCursor | null = null;
+  /** Whether the terminal has keyboard focus; without it the cursor is a steady hollow block. */
+  private focused = true;
 
   /** Default cell background in effect (the theme's, or what the program set). */
   private background: string;
@@ -418,16 +421,19 @@ export class CanvasRenderer {
     // on is repainted to erase it. Its position comes from the frame being
     // drawn (viewportX/Y), which a render hold (mode 2026) freezes along with
     // the cells; x/y are the terminal's live position.
+    // Without focus it is a hollow block that doesn't blink, whatever the shape (as in Ghostty
+    // and xterm.js).
     let nextCursor: DrawnCursor | null = null;
     const cx = cursor.viewportX ?? cursor.x;
     const cy = cursor.viewportY ?? cursor.y;
-    if (offset === 0 && cursor.visible && this.cursorVisible && cy >= 0 && cy < dims.rows) {
+    const shown = this.cursorVisible || !this.focused;
+    if (offset === 0 && cursor.visible && shown && cy >= 0 && cy < dims.rows) {
       const line = buffer.getViewportLine(cy);
       nextCursor = {
         x: cx,
         y: cy,
         width: line?.[cx]?.width === 2 ? 2 : 1,
-        shape: this.cursorShape,
+        shape: this.focused ? this.cursorShape : 'outline',
         color: this.cursorColor,
       };
     }
@@ -865,6 +871,18 @@ export class CanvasRenderer {
         this.ctx.fillRect(cursorX, cursorY, barWidth, this.metrics.height);
         break;
       }
+
+      case 'outline': {
+        // The cell's edges, one device pixel per CSS pixel thick, filled rather than stroked so
+        // they stay crisp.
+        const t = Math.max(1, Math.round(this.devicePixelRatio)) / this.devicePixelRatio;
+        const h = this.metrics.height;
+        this.ctx.fillRect(cursorX, cursorY, width, t);
+        this.ctx.fillRect(cursorX, cursorY + h - t, width, t);
+        this.ctx.fillRect(cursorX, cursorY + t, t, h - 2 * t);
+        this.ctx.fillRect(cursorX + width - t, cursorY + t, t, h - 2 * t);
+        break;
+      }
     }
   }
 
@@ -914,6 +932,11 @@ export class CanvasRenderer {
   public setFontFamily(family: string): void {
     this.fontFamily = family;
     this.metrics = this.measureFont();
+  }
+
+  /** Whether the terminal has keyboard focus (the cursor is drawn hollow without it). */
+  public setFocused(focused: boolean): void {
+    this.focused = focused;
   }
 
   /**

@@ -140,6 +140,7 @@ These follow Ghostty rather than xterm.js:
 - Clipboard: programs may write to the clipboard with OSC 52 (turn this off with `allowClipboardWrite: false`); reading it is always denied.
 - Search: literal text, case-insensitive for ASCII letters. `findNext()` moves toward older output (up from the prompt), as Ghostty's find does; `resultIndex` still counts matches from the top, as in xterm.js, so `findNext()` lowers it. The `regex`, `wholeWord` and `caseSensitive` options are not supported, and the first search that sets one logs a warning.
 - Scrollback limit: libghostty drops history a page at a time, so right after a page is dropped the number of lines kept can be somewhat below the `scrollback` option. `scrollback: 0` keeps no history, as in xterm.js.
+- Cursor: while the terminal doesn't have focus the cursor is a hollow block that doesn't blink, whatever shape the options or the program chose; focus restores it.
 - Colors: the defaults are `DEFAULT_THEME`'s (#d4d4d4 on #1e1e1e) and are given to libghostty too, so programs that ask for the colors (OSC 10/11) get an answer. A background a program sets with OSC 11 is drawn, and survives `reset()`, as in Ghostty.
 
 Other differences from xterm.js:

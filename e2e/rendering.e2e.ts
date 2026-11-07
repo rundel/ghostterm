@@ -42,6 +42,33 @@ test('the cursor follows DECSCUSR and DECTCEM', async ({ page }) => {
   expect(countColor(await cellPixels(page, 0, 0), THEME.cursor)).toBe(0);
 });
 
+test(
+  'without focus the cursor is a hollow block, and focus restores its shape',
+  { tag: '@cross' },
+  async ({ page }) => {
+    await openFixture(page);
+    await write(page, '\x1b[6 q');
+    await page.locator('#before').focus();
+    await nextFrame(page);
+    const outline = await cellPixels(page, 0, 0);
+    const { width: w, height: h } = outline;
+    // Exactly the cell's edges, one CSS pixel wide (whole device pixels), with the background
+    // inside.
+    const t = Math.round((await geometry(page)).scale);
+    const inside = (w - 2 * t) * (h - 2 * t);
+    expect(countColor(outline, THEME.cursor)).toBe(w * h - inside);
+    expect(columnsWithColor(outline, THEME.cursor)).toHaveLength(w);
+    expect(countColor(outline, THEME.background)).toBe(inside);
+
+    await page.evaluate(() => window.term.focus());
+    await nextFrame(page);
+    const bar = await cellPixels(page, 0, 0);
+    expect(columnsWithColor(bar, THEME.cursor)[0]).toBe(0);
+    expect(columnsWithColor(bar, THEME.cursor).length).toBeLessThan(w / 2);
+    expect(countColor(bar, THEME.cursor)).toBe(columnsWithColor(bar, THEME.cursor).length * h);
+  }
+);
+
 test.describe('at a fractional device pixel ratio', () => {
   test.use({ deviceScaleFactor: 1.25 });
 

@@ -488,6 +488,11 @@ export class Terminal implements ITerminalCore {
       // Size canvas to terminal dimensions (use renderer.resize for proper DPI scaling)
       this.renderer.resize(this.cols, this.rows);
 
+      // The cursor is drawn hollow while the terminal doesn't have focus.
+      this.renderer.setFocused(document.activeElement === this.textarea);
+      this.listen(this.textarea, 'focus', () => this.setRendererFocus(true));
+      this.listen(this.textarea, 'blur', () => this.setRendererFocus(false));
+
       // Create mouse tracking configuration
       const canvas = this.canvas;
       const renderer = this.renderer;
@@ -1321,6 +1326,11 @@ export class Terminal implements ITerminalCore {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
     }
+  }
+
+  private setRendererFocus(focused: boolean): void {
+    this.renderer?.setFocused(focused);
+    this.renderFrame(false);
   }
 
   /** Draw what changed (everything with `force`) and fire onRender for the rows drawn. */
