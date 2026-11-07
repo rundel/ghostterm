@@ -121,6 +121,8 @@ Besides the xterm.js events (`onData`, `onResize`, `onTitleChange`, `onBell`, `o
 
 With shell integration, `term.scrollToPrompt(-1)` and `term.scrollToPrompt(1)` jump between prompts.
 
+`term.modes` reports the modes the program set (xterm.js `IModes`: application cursor keys and keypad, bracketed paste, mouse tracking, focus reporting, synchronized output, ...), read from libghostty; `term.getMode(mode, isAnsi)` reads any other mode by number.
+
 Programs can also query the terminal's light or dark color scheme and its cell size in pixels, change the cursor shape, blink and color, set the mouse pointer shape (OSC 22) and use synchronized output (mode 2026). ghostterm answers and applies all of these.
 
 ### Markers and decorations

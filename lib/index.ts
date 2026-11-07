@@ -28,6 +28,7 @@ export type {
   IDecorationOptions,
   IDecorationOverviewRulerOptions,
   IFunctionIdentifier,
+  IModes,
   IParser,
   IUnicodeVersionProvider,
   IBufferNamespace,

@@ -131,6 +131,32 @@ export interface IDecoration extends IDisposable {
   readonly onDispose: IEvent<void>;
 }
 
+/** The terminal modes a program set (xterm.js IModes). */
+export interface IModes {
+  /** DECCKM (mode 1): cursor keys send ESC O sequences. */
+  readonly applicationCursorKeysMode: boolean;
+  /** DECKPAM (ESC =): the keypad sends application sequences. */
+  readonly applicationKeypadMode: boolean;
+  /** Mode 2004. */
+  readonly bracketedPasteMode: boolean;
+  /** IRM (ANSI mode 4). */
+  readonly insertMode: boolean;
+  /** Mouse reporting: 9 (x10), 1000 (vt200), 1002 (drag) or 1003 (any). */
+  readonly mouseTrackingMode: 'none' | 'x10' | 'vt200' | 'drag' | 'any';
+  /** DECOM (mode 6). */
+  readonly originMode: boolean;
+  /** Mode 45. */
+  readonly reverseWraparoundMode: boolean;
+  /** Mode 1004: focus in and out are reported. */
+  readonly sendFocusMode: boolean;
+  /** DECTCEM (mode 25). */
+  readonly showCursor: boolean;
+  /** Mode 2026. */
+  readonly synchronizedOutputMode: boolean;
+  /** DECAWM (mode 7). */
+  readonly wraparoundMode: boolean;
+}
+
 /** Identifies a CSI, DCS or ESC sequence (xterm.js IFunctionIdentifier). */
 export interface IFunctionIdentifier {
   /** A private-parameter prefix byte, e.g. '?'. */

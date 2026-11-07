@@ -43,6 +43,7 @@ import type {
   ILink,
   ILinkProvider,
   IMarker,
+  IModes,
   ITerminalAddon,
   ITerminalCore,
   ITerminalOptions,
@@ -50,6 +51,7 @@ import type {
 } from './interfaces';
 import { LinkDetector } from './link-detector';
 import { MarkerRegistry } from './markers';
+import { DEFAULT_MODES, readModes } from './modes';
 import { Parser } from './parser';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
@@ -1996,6 +1998,11 @@ export class Terminal implements ITerminalCore {
   // ============================================================================
   // Terminal Modes
   // ============================================================================
+
+  /** The modes the program set (xterm.js `modes`), read from libghostty; defaults before open(). */
+  public get modes(): IModes {
+    return this.wasmTerm ? readModes(this.wasmTerm) : DEFAULT_MODES;
+  }
 
   /**
    * Query terminal mode state
