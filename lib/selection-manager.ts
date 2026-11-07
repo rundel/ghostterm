@@ -34,6 +34,8 @@ export interface SelectionCoordinates {
   startRow: number;
   endCol: number;
   endRow: number;
+  /** A block selection: columns startCol..endCol on every row. */
+  rectangle?: boolean;
 }
 
 // ============================================================================
@@ -51,6 +53,8 @@ export class SelectionManager {
   private mouseDownTarget: EventTarget | null = null; // Track where mousedown occurred
   /** Last pointer position during a drag, relative to the canvas (CSS px). */
   private lastPointer = { x: 0, y: 0 };
+  /** Whether the current drag is a block selection (Alt held). */
+  private rectangle = false;
 
   // Track rows that need redraw for clearing old selection
   private dirtySelectionRows: Set<number> = new Set();
@@ -387,13 +391,17 @@ export class SelectionManager {
     this.wasmTerm.setViewportOffset(this.getViewportY());
   }
 
-  /** Feed a drag at canvas position (x, y), which may lie outside the canvas. */
-  private dragTo(x: number, y: number): void {
+  /**
+   * Feed a drag at canvas position (x, y), which may lie outside the canvas.
+   * Holding Alt makes it a block (rectangular) selection, as in Ghostty.
+   */
+  private dragTo(x: number, y: number, altKey: boolean): void {
     this.lastPointer = { x, y };
+    this.rectangle = altKey;
     this.markCurrentSelectionDirty();
     this.syncViewport();
     const cell = this.pixelToCell(x, y);
-    this.getGesture().drag(cell.col, cell.row, x, y, this.geometry());
+    this.getGesture().drag(cell.col, cell.row, x, y, this.geometry(), this.rectangle);
     this.markCurrentSelectionDirty();
 
     if (this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
@@ -432,7 +440,7 @@ export class SelectionManager {
 
     // Mouse move on canvas - update selection
     canvas.addEventListener('mousemove', (e: MouseEvent) => {
-      if (this.isSelecting) this.dragTo(e.offsetX, e.offsetY);
+      if (this.isSelecting) this.dragTo(e.offsetX, e.offsetY, e.altKey);
     });
 
     // Document-level mousemove for tracking the pointer while dragging outside
@@ -446,7 +454,7 @@ export class SelectionManager {
         e.clientX > rect.right ||
         e.clientY < rect.top ||
         e.clientY > rect.bottom;
-      if (outside) this.dragTo(e.clientX - rect.left, e.clientY - rect.top);
+      if (outside) this.dragTo(e.clientX - rect.left, e.clientY - rect.top, e.altKey);
     };
     document.addEventListener('mousemove', this.boundDocumentMouseMoveHandler);
 
@@ -591,7 +599,14 @@ export class SelectionManager {
       this.syncViewport();
       const { x, y } = this.lastPointer;
       const cell = this.pixelToCell(x, y);
-      const ok = this.getGesture().autoscrollTick(cell.col, cell.row, x, y, this.geometry());
+      const ok = this.getGesture().autoscrollTick(
+        cell.col,
+        cell.row,
+        x,
+        y,
+        this.geometry(),
+        this.rectangle
+      );
       (this.terminal as any).scrollToLine(this.wasmTerm.getViewportOffset());
       this.markCurrentSelectionDirty();
       if (!ok || this.getGesture().autoscroll() === SelectionAutoscroll.NONE) {
@@ -645,17 +660,18 @@ export class SelectionManager {
       return null;
     }
 
-    // Clamp rows to visible range, adjusting columns for partial rows
+    // Clamp rows to visible range. A linear selection continues to the start
+    // or end of the clamped row; a block keeps its columns.
     if (startRow < 0) {
       startRow = 0;
-      startCol = 0;
+      if (!range.rectangle) startCol = 0;
     }
     if (endRow > maxRow) {
       endRow = maxRow;
-      endCol = dims.cols - 1;
+      if (!range.rectangle) endCol = dims.cols - 1;
     }
 
-    return { startCol, startRow, endCol, endRow };
+    return { startCol, startRow, endCol, endRow, rectangle: range.rectangle };
   }
 
   /**

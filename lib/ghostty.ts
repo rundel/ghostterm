@@ -116,6 +116,7 @@ const GestureEvent = {
   OPT_REPEAT_DISTANCE: 3,
   OPT_TIME_NS: 4,
   OPT_REPEAT_INTERVAL_NS: 5,
+  OPT_RECTANGLE: 8,
   OPT_GEOMETRY: 9,
   OPT_VIEWPORT: 10,
   DATA_AUTOSCROLL: 3,
@@ -1830,6 +1831,12 @@ export class SelectionGesture {
     this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_POSITION, p);
   }
 
+  private setRectangle(event: number, rectangle: boolean): void {
+    const p = this.scratch + 104;
+    this.mem.view().setUint8(p, rectangle ? 1 : 0);
+    this.exports.ghostty_selection_gesture_event_set(event, GestureEvent.OPT_RECTANGLE, p);
+  }
+
   private setGeometry(event: number, g: SelectionGeometry): void {
     const p = this.scratch + 32;
     const G = this.L.geometry;
@@ -1873,12 +1880,23 @@ export class SelectionGesture {
     return this.apply(event, true);
   }
 
-  /** Pointer dragged to a viewport cell; x and y may lie outside the surface. */
-  drag(col: number, row: number, x: number, y: number, geometry: SelectionGeometry): boolean {
+  /**
+   * Pointer dragged to a viewport cell; x and y may lie outside the surface.
+   * With `rectangle` the drag selects a block of columns (Alt-drag).
+   */
+  drag(
+    col: number,
+    row: number,
+    x: number,
+    y: number,
+    geometry: SelectionGeometry,
+    rectangle = false
+  ): boolean {
     const event = this.events[GestureEvent.DRAG];
     this.setRef(event, col, row);
     this.setPosition(event, x, y);
     this.setGeometry(event, geometry);
+    this.setRectangle(event, rectangle);
     return this.apply(event, true);
   }
 
@@ -1896,10 +1914,12 @@ export class SelectionGesture {
     row: number,
     x: number,
     y: number,
-    geometry: SelectionGeometry
+    geometry: SelectionGeometry,
+    rectangle = false
   ): boolean {
     const ex = this.exports;
     const event = this.events[GestureEvent.AUTOSCROLL_TICK];
+    this.setRectangle(event, rectangle);
     const coord = this.scratch + 80;
     const view = this.mem.view();
     view.setUint32(coord, 0, true);

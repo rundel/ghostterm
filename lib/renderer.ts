@@ -131,6 +131,7 @@ export class CanvasRenderer {
     startRow: number;
     endCol: number;
     endRow: number;
+    rectangle?: boolean;
   } | null = null;
 
   // Link rendering state
@@ -927,6 +928,16 @@ export class CanvasRenderer {
     if (!sel) return false;
 
     const { startCol, startRow, endCol, endRow } = sel;
+
+    // Block selection: the same columns on every row
+    if (sel.rectangle) {
+      return (
+        y >= startRow &&
+        y <= endRow &&
+        x >= Math.min(startCol, endCol) &&
+        x <= Math.max(startCol, endCol)
+      );
+    }
 
     // Single line selection
     if (startRow === endRow) {

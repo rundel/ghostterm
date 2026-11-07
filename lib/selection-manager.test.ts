@@ -753,3 +753,87 @@ describe('SelectionManager mouse gestures (libghostty)', () => {
     expect(selMgr().getSelection()).toBe('after');
   });
 });
+
+describe('SelectionManager block selection (Alt-drag)', () => {
+  let container: HTMLElement;
+  let term: Terminal;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    term = await createIsolatedTerminal({ cols: 40, rows: 5 });
+    term.open(container);
+    term.write('abcdef\r\nghijkl\r\nmnopqr');
+  });
+
+  afterEach(() => {
+    term.dispose();
+    container.remove();
+  });
+
+  /**
+   * Presses land near a cell's left edge and drags past its midpoint, since
+   * Ghostty anchors and extends selections by cell halves.
+   */
+  function mouse(type: string, col: number, row: number, altKey: boolean, target?: EventTarget) {
+    const fx = type === 'mousedown' ? 0.1 : 0.9;
+    const renderer = (term as any).renderer;
+    const metrics = renderer.getMetrics();
+    const e = new MouseEvent(type, { button: 0, bubbles: true, altKey });
+    Object.defineProperty(e, 'offsetX', { value: (col + fx) * metrics.width });
+    Object.defineProperty(e, 'offsetY', { value: (row + 0.5) * metrics.height });
+    Object.defineProperty(e, 'timeStamp', { value: 1000 });
+    (target ?? renderer.getCanvas()).dispatchEvent(e);
+  }
+
+  const selMgr = () => (term as any).selectionManager;
+
+  test('Alt-drag selects a block of columns', () => {
+    mouse('mousedown', 1, 0, true);
+    mouse('mousemove', 3, 2, true);
+    mouse('mouseup', 3, 2, true, document);
+    expect(selMgr().getSelection()).toBe('bcd\nhij\nnop');
+    const coords = selMgr().getSelectionCoords();
+    expect(coords).toMatchObject({
+      startCol: 1,
+      endCol: 3,
+      startRow: 0,
+      endRow: 2,
+      rectangle: true,
+    });
+  });
+
+  test('a block dragged up and to the left is normalized', () => {
+    mouse('mousedown', 4, 2, true);
+    mouse('mousemove', 1, 0, true);
+    mouse('mouseup', 1, 0, true, document);
+    const coords = selMgr().getSelectionCoords();
+    expect(coords.startCol).toBeLessThanOrEqual(coords.endCol);
+    expect(coords.startRow).toBe(0);
+    expect(selMgr().getSelection().split('\n')).toHaveLength(3);
+  });
+
+  test('the same drag without Alt is a linear selection', () => {
+    mouse('mousedown', 1, 0, false);
+    mouse('mousemove', 3, 2, false);
+    mouse('mouseup', 3, 2, false, document);
+    expect(selMgr().getSelection()).toBe('bcdef\nghijkl\nmnop');
+    expect(selMgr().getSelectionCoords().rectangle).toBe(false);
+  });
+
+  test('the renderer highlights only the block columns', () => {
+    mouse('mousedown', 1, 0, true);
+    mouse('mousemove', 3, 2, true);
+    mouse('mouseup', 3, 2, true, document);
+    const renderer = (term as any).renderer;
+    renderer.currentSelectionCoords = selMgr().getSelectionCoords();
+    const inSel = (x: number, y: number) => renderer.isInSelection(x, y);
+    expect([inSel(0, 1), inSel(1, 1), inSel(3, 1), inSel(4, 1)]).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+    expect([inSel(5, 0), inSel(0, 2)]).toEqual([false, false]);
+  });
+});
