@@ -204,6 +204,7 @@ export class SearchAddon implements ITerminalAddon {
           start: screenRow === m.startRow ? m.startCol : 0,
           end: screenRow === m.endRow ? m.endCol : terminal.cols - 1,
           color,
+          active: isActive,
         });
       }
     }

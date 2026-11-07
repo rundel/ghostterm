@@ -95,3 +95,42 @@ describe('SearchAddon', () => {
     expect(term.getSelection()).toBe('needle');
   });
 });
+
+describe('SearchAddon active match', () => {
+  test('the active match color wins over the selection, with normal text color', () => {
+    search.findNext('needle', {
+      decorations: { matchBackground: '#444400', activeMatchBackground: '#ff8800' },
+    });
+    const renderer = (term as any).renderer;
+    const ctx = renderer.ctx;
+    const fills: { x: number; y: number; style: string }[] = [];
+    const texts: { col: number; row: number; style: string }[] = [];
+    const fillRect = ctx.fillRect;
+    const fillText = ctx.fillText;
+    ctx.fillRect = (x: number, y: number, w: number, h: number) => {
+      fills.push({ x, y, style: String(ctx.fillStyle) });
+      return fillRect.call(ctx, x, y, w, h);
+    };
+    ctx.fillText = (t: string, x: number, y: number) => {
+      texts.push({
+        col: Math.floor(x / renderer.charWidth),
+        row: Math.floor(y / renderer.charHeight),
+        style: String(ctx.fillStyle),
+      });
+      return fillText.call(ctx, t, x, y);
+    };
+    try {
+      renderer.render(term.wasmTerm, true, term.viewportY, term);
+    } finally {
+      ctx.fillRect = fillRect;
+      ctx.fillText = fillText;
+    }
+    const selection = renderer.theme.selectionBackground;
+    expect(fills.some((f) => f.style === '#ff8800')).toBe(true);
+    expect(fills.some((f) => f.style === selection)).toBe(false);
+    // Text in the active match (row 2, columns 7-12) keeps its normal color.
+    const matchText = texts.filter((t) => t.row === 2 && t.col >= 7 && t.col <= 12);
+    expect(matchText.length).toBeGreaterThan(0);
+    expect(matchText.some((t) => t.style === renderer.theme.selectionForeground)).toBe(false);
+  });
+});

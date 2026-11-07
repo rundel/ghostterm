@@ -91,6 +91,8 @@ export interface HighlightRange {
   start: number;
   end: number;
   color: string;
+  /** The current match: drawn over the selection, with its normal text color. */
+  active?: boolean;
 }
 const SCROLLBAR_THUMB_WIDTH = 8;
 const SCROLLBAR_RIGHT_INSET = 3;
@@ -571,20 +573,24 @@ export class CanvasRenderer {
     const cellY = y * this.metrics.height;
     const cellWidth = this.metrics.width * cell.width;
 
-    // Check if this cell is selected
-    const isSelected = cell.selected === true;
+    // Search highlight (SearchAddon decorations). The active match is drawn
+    // over the selection; other matches under it.
+    const highlight = this.highlightAt(x, y);
+    if (highlight?.active) {
+      this.ctx.fillStyle = highlight.color;
+      this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
+      return;
+    }
 
-    if (isSelected) {
+    if (cell.selected === true) {
       // Draw selection background (solid color, not overlay)
       this.ctx.fillStyle = this.theme.selectionBackground;
       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
       return; // Selection background replaces cell background
     }
 
-    // Search match highlight (SearchAddon decorations)
-    const highlight = this.highlightAt(x, y);
     if (highlight) {
-      this.ctx.fillStyle = highlight;
+      this.ctx.fillStyle = highlight.color;
       this.ctx.fillRect(cellX, cellY, cellWidth, this.metrics.height);
       return;
     }
@@ -627,8 +633,8 @@ export class CanvasRenderer {
       return;
     }
 
-    // Check if this cell is selected
-    const isSelected = cell.selected === true;
+    // Selected, unless the active search match is drawn over the selection
+    const isSelected = cell.selected === true && !this.highlightAt(x, y)?.active;
 
     // Set text style
     let fontStyle = '';
@@ -777,11 +783,11 @@ export class CanvasRenderer {
     return true;
   }
 
-  private highlightAt(x: number, y: number): string | null {
+  private highlightAt(x: number, y: number): HighlightRange | null {
     const ranges = this.highlightRows.get(y);
     if (!ranges) return null;
     for (const r of ranges) {
-      if (x >= r.start && x <= r.end) return r.color;
+      if (x >= r.start && x <= r.end) return r;
     }
     return null;
   }
