@@ -815,9 +815,6 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Clear terminal screen
-   */
-  /**
    * Clear the buffer as xterm.js does: the cursor's line becomes the top
    * line, everything else (scrollback included) is dropped, and the cursor
    * keeps its column. Nothing is sent to the program.
@@ -989,7 +986,7 @@ export class Terminal implements ITerminalCore {
   }
 
   // ==========================================================================
-  // Phase 1: Custom Event Handlers
+  // Custom Event Handlers
   // ==========================================================================
 
   /**
@@ -1832,18 +1829,16 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Viewport row to absolute buffer row (0 = oldest scrollback line), using
-   * the floored scroll offset the renderer draws with.
+   * @internal Viewport row to absolute buffer row (0 = oldest scrollback
+   * line), using the floored scroll offset the renderer draws with.
    */
-  private viewportRowToBufferRow(viewportRow: number): number {
-    const offset = Math.max(0, Math.floor(this.getViewportY()));
-    return this.wasmTerm!.getScrollbackLength() - offset + viewportRow;
+  public viewportRowToBufferRow(viewportRow: number): number {
+    return this.topLine() + viewportRow;
   }
 
-  /** Absolute buffer row to viewport row (may be outside 0..rows-1). */
-  private bufferRowToViewportRow(bufferRow: number): number {
-    const offset = Math.max(0, Math.floor(this.getViewportY()));
-    return bufferRow - this.wasmTerm!.getScrollbackLength() + offset;
+  /** @internal Absolute buffer row to viewport row (may be outside 0..rows-1). */
+  public bufferRowToViewportRow(bufferRow: number): number {
+    return bufferRow - this.topLine();
   }
 
   /** The pointer over the text: the program's choice (OSC 22), else a text cursor. */

@@ -135,6 +135,28 @@ describe('Terminal events from libghostty', () => {
   });
 });
 
+describe('link hover', () => {
+  test('hovering a link shows a pointer and underlines it; leaving restores both', async () => {
+    term.write('see \x1b]8;;https://example.com\x07here\x1b]8;;\x07 now');
+    const renderer = (term as any).renderer;
+    const canvas: HTMLCanvasElement = renderer.getCanvas();
+    const at = (col: number) =>
+      new MouseEvent('mousemove', {
+        clientX: col * renderer.charWidth + 1,
+        clientY: 1,
+        bubbles: true,
+      });
+    container.dispatchEvent(at(5));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(canvas.style.cursor).toBe('pointer');
+    expect(renderer.getHoveredHyperlinkId()).toBeGreaterThan(0);
+
+    container.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(canvas.style.cursor).toBe('text');
+    expect(renderer.getHoveredHyperlinkId()).toBe(0);
+  });
+});
+
 describe('theme', () => {
   const firstCell = (t: Terminal) => t.wasmTerm!.getLine(0)![0];
 
