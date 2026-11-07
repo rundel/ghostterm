@@ -214,7 +214,7 @@ bun run release 0.2.0-rc.1        # a prerelease: any suffix after the patch num
 bun run release 0.2.0 --push      # a release, pushed straight away
 ```
 
-This refuses to run while Unreleased is empty. It runs the checks and the build, sets the version in `package.json`, moves the Unreleased entries under the new version (a prerelease leaves them for the release that follows), commits and tags. Pushing the tag runs `.github/workflows/release.yml`, which builds and creates the GitHub release, marked as a prerelease when the version has a suffix. Each release carries the package tarball, a zip of `dist/` and `SHA256SUMS`, and its notes are its changelog entries and the libghostty-vt release it is built on.
+This refuses to run while Unreleased is empty. It runs the checks and the build, sets the version in `package.json`, moves the Unreleased entries under the new version (a prerelease leaves them for the release that follows), commits and tags. Pushing the tag runs `.github/workflows/release.yml`, which builds and creates the GitHub release. While ghostterm is experimental every release is marked as a prerelease on GitHub, with or without a suffix. Each release carries the package tarball, a zip of `dist/` and `SHA256SUMS`, and its notes are its changelog entries and the libghostty-vt release it is built on.
 
 ## License
 

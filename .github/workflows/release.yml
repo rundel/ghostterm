@@ -1,8 +1,8 @@
 name: release
 
-# Pushed by `bun run release <version>`. A tag with a suffix (v0.2.0-rc.1) is published as a
-# prerelease; a plain tag (v0.2.0) as a release. The build runs with read access only; just the
-# publish job can write to the repository.
+# Pushed by `bun run release <version>`. ghostterm is experimental, so every tag is published as a
+# GitHub prerelease, plain (v0.2.0) or suffixed (v0.2.0-rc.1). The build runs with read access
+# only; just the publish job can write to the repository.
 on:
   push:
     tags: ['v*']
@@ -37,7 +37,9 @@ jobs:
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::$TAG is not on main"; exit 1
           fi
-          [[ "$VERSION" == *-* ]] && PRERELEASE=true || PRERELEASE=false
+          # Every release is a prerelease for now; restore the suffix test to publish full releases:
+          # [[ "$VERSION" == *-* ]] && PRERELEASE=true || PRERELEASE=false
+          PRERELEASE=true
           {
             echo "version=$VERSION"
             echo "prerelease=$PRERELEASE"
