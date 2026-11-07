@@ -4,6 +4,8 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+## 0.0.2 - 2026-11-07
+
 - Markers: `registerMarker()` and `markers`, tracked by libghostty as output scrolls, history is pruned and the screen reflows.
 - Decorations: `registerDecoration()` places an element over a marker's line and can color its cells.
 - `modes` reports the terminal modes a program set, as in xterm.js.
