@@ -18,6 +18,8 @@ bun install
 bun test                         # all tests (happy-dom, no real browser)
 bun test lib/ghostty.test.ts     # one file
 bun test -t "pattern"            # matching tests
+bun run test:e2e                 # browser tests (Playwright, Chromium); `bun run test:e2e:install` once
+bun run test:e2e -g "pattern"    # matching browser tests
 bun run typecheck
 bun run lint                     # Biome; `bun run lint:fix` to fix
 bun run fmt                      # Prettier check; `bun run fmt:fix` to fix
@@ -102,7 +104,16 @@ Tests run under happy-dom (`happydom.ts`, preloaded by `bunfig.toml`); there is 
 
 happy-dom quirks: `WheelEvent` ignores `clientX`/`clientY`; set `offsetX`/`offsetY` on synthetic mouse events with `Object.defineProperty`; synthetic events need `cancelable: true` for `defaultPrevented` to mean anything.
 
-Visual behavior (canvas output, real keyboard and mouse, clipboard) can only be checked in a browser with `bun run demo`.
+### Browser tests
+
+`e2e/*.e2e.ts` run in a real browser with Playwright (`playwright.config.ts`; Chromium only for now, more browsers are more entries under `projects`). The `.e2e.ts` suffix keeps them out of `bun test`. They are not in the pre-commit list; run them when touching input, focus, clipboard, links, the renderer or anything else happy-dom can't show, and CI runs them in a separate `e2e` job.
+
+- Fixture: `e2e/fixture.html` (and `e2e/fixture.ts`) opens one `Terminal` with fixed options (40x10, 16px monospace, no cursor blink, the colors in `e2e/theme.ts`) and no program behind it. It exposes `window.term`, `window.sent` (every `onData` payload) and `window.log` (scratch space for a spec's own event recording). Query parameters set `cols`, `rows`, `fontSize`, `fontFamily`, `scrollback` and `smoothScrollDuration`. Playwright starts Vite with `e2e/vite.config.js`, bound to 127.0.0.1:8137 (`E2E_PORT` to change) and serving only what the page needs, like the demo.
+- Helpers (`e2e/helpers.ts`): `openFixture(page, options)`, `write(page, data)` (waits for the frame that draws it), `sent`/`clearSent`, `nextFrame`, `geometry` (canvas position, cell size, device pixel scale), `cellPoint`/`mouseToCell` for pointer positions, and `cellPixels` with `countColor`, `countTinted`, `columnsWithColor` and `rowsWithColor` to read the canvas at known cells.
+- Assert bytes in `window.sent`, canvas pixels at known cells, focus, the clipboard or DOM state; no golden screenshots and no fixed sleeps (`expect.poll` or `nextFrame` instead). Chromium-only features (IME, drag events and device metrics through CDP) skip other browsers.
+- What belongs where: behavior a program sees from synthetic events, terminal state and drawing calls stay unit tests; browser behavior (real focus and Tab order, real mouse and keyboard events, IME, clipboard, drag and drop, devicePixelRatio, web fonts, pixels) goes in e2e.
+
+Anything the e2e tests don't cover can still be checked by hand in a browser with `bun run demo`.
 
 ## Releases
 

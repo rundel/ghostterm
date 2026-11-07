@@ -38,11 +38,21 @@
     }
   },
   "files": {
-    "ignore": ["node_modules", "dist", "coverage", "*.wasm", ".git", ".vite", "bun.lock"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "coverage",
+      "test-results",
+      "playwright-report",
+      "*.wasm",
+      ".git",
+      ".vite",
+      "bun.lock"
+    ]
   },
   "overrides": [
     {
-      "include": ["happydom.ts", "lib/test-helpers.ts", "**/*.test.ts"],
+      "include": ["happydom.ts", "lib/test-helpers.ts", "**/*.test.ts", "e2e/**"],
       "linter": {
         "rules": {
           "complexity": {

@@ -14,7 +14,9 @@
     "happydom.ts",
     "scripts/**/*.ts",
     "bench/**/*.ts",
-    "demo/bin/*.test.ts"
+    "demo/bin/*.test.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

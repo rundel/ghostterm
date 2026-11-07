@@ -7,3 +7,9 @@ dist/
 # WASM build output (built locally and in CI)
 ghostty-vt.wasm
 ghostty-vt-fast.wasm
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

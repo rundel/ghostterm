@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ghostterm e2e fixture</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #202020;
+      }
+      #terminal {
+        display: inline-block;
+        padding: 10px;
+        background: #000000;
+      }
+      #before {
+        display: block;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <input id="before" aria-label="Before the terminal" />
+    <div id="terminal"></div>
+    <script type="module" src="./fixture.ts"></script>
+  </body>
+</html>

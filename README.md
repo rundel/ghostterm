@@ -138,6 +138,7 @@ Requires Bun and curl, and minisign to move the pin.
 bun install
 ./scripts/fetch-wasm.sh
 bun test
+bun run test:e2e         # browser tests (run `bun run test:e2e:install` once first)
 bun run build            # dist/
 bun run demo             # a real shell at http://127.0.0.1:8000/demo/ (see demo/README.md)
 ```

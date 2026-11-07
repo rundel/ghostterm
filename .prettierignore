@@ -5,3 +5,5 @@ coverage/
 .git/
 .vite/
 bun.lock
+test-results/
+playwright-report/
