@@ -31,6 +31,7 @@ import type {
 import { getGhostty } from './init';
 import { InputHandler, type MouseTrackingConfig } from './input-handler';
 import type {
+  IAddonTerminal,
   IBufferNamespace,
   IBufferRange,
   IDisposable,
@@ -46,7 +47,13 @@ import type {
 import { LinkDetector } from './link-detector';
 import { OSC8LinkProvider } from './providers/osc8-link-provider';
 import { UrlRegexProvider } from './providers/url-regex-provider';
-import { CanvasRenderer, DEFAULT_THEME, parseCssColor } from './renderer';
+import {
+  CanvasRenderer,
+  DEFAULT_THEME,
+  type FontMetrics,
+  type HighlightRange,
+  parseCssColor,
+} from './renderer';
 import { SelectionManager } from './selection-manager';
 import { Key } from './types';
 
@@ -54,7 +61,7 @@ import { Key } from './types';
 // Terminal Class
 // ============================================================================
 
-export class Terminal implements ITerminalCore {
+export class Terminal implements IAddonTerminal {
   // Public properties (xterm.js compatibility)
   public cols: number;
   public rows: number;
@@ -79,7 +86,7 @@ export class Terminal implements ITerminalCore {
   // Components (created on open())
   private ghostty?: Ghostty;
   public wasmTerm?: GhosttyTerminal; // Made public for link providers
-  public renderer?: CanvasRenderer; // Made public for FitAddon
+  public renderer?: CanvasRenderer;
   private inputHandler?: InputHandler;
   private selectionManager?: SelectionManager;
   private canvas?: HTMLCanvasElement;
@@ -211,19 +218,19 @@ export class Terminal implements ITerminalCore {
     this.rawOptions = baseOptions;
 
     // Wrap in Proxy to intercept runtime changes (xterm.js compatibility)
-    (this.options as any) = new Proxy(baseOptions, {
-      set: (target: any, prop: string, value: any) => {
-        const oldValue = target[prop];
-        target[prop] = value;
+    this.options = new Proxy(baseOptions, {
+      set: (target, prop, value) => {
+        const oldValue = Reflect.get(target, prop);
+        Reflect.set(target, prop, value);
 
         // Apply runtime changes if terminal is open
-        if (this.isOpen) {
+        if (this.isOpen && typeof prop === 'string') {
           this.handleOptionChange(prop, value, oldValue);
         }
 
         return true;
       },
-    });
+    }) as Required<ITerminalOptions>;
 
     this.cols = this.options.cols;
     this.rows = this.options.rows;
@@ -988,6 +995,21 @@ export class Terminal implements ITerminalCore {
    */
   public getViewportY(): number {
     return this.viewportY;
+  }
+
+  /** @internal Cell size in CSS pixels, or undefined before open() (for FitAddon). */
+  public getMetrics(): FontMetrics | undefined {
+    return this.renderer?.getMetrics();
+  }
+
+  /** @internal Set the width right of the grid for the scrollbar (for FitAddon). */
+  public setScrollbarGutter(px: number): void {
+    this.renderer?.setScrollbarGutter(px);
+  }
+
+  /** @internal Set where the renderer gets search highlights from (for SearchAddon). */
+  public setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void {
+    this.renderer?.setHighlightProvider(provider);
   }
 
   /**

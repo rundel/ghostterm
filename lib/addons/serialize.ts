@@ -20,8 +20,8 @@
  * ```
  */
 
-import { FormatterExtras, type GhosttyTerminal } from '../ghostty';
-import type { ITerminalAddon, ITerminalCore } from '../interfaces';
+import { FormatterExtras } from '../ghostty';
+import type { IAddonTerminal, ITerminalAddon } from '../interfaces';
 
 /** Absolute buffer lines (0 = oldest scrollback line), both included. */
 export interface ISerializeRange {
@@ -54,11 +54,6 @@ export interface IHTMLSerializeOptions {
   includeGlobalBackground?: boolean;
 }
 
-/** What the addon uses from the Terminal. */
-interface SerializableTerminal extends ITerminalCore {
-  wasmTerm?: GhosttyTerminal;
-}
-
 /** Mode sets that switch to the alternate screen (47, 1047, 1049). */
 const ALT_SCREEN_MODES = /\x1b\[\?(?:47|1047|1049)h/g;
 
@@ -68,10 +63,10 @@ const MODE_EXTRAS =
   FormatterExtras.MODES | FormatterExtras.KEYBOARD | FormatterExtras.KITTY_KEYBOARD;
 
 export class SerializeAddon implements ITerminalAddon {
-  private terminal?: SerializableTerminal;
+  private terminal?: IAddonTerminal;
 
-  activate(terminal: ITerminalCore): void {
-    this.terminal = terminal as SerializableTerminal;
+  activate(terminal: IAddonTerminal): void {
+    this.terminal = terminal;
   }
 
   dispose(): void {

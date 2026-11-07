@@ -2,7 +2,8 @@
  * xterm.js-compatible interfaces
  */
 
-import type { Ghostty } from './ghostty';
+import type { Ghostty, GhosttyTerminal } from './ghostty';
+import type { FontMetrics, HighlightRange } from './renderer';
 
 export interface ITerminalOptions {
   cols?: number; // Default: 80
@@ -82,6 +83,24 @@ export interface ITerminalCore {
   rows: number;
   element?: HTMLElement;
   textarea?: HTMLTextAreaElement;
+}
+
+/**
+ * @internal What the bundled addons use from Terminal. Terminal implements it;
+ * addons type their activate() parameter with it.
+ */
+export interface IAddonTerminal extends ITerminalCore {
+  readonly wasmTerm?: GhosttyTerminal;
+  resize(cols: number, rows: number): void;
+  /** Cell size in CSS pixels, or undefined before open(). */
+  getMetrics(): FontMetrics | undefined;
+  /** Width right of the grid for the scrollbar, at least SCROLLBAR_GUTTER. */
+  setScrollbarGutter(px: number): void;
+  /** Where the renderer gets search highlights from (undefined: none). */
+  setHighlightProvider(provider: (() => HighlightRange[]) | undefined): void;
+  getViewportY(): number;
+  scrollToViewportOffset(offset: number): void;
+  clearSelection(): void;
 }
 
 /**

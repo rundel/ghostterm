@@ -25,7 +25,7 @@
 
 import { EventEmitter } from '../event-emitter';
 import type { GhosttyTerminal, SelectionRange, TerminalSearch } from '../ghostty';
-import type { IEvent, ITerminalAddon, ITerminalCore } from '../interfaces';
+import type { IAddonTerminal, IEvent, ITerminalAddon } from '../interfaces';
 import type { HighlightRange } from '../renderer';
 
 export interface ISearchDecorationOptions {
@@ -62,14 +62,6 @@ export interface ISearchResultChangeEvent {
   resultCount: number;
 }
 
-/** What the addon uses from the Terminal. */
-interface SearchableTerminal extends ITerminalCore {
-  wasmTerm?: GhosttyTerminal;
-  getViewportY(): number;
-  scrollToViewportOffset(offset: number): void;
-  clearSelection(): void;
-}
-
 const UNSUPPORTED_OPTIONS = ['regex', 'wholeWord', 'caseSensitive'] as const;
 
 /** Whether position a comes before position b in reading order. */
@@ -78,7 +70,7 @@ function before(aRow: number, aCol: number, bRow: number, bCol: number): boolean
 }
 
 export class SearchAddon implements ITerminalAddon {
-  private terminal?: SearchableTerminal;
+  private terminal?: IAddonTerminal;
   private search?: TerminalSearch;
   /** The WASM terminal the search was made for (Terminal.reset() replaces it). */
   private searchTerm?: GhosttyTerminal;
@@ -89,8 +81,8 @@ export class SearchAddon implements ITerminalAddon {
   /** Fires after each search with the selected match and the match count. */
   public readonly onDidChangeResults: IEvent<ISearchResultChangeEvent> = this.resultsEmitter.event;
 
-  activate(terminal: ITerminalCore): void {
-    this.terminal = terminal as SearchableTerminal;
+  activate(terminal: IAddonTerminal): void {
+    this.terminal = terminal;
   }
 
   dispose(): void {
@@ -121,12 +113,8 @@ export class SearchAddon implements ITerminalAddon {
     this.terminal?.clearSelection();
   }
 
-  private renderer(): { setHighlightProvider(p?: () => HighlightRange[]): void } | undefined {
-    return (this.terminal as any)?.renderer;
-  }
-
   private setHighlights(provider: (() => HighlightRange[]) | undefined): void {
-    this.renderer()?.setHighlightProvider(provider);
+    this.terminal?.setHighlightProvider(provider);
   }
 
   private dropSearch(): void {

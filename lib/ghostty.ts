@@ -1017,7 +1017,7 @@ export class Ghostty {
   private tableFunction(fn: unknown): number {
     const table = this.exports.__indirect_function_table;
     const index = table.grow(1);
-    table.set(index, fn as any);
+    table.set(index, fn);
     return index;
   }
 

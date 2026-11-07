@@ -13,7 +13,7 @@
  * ```
  */
 
-import type { ITerminalAddon, ITerminalCore } from '../interfaces';
+import type { IAddonTerminal, ITerminalAddon } from '../interfaces';
 import { SCROLLBAR_GUTTER } from '../renderer';
 
 // ============================================================================
@@ -38,7 +38,7 @@ export interface ITerminalDimensions {
 // ============================================================================
 
 export class FitAddon implements ITerminalAddon {
-  private _terminal?: ITerminalCore;
+  private _terminal?: IAddonTerminal;
   private _resizeObserver?: ResizeObserver;
   private _resizeDebounceTimer?: ReturnType<typeof setTimeout>;
   private _isResizing: boolean = false;
@@ -46,7 +46,7 @@ export class FitAddon implements ITerminalAddon {
   /**
    * Activate the addon (called by Terminal.loadAddon)
    */
-  public activate(terminal: ITerminalCore): void {
+  public activate(terminal: IAddonTerminal): void {
     this._terminal = terminal;
   }
 
@@ -83,25 +83,19 @@ export class FitAddon implements ITerminalAddon {
     }
 
     const m = this.measure();
-    const terminal = this._terminal as any;
+    const terminal = this._terminal;
     if (!m || !terminal) {
       return;
     }
 
     // Give the space left over after whole cells to the scrollbar gutter, so
     // the canvas fills the container. Done even when cols/rows are unchanged.
-    const renderer = terminal.renderer;
-    if (typeof renderer?.setScrollbarGutter === 'function') {
-      renderer.setScrollbarGutter(m.gutter);
-    }
+    terminal.setScrollbarGutter(m.gutter);
 
     if (m.cols === terminal.cols && m.rows === terminal.rows) {
       return;
     }
 
-    if (typeof terminal.resize !== 'function') {
-      return;
-    }
     this._isResizing = true;
     try {
       terminal.resize(m.cols, m.rows);
@@ -136,16 +130,7 @@ export class FitAddon implements ITerminalAddon {
       return undefined;
     }
 
-    // Access terminal internals to get renderer
-    const terminal = this._terminal as any;
-    const renderer = terminal.renderer;
-
-    if (!renderer || typeof renderer.getMetrics !== 'function') {
-      return undefined;
-    }
-
-    // Get font metrics from renderer
-    const metrics = renderer.getMetrics();
+    const metrics = this._terminal.getMetrics();
     if (!metrics || metrics.width === 0 || metrics.height === 0) {
       return undefined;
     }

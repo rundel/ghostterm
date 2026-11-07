@@ -9,12 +9,13 @@ class MockTerminal {
   public rows = 24;
   public resizes: Array<[number, number]> = [];
   public gutters: number[] = [];
-  public renderer = {
-    getMetrics: () => ({ width: 9, height: 16, baseline: 12 }),
-    setScrollbarGutter: (px: number) => {
-      this.gutters.push(px);
-    },
-  };
+  getMetrics() {
+    return { width: 9, height: 16, baseline: 12 };
+  }
+
+  setScrollbarGutter(px: number): void {
+    this.gutters.push(px);
+  }
 
   constructor(width: number, height: number) {
     this.element = document.createElement('div');
@@ -59,7 +60,7 @@ describe('FitAddon', () => {
     addon.activate(bare as any);
     expect(addon.proposeDimensions()).toBeUndefined();
 
-    addon.activate({ ...bare, element: terminal.element } as any);
+    addon.activate({ ...bare, element: terminal.element, getMetrics: () => undefined } as any);
     expect(addon.proposeDimensions()).toBeUndefined();
   });
 
