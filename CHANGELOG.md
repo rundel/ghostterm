@@ -4,15 +4,13 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+## 0.0.2 - 2026-11-07
+
 - Works headless: writes, the buffer, markers and modes no longer need `open()`.
 - Large writes no longer block the page; `write()` callbacks run once the data is parsed.
 - An idle terminal no longer redraws every frame.
 - Only the public API is exported; `Terminal.renderer` and `viewportY` are private.
 - `input()` sends to `onData`, as in xterm.js.
-- Grayscale text antialiasing on Linux Chromium is restored.
-
-## 0.0.2 - 2026-11-07
-
 - Markers and decorations.
 - `modes`, `refresh()`, `onLineFeed` and `onWriteParsed`.
 - `unicode` reports libghostty's Unicode version.
