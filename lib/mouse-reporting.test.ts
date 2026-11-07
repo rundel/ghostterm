@@ -27,7 +27,7 @@ describe('Mouse reporting', () => {
   });
 
   /** Dispatch a mouse event in the middle of a cell (0-based col/row). */
-  function mouse(type: string, col: number, row: number, init: MouseEventInit = {}) {
+  function mouse(type: string, col: number, row: number, init: WheelEventInit = {}) {
     const renderer = (term as any).renderer;
     const canvas: HTMLCanvasElement = renderer.getCanvas();
     const rect = canvas.getBoundingClientRect();
@@ -144,7 +144,7 @@ describe('Mouse reporting', () => {
       return false;
     });
     const stopped = mouse('wheel', 1, 1, { deltaY: -100 });
-    expect(seen).toEqual([stopped]);
+    expect(seen).toEqual([stopped as WheelEvent]);
     expect(sent).toEqual([]);
     expect(stopped.defaultPrevented).toBe(false);
 

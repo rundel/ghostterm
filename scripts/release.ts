@@ -32,7 +32,7 @@ export function isPrerelease(version: string): boolean {
 function run(cmd: string[], quiet = false): string {
   const proc = Bun.spawnSync(cmd, { stdout: quiet ? 'pipe' : 'inherit', stderr: 'inherit' });
   if (proc.exitCode !== 0) throw new Error(`${cmd.join(' ')} failed`);
-  return quiet ? proc.stdout.toString().trim() : '';
+  return quiet ? (proc.stdout?.toString() ?? '').trim() : '';
 }
 
 function fail(message: string): never {

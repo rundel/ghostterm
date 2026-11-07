@@ -71,7 +71,7 @@ function expectEchoRender(
   renderArgs: Array<Parameters<NonNullable<Terminal['renderer']>['render']>>
 ): void {
   expect(renderArgs).toHaveLength(1);
-  expect(renderArgs[0][0]).toBe(term.wasmTerm);
+  expect(renderArgs[0][0] === term.wasmTerm).toBe(true);
   expect(renderArgs[0][1]).toBe(false);
 }
 
@@ -1836,7 +1836,7 @@ describe('Terminal Config', () => {
       term.write('\x1b[31mRed text\x1b[0m');
 
       // Get first cell - should have red foreground
-      const line = term.wasmTerm!.getLine(0);
+      const line = term.wasmTerm!.getLine(0)!;
       const firstCell = line[0];
 
       // The foreground should be red (0xFF0000)
@@ -2077,10 +2077,6 @@ describe('Alternate Screen Rendering', () => {
     const line11_getLine = getLineContent(term, 11);
     const line11_viewport = getViewportLineContent(term, 11);
 
-    console.log('After typing at top:');
-    console.log('  line11 via getLine:', JSON.stringify(line11_getLine));
-    console.log('  line11 via viewport:', JSON.stringify(line11_viewport));
-
     expect(line11_getLine).toContain('Welcome to Vim!');
     expect(line11_viewport).toContain('Welcome to Vim!');
     expect(line11_getLine).toBe(line11_viewport);
@@ -2101,7 +2097,6 @@ describe('Alternate Screen Rendering', () => {
     // Verify it's there
     const line11 = term.wasmTerm?.getLine(11);
     const welcomeCell = line11?.[29]; // 0-indexed, so col 30 is index 29
-    console.log('Welcome cell:', welcomeCell);
     expect(welcomeCell?.codepoint).toBe('W'.charCodeAt(0));
 
     // Clear dirty and "render"
@@ -2113,7 +2108,6 @@ describe('Alternate Screen Rendering', () => {
     // Check the cell again - should be empty (codepoint 0 or 32)
     const line11After = term.wasmTerm?.getLine(11);
     const clearedCell = line11After?.[29];
-    console.log('Cleared cell:', clearedCell);
     expect(clearedCell?.codepoint === 0 || clearedCell?.codepoint === 32).toBe(true);
 
     term.dispose();
@@ -2152,7 +2146,6 @@ describe('Alternate Screen Rendering', () => {
         getLine: getLineContent(term, row),
         viewport: getViewportLineContent(term, row),
       };
-      console.log(`Row ${row}:`, results[row]);
     }
 
     // Row 0 should have latest iteration
@@ -2751,7 +2744,7 @@ describe('Options Proxy handleOptionChange', () => {
 
     // Access renderer to verify it was updated
     // @ts-ignore - accessing private for test
-    const renderer = term.renderer;
+    const renderer = term.renderer!;
     expect(renderer).toBeDefined();
     // @ts-ignore - accessing private for test
     expect(renderer.cursorStyle).toBe('underline');
@@ -2773,7 +2766,7 @@ describe('Options Proxy handleOptionChange', () => {
     expect(term.options.cursorBlink).toBe(true);
 
     // @ts-ignore - accessing private for test
-    const renderer = term.renderer;
+    const renderer = term.renderer!;
     // @ts-ignore - accessing private for test
     expect(renderer.cursorBlink).toBe(true);
     // @ts-ignore - accessing private for test
@@ -2841,7 +2834,7 @@ describe('Options Proxy handleOptionChange', () => {
     term.open(container);
 
     // @ts-ignore - accessing private for test
-    const renderer = term.renderer;
+    const renderer = term.renderer!;
 
     // Verify initial font size
     // @ts-ignore - accessing private for test
@@ -2873,7 +2866,7 @@ describe('Options Proxy handleOptionChange', () => {
     term.open(container);
 
     // @ts-ignore - accessing private for test
-    const renderer = term.renderer;
+    const renderer = term.renderer!;
 
     // Change font family
     term.options.fontFamily = 'Courier New, monospace';

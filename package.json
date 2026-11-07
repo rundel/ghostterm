@@ -29,7 +29,7 @@
     "bench": "bun bench/versus.ts",
     "release": "bun scripts/release.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "fmt": "prettier --check .",
     "fmt:fix": "prettier --write --cache .",
     "lint": "biome check .",

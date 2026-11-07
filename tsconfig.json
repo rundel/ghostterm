@@ -18,5 +18,5 @@
     "types": ["bun-types"]
   },
   "include": ["lib/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "lib/test-helpers.ts"]
 }
