@@ -368,7 +368,7 @@ describe('selecting scrollback', () => {
 
   test('a fractional (smooth scrolling) viewport maps rows like the renderer, floored', () => {
     const term = withHistory();
-    term.viewportY = 10.7;
+    term['viewportY'] = 10.7;
     dragCells(term, 0, 0, 7, 1);
     expect(term.getSelection()).toBe('Line 067\nLine 068');
   });

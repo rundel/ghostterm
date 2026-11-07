@@ -52,7 +52,7 @@ Terminal (lib/terminal.ts)            xterm.js API, events, scrolling, options, 
 - `Ghostty` loads the module (it has no imports), owns the per-module state and creates terminals and encoders.
 - `GhosttyTerminal` wraps one `GhosttyTerminal` handle plus its render state, row iterator and row cells. Its public methods are what the rest of the code uses; nothing else calls `exports.ghostty_*`.
 - `KeyEncoder`, `MouseEncoder`, `SelectionGesture`, `TerminalSearch` wrap the matching libghostty objects.
-- `lib/types.ts` declares the exports used (`GhosttyWasmExports`) and the public TS enums (`Key`, `Mods`, `KeyEncoderOption`, `CellFlags`, ...). `lib/abi-enums.test.ts` checks those enums against the loaded module, so a library upgrade that renumbers them fails a test instead of silently mis-encoding keys.
+- `lib/types.ts` declares the exports used (`GhosttyWasmExports`) and the TS enums (`Key`, `Mods`, `KeyEncoderOption`, `CellFlags`, ...). `lib/abi-enums.test.ts` checks those enums against the loaded module, so a library upgrade that renumbers them fails a test instead of silently mis-encoding keys.
 
 Conventions in the bridge:
 
@@ -135,6 +135,7 @@ The bundled release is recorded twice: `VERSION` in `scripts/fetch-wasm.sh` (wha
 ## Conventions
 
 - Keep the public API xterm.js-compatible where xterm.js has an equivalent; new events and methods are additive.
+- `lib/index.ts` exports the public API only: `init`, `Terminal`, the xterm.js interfaces and event payload types, the addons and `Ghostty` (for `new Terminal({ ghostty })`). Everything else (renderer, input handler, selection manager, link detector, `GhosttyTerminal`, encoders, enums) is internal; don't add it back to the entry point.
 - Tag exported things that are not public API (helpers for the addons, bridge tables, callback plumbing) `@internal`. API Extractor leaves them out of `dist/index.d.ts`, so a public declaration must not name one: that leaves a dangling name, and `scripts/check-dist.ts` (run by `bun run build`) fails. This is why the addons take an `ITerminalCore` in `activate()` and cast it to the internal `IAddonTerminal`. `scripts/dist-consumer.ts` compiles against the rollup, using the public API and expecting internals to be missing.
 - Document deliberate differences from xterm.js (they follow Ghostty) in the README's "Behavior worth knowing".
 - Tests accompany behavior changes; prefer asserting what a program would receive (bytes sent) or what is drawn.

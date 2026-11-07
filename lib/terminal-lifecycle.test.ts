@@ -316,11 +316,11 @@ describe('resize()', () => {
     const { term } = fixture.open({ cols: 20, rows: 5 });
     for (let i = 0; i < 10; i++) term.write(`${i}\r\n`);
     term.scrollToTop();
-    expect(term.viewportY).toBe(6);
+    expect(term.getViewportY()).toBe(6);
     // Taller: history rows move back onto the screen.
     term.resize(20, 15);
     expect(term.getScrollbackLength()).toBe(0);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.wasmTerm?.getViewportOffset()).toBe(0);
   });
 
@@ -349,7 +349,7 @@ describe('clear() and reset()', () => {
     expect(buf.length).toBe(5);
     expect([0, 1, 2, 3, 4].map((y) => bufferLine(term, y))).toEqual(['$ cmd', '', '', '', '']);
     expect([buf.cursorX, buf.cursorY]).toEqual([5, 0]);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(sent).toEqual([]);
 
     // Output continues on the kept line
@@ -422,7 +422,7 @@ describe('clear() and reset()', () => {
     term.reset();
 
     expect(term.wasmTerm).toBe(wasmTerm); // same handle: addons keep working
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(term.buffer.active.baseY).toBe(0);
     expect(bufferLine(term, 0)).toBe('');
     expect(term.hasBracketedPaste()).toBe(false);
@@ -443,7 +443,7 @@ describe('clear() and reset()', () => {
     term.write('\x1b]2;old\x07');
     term.scrollLines(-2);
     term.write('\x1bcafter');
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
     expect(titles).toEqual(['old', '']);
     expect(bufferLine(term, 0)).toBe('after');
     term.write('\x1b]2;old\x07');

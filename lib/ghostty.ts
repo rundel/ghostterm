@@ -1119,14 +1119,17 @@ export class Ghostty {
     }
   }
 
+  /** @internal */
   createKeyEncoder(): KeyEncoder {
     return new KeyEncoder(this.exports, this.mem, this.layout);
   }
 
+  /** @internal */
   createMouseEncoder(): MouseEncoder {
     return new MouseEncoder(this.exports, this.mem, this.layout);
   }
 
+  /** @internal Terminal creates its libghostty terminal with this in open(). */
   createTerminal(
     cols: number = 80,
     rows: number = 24,

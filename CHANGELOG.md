@@ -4,6 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- The package exports only the xterm.js-style API (`Terminal`, `init`, the interfaces and event types), the addons and `Ghostty`. The renderer, input handler, selection manager, link detector, encoders, `GhosttyTerminal` and the libghostty enums are no longer exported, and `Terminal.renderer` and `Terminal.viewportY` are private (`getViewportY()` remains).
 - `input(data)` sends the data to the program (`onData`) by default, as in xterm.js; with `wasUserInput` false it is still sent but doesn't scroll to the bottom. It no longer writes to the screen.
 - Text keeps grayscale antialiasing without `allowTransparency`; 0.0.2's opaque canvas gave it colored subpixel edges in Chromium on Linux.
 

@@ -234,6 +234,6 @@ describe('shell integration navigation', () => {
     expect(t.scrollToPrompt(-1)).toBe(false); // no older prompt
     expect(t.scrollToPrompt(1)).toBe(true);
     expect(top()).toBe('$ cmd 1');
-    expect(t.viewportY).toBe(t.wasmTerm?.getViewportOffset() ?? -1);
+    expect(t.getViewportY()).toBe(t.wasmTerm?.getViewportOffset() ?? -1);
   });
 });

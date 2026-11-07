@@ -119,7 +119,7 @@ export class Buffer implements IBuffer {
     const primary = this.inactivePrimary();
     if (primary) return primary.scrollback;
     if (!this.activeTerm()) return 0;
-    const offset = Math.max(0, Math.floor(this.terminal.viewportY ?? 0));
+    const offset = Math.max(0, Math.floor(this.terminal.getViewportY()));
     return Math.max(0, this.baseY - offset);
   }
 

@@ -105,7 +105,7 @@ describe('scrollback', () => {
     term.options.scrollback = 0;
     term.write('more\r\n');
     expect(term.buffer.active.baseY).toBe(0);
-    expect(term.viewportY).toBe(0);
+    expect(term.getViewportY()).toBe(0);
   });
 });
 

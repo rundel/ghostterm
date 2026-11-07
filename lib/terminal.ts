@@ -44,6 +44,7 @@ import type {
   ILinkProvider,
   IMarker,
   IModes,
+  IParser,
   ITerminalAddon,
   ITerminalCore,
   ITerminalOptions,
@@ -78,10 +79,12 @@ export class Terminal implements ITerminalCore {
   public textarea?: HTMLTextAreaElement;
 
   // Buffer API (xterm.js compatibility)
-  public readonly buffer: BufferNamespace;
+  public readonly buffer: IBufferNamespace;
+  private readonly bufferNamespace: BufferNamespace;
 
   /** Parser hooks (xterm.js compatibility): OSC handlers; see Parser. */
-  public readonly parser = new Parser();
+  public readonly parser: IParser;
+  private readonly oscParser = new Parser();
 
   /** Unicode API (xterm.js compatibility): libghostty's version only; see UnicodeHandling. */
   public readonly unicode: IUnicodeHandling;
@@ -93,8 +96,9 @@ export class Terminal implements ITerminalCore {
 
   // Components (created on open())
   private ghostty?: Ghostty;
-  public wasmTerm?: GhosttyTerminal; // Made public for link providers
-  public renderer?: CanvasRenderer;
+  /** @internal The libghostty terminal, from open() to dispose() (for the buffer, links and addons). */
+  public wasmTerm?: GhosttyTerminal;
+  private renderer?: CanvasRenderer;
   private inputHandler?: InputHandler;
   private selectionManager?: SelectionManager;
   private canvas?: HTMLCanvasElement;
@@ -200,7 +204,7 @@ export class Terminal implements ITerminalCore {
    * fractional during smooth scrolling. Change it through
    * scrollToViewportOffset() or smoothScrollTo().
    */
-  public viewportY: number = 0;
+  private viewportY: number = 0;
   /** Where a smooth scroll is heading (equal to viewportY when none runs). */
   private targetViewportY: number = 0;
   private scrollAnimationFrame?: number;
@@ -269,7 +273,9 @@ export class Terminal implements ITerminalCore {
     this.rows = this.options.rows;
 
     // Initialize buffer API
-    this.buffer = new BufferNamespace(this);
+    this.bufferNamespace = new BufferNamespace(this);
+    this.buffer = this.bufferNamespace;
+    this.parser = this.oscParser;
   }
 
   // ==========================================================================
@@ -732,8 +738,8 @@ export class Terminal implements ITerminalCore {
 
     // Write directly to WASM terminal (handles VT parsing internally)
     const wasmTerm = this.wasmTerm!;
-    if (this.parser.hasOscHandlers || wasmTerm.capturingOsc) {
-      wasmTerm.writeCapturingOsc(data, (payload) => this.parser.handleOsc(payload));
+    if (this.oscParser.hasOscHandlers || wasmTerm.capturingOsc) {
+      wasmTerm.writeCapturingOsc(data, (payload) => this.oscParser.handleOsc(payload));
     } else {
       wasmTerm.write(data);
     }
@@ -934,7 +940,7 @@ export class Terminal implements ITerminalCore {
     this.lastAltScreen = alt;
     // As in xterm.js, the alternate screen's markers go with it.
     if (!alt) this.markerRegistry.disposeAlternate();
-    this.buffer._fireBufferChange(this.buffer.active);
+    this.bufferNamespace._fireBufferChange(this.buffer.active);
   }
 
   /** Drop what ghostterm kept about the screen libghostty just reset. */

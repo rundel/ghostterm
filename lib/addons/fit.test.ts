@@ -291,7 +291,7 @@ describe('FitAddon on a terminal', () => {
       term.scrollToBottom();
       canvas.dispatchEvent(mouseEvent('mousedown', x, 10));
       document.dispatchEvent(mouseEvent('mouseup', x, 10));
-      return term.viewportY;
+      return term.getViewportY();
     };
     expect(press(bar.x + bar.width / 2)).toBeGreaterThan(40);
     expect(press(5)).toBe(0);
