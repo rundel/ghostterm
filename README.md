@@ -42,6 +42,8 @@ websocket.onmessage = (e) => term.write(e.data);
 
 See [`demo/index.html`](./demo/index.html) for a complete client connected to a shell.
 
+A `Terminal` that is never opened works headless, like `@xterm/headless`: it processes writes, answers the program's queries through `onData`, and its buffer and `SerializeAddon` can be read, without a DOM element or drawing.
+
 ### Faster WebAssembly build
 
 `init()` loads the size-optimized libghostty-vt module, which is bundled into the library. The package also ships `ghostty-vt-fast.wasm`, Ghostty's speed-optimized build of the same release. It has the same features, is 10-20% faster on output heavy in escape sequences, and is about 1.5 times larger (1.2 MB instead of 840 KB). To use it, pass its URL to `init()`:

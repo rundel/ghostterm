@@ -165,3 +165,18 @@ describe('SerializeAddon', () => {
     expect(sel.startsWith('<div style="background-color: rgb(')).toBe(true);
   });
 });
+
+describe('headless', () => {
+  test('serializes a terminal that was never opened', () => {
+    const term = fixture.create({ cols: 30, rows: 4 });
+    const addon = new SerializeAddon();
+    term.loadAddon(addon);
+    term.write('\x1b[31mred\x1b[0m plain');
+    const copy = fixture.create({ cols: 30, rows: 4 });
+    copy.write(addon.serialize());
+    expect(copy.buffer.active.getLine(0)?.translateToString(true)).toBe('red plain');
+    expect(copy.buffer.active.getLine(0)?.getCell(0)?.getFgColor()).toBe(
+      term.buffer.active.getLine(0)?.getCell(0)?.getFgColor()
+    );
+  });
+});

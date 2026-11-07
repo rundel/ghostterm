@@ -4,6 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- The terminal works without `open()`, like `@xterm/headless`: writes are processed at once (not queued until `open()`), and the buffer, markers, modes, `paste()`, `input()`, `clear()`, `reset()` and `registerLinkProvider()` work before it; `open()` draws what is there.
 - Large writes are processed a slice at a time (at most about 12 ms per task, as in xterm.js), so they no longer block the page; later writes wait their turn. `write()` callbacks run once their data has been processed instead of on the next animation frame, and `onWriteParsed` fires after each slice.
 - An idle terminal no longer draws every animation frame: frames are drawn only when something changed.
 - The package exports only the xterm.js-style API (`Terminal`, `init`, the interfaces and event types), the addons and `Ghostty`. The renderer, input handler, selection manager, link detector, encoders, `GhosttyTerminal` and the libghostty enums are no longer exported, and `Terminal.renderer` and `Terminal.viewportY` are private (`getViewportY()` remains).

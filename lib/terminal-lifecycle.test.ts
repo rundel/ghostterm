@@ -7,7 +7,7 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import { RecordingContext } from '../happydom';
 import type { ITerminalAddon } from './interfaces';
 import { type Terminal, splitWrite } from './terminal';
-import { internals, nextFrame, stub, terminalFixture } from './test-helpers';
+import { drawnText, internals, nextFrame, render, stub, terminalFixture } from './test-helpers';
 import { UNICODE_VERSIONS } from './unicode';
 
 const fixture = terminalFixture();
@@ -45,11 +45,29 @@ describe('construction and open()', () => {
     expect(() => disposed.open(container)).toThrow('has been disposed');
   });
 
-  test('methods that need the screen throw before open()', () => {
+  test('the terminal works without open(), as @xterm/headless does', () => {
+    const term = fixture.create({ cols: 20, rows: 5 });
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+    term.write('\x1b[?2004hhello');
+    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('hello');
+    expect(term.getMode(25)).toBe(true);
+    expect(term.hasBracketedPaste()).toBe(true);
+    term.paste('x');
+    expect(sent).toEqual(['\x1b[200~x\x1b[201~']);
+    // Programs' queries are answered too.
+    term.write('\x1b[6n');
+    expect(sent.at(-1)).toBe('\x1b[1;6R');
+    term.resize(30, 6);
+    expect([term.cols, term.rows]).toEqual([30, 6]);
+  });
+
+  test('methods throw once disposed', () => {
     const term = fixture.create();
-    expect(() => term.getMode(25)).toThrow('must be opened');
-    expect(() => term.hasBracketedPaste()).toThrow('must be opened');
-    expect(() => term.paste('x')).toThrow('must be opened');
+    term.dispose();
+    expect(() => term.getMode(25)).toThrow('disposed');
+    expect(() => term.paste('x')).toThrow('disposed');
+    expect(() => term.write('x')).toThrow('disposed');
   });
 
   test('focus() and blur() before open() do nothing', () => {
@@ -113,7 +131,7 @@ describe('construction and open()', () => {
 });
 
 describe('writing', () => {
-  test('writes before open() are kept and written by open(), as in xterm.js', async () => {
+  test('writes before open() are processed, and open() draws them, as in xterm.js', async () => {
     const term = fixture.create({ cols: 20, rows: 5 });
     let called = false;
     term.write('hello ', () => {
@@ -121,16 +139,18 @@ describe('writing', () => {
     });
     term.writeln('world');
     term.write('next');
-    expect(term.buffer.active.getLine(0)).toBeUndefined();
+    expect(bufferLine(term, 0)).toBe('hello world');
+    expect(bufferLine(term, 1)).toBe('next');
+    await Promise.resolve();
+    expect(called).toBe(true);
     const container = document.createElement('div');
     document.body.appendChild(container);
     fixture.defer(() => container.remove());
     term.open(container);
-    expect(bufferLine(term, 0)).toBe('hello world');
-    expect(bufferLine(term, 1)).toBe('next');
-    expect(called).toBe(false);
-    await nextFrame();
-    expect(called).toBe(true);
+    const text = drawnText(term, render(term))
+      .map((t) => t.text)
+      .join('');
+    expect(text).toBe('helloworldnext');
   });
 
   test('strings and bytes are written in order', () => {
@@ -285,18 +305,15 @@ describe('writing', () => {
   test('onWriteParsed fires once the queued writes are processed', () => {
     const term = fixture.create({ cols: 20, rows: 5 });
     const seen: Array<string | undefined> = [];
-    term.onWriteParsed(() => seen.push(bufferLine(term, 0)));
-    term.write('one ');
-    term.write('two');
-    expect(seen).toEqual([]);
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    fixture.defer(() => container.remove());
-    // Both writes queued before open() are processed together.
-    term.open(container);
-    expect(seen).toEqual(['one two']);
+    term.onWriteParsed(() => {
+      seen.push(bufferLine(term, 0));
+      // A write from a listener is queued and processed after it, in the same batch.
+      if (seen.length === 1) term.write(' two');
+    });
+    term.write('one');
+    expect(seen).toEqual(['one', 'one two']);
     term.write('!');
-    expect(seen).toEqual(['one two', 'one two!']);
+    expect(seen).toEqual(['one', 'one two', 'one two!']);
   });
 
   test('a write from onWriteParsed is processed and reported too', () => {

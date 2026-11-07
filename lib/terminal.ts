@@ -297,8 +297,8 @@ export class Terminal implements ITerminalCore {
         const oldValue = Reflect.get(target, prop);
         Reflect.set(target, prop, value);
 
-        // Apply runtime changes if terminal is open
-        if (this.isOpen && typeof prop === 'string') {
+        // Apply runtime changes (the view's only once it is open)
+        if (!this.isDisposed && typeof prop === 'string') {
           this.handleOptionChange(prop, value, oldValue);
         }
 
@@ -308,6 +308,18 @@ export class Terminal implements ITerminalCore {
 
     this.cols = this.options.cols;
     this.rows = this.options.rows;
+
+    // The terminal itself works without a DOM: writes, the buffer, markers and modes are
+    // available from here on, and open() adds the view (as xterm.js and @xterm/headless do).
+    this.wasmTerm = this.ghostty.createTerminal(this.cols, this.rows, this.buildWasmConfig());
+    this.wasmTerm.onChange = () => this.requestRender();
+    this.connectEffects(this.wasmTerm);
+
+    // Link detection reads the buffer; providers can be registered before open().
+    this.linkDetector = new LinkDetector(this);
+    // OSC 8 first (explicit hyperlinks take precedence), then plain-text URLs
+    this.linkDetector.registerProvider(new OSC8LinkProvider(this));
+    this.linkDetector.registerProvider(new UrlRegexProvider(this));
 
     // Initialize buffer API
     this.bufferNamespace = new BufferNamespace(this);
@@ -471,9 +483,6 @@ export class Terminal implements ITerminalCore {
     // Store parent element
     this.element = parent;
     this.isOpen = true;
-    // Size set through options before open() (options.cols = ...) applies now.
-    this.cols = this.options.cols;
-    this.rows = this.options.rows;
 
     try {
       // Make parent focusable if it isn't already (undone by dispose())
@@ -504,12 +513,6 @@ export class Terminal implements ITerminalCore {
       parent.setAttribute('role', 'textbox');
       parent.setAttribute('aria-label', 'Terminal input');
       parent.setAttribute('aria-multiline', 'true');
-
-      // Create WASM terminal with current dimensions and config
-      const config = this.buildWasmConfig();
-      this.wasmTerm = this.ghostty!.createTerminal(this.cols, this.rows, config);
-      this.wasmTerm.onChange = () => this.requestRender();
-      this.connectEffects(this.wasmTerm);
 
       // Create canvas element
       this.canvas = document.createElement('canvas');
@@ -634,7 +637,7 @@ export class Terminal implements ITerminalCore {
       this.selectionManager = new SelectionManager(
         this,
         this.renderer,
-        this.wasmTerm,
+        this.wasmTerm!,
         this.textarea
       );
 
@@ -642,15 +645,6 @@ export class Terminal implements ITerminalCore {
       this.selectionManager.onSelectionChange(() => {
         this.selectionChangeEmitter.fire();
       });
-
-      // Initialize link detection system
-      this.linkDetector = new LinkDetector(this);
-
-      // Register link providers
-      // OSC8 first (explicit hyperlinks take precedence)
-      this.linkDetector.registerProvider(new OSC8LinkProvider(this));
-      // URL regex second (fallback for plain text URLs)
-      this.linkDetector.registerProvider(new UrlRegexProvider(this));
 
       // Setup mouse event handling for links and scrollbar
       // Use capture phase to intercept scrollbar clicks before SelectionManager
@@ -680,14 +674,11 @@ export class Terminal implements ITerminalCore {
       // Focus input (auto-focus so user can start typing immediately)
       this.focus();
     } catch (error) {
-      // Clean up on error
-      this.cleanupComponents();
+      // Undo the view; the terminal itself stays usable
+      this.cleanupView();
       this.isOpen = false;
       throw new Error(`Failed to open terminal: ${error}`, { cause: error });
     }
-
-    // Writes made before open() (xterm.js buffers them too)
-    this.flushPendingWrites();
   }
 
   /** Add a listener that dispose() removes. */
@@ -720,8 +711,8 @@ export class Terminal implements ITerminalCore {
   }
 
   /**
-   * Write data to terminal. Small writes are processed at once. Before open(), while a write is
-   * being processed (e.g. from an event listener) and while a large write is still being
+   * Write data to terminal, with or without open(). Small writes are processed at once. While a
+   * write is being processed (e.g. from an event listener) and while a large write is still being
    * processed, data is queued and written afterwards, in order. Writes are processed for at most
    * WRITE_TIME_BUDGET_MS at a time; the rest continues in the next task. The callback runs (in a
    * microtask) once its data has been processed, as in xterm.js.
@@ -737,9 +728,7 @@ export class Terminal implements ITerminalCore {
     }
 
     this.pendingWrites.push({ data, callback });
-    if (this.isOpen && !this.writing && this.writeContinuation === undefined) {
-      this.flushPendingWrites();
-    }
+    if (!this.writing && this.writeContinuation === undefined) this.flushPendingWrites();
   }
 
   /**
@@ -755,7 +744,7 @@ export class Terminal implements ITerminalCore {
     let wrote = false;
     let outOfTime = false;
     try {
-      while (this.pendingWrites.length > 0 && this.isOpen) {
+      while (this.pendingWrites.length > 0 && !this.isDisposed) {
         if (wrote && performance.now() - start >= WRITE_TIME_BUDGET_MS) {
           outOfTime = true;
           break;
@@ -773,7 +762,7 @@ export class Terminal implements ITerminalCore {
     }
     if (!wrote || this.isDisposed) return;
     this.writeParsedEmitter.fire();
-    if (this.pendingWrites.length === 0 || !this.isOpen) return;
+    if (this.pendingWrites.length === 0) return;
     if (outOfTime) {
       this.writeContinuation = window.setTimeout(() => {
         this.writeContinuation = undefined;
@@ -872,7 +861,7 @@ export class Terminal implements ITerminalCore {
    * Paste text into terminal (triggers bracketed paste if supported)
    */
   paste(data: string): void {
-    this.assertOpen();
+    this.assertNotDisposed();
 
     // Don't paste if stdin is disabled
     if (this.options.disableStdin) {
@@ -894,7 +883,7 @@ export class Terminal implements ITerminalCore {
    * @param wasUserInput - Treat it as the user's input, which scrolls to the bottom (default: true)
    */
   input(data: string, wasUserInput: boolean = true): void {
-    this.assertOpen();
+    this.assertNotDisposed();
 
     if (this.options.disableStdin) {
       return;
@@ -922,41 +911,25 @@ export class Terminal implements ITerminalCore {
     // would resize again).
     this.rawOptions.cols = cols;
     this.rawOptions.rows = rows;
-    if (!this.isOpen) {
-      // Before open(): the size open() creates the terminal with
-      this.cols = cols;
-      this.rows = rows;
-      return;
+    this.cols = cols;
+    this.rows = rows;
+
+    this.wasmTerm!.resize(cols, rows);
+    this.markerRegistry.update();
+
+    // Sizes the canvas for the device pixel ratio and gutter (once open)
+    this.renderer?.resize(cols, rows);
+
+    // Reflow can shorten the history; stay within it. Either way, put
+    // libghostty's reflowed viewport back on the displayed offset.
+    const scrollback = this.getScrollbackLength();
+    if (this.viewportY > scrollback || this.targetViewportY > scrollback) {
+      this.scrollToViewportOffset(Math.min(this.viewportY, scrollback));
     }
+    this.syncViewport();
 
-    try {
-      // Update dimensions
-      this.cols = cols;
-      this.rows = rows;
-
-      // Resize WASM terminal (may reallocate buffers, invalidating TypedArray views)
-      this.wasmTerm!.resize(cols, rows);
-      this.markerRegistry.update();
-
-      // Resize renderer (sizes the canvas for the device pixel ratio and gutter)
-      this.renderer!.resize(cols, rows);
-
-      // Reflow can shorten the history; stay within it. Either way, put
-      // libghostty's reflowed viewport back on the displayed offset.
-      const scrollback = this.getScrollbackLength();
-      if (this.viewportY > scrollback || this.targetViewportY > scrollback) {
-        this.scrollToViewportOffset(Math.min(this.viewportY, scrollback));
-      }
-      this.syncViewport();
-
-      // Fire resize event
-      this.resizeEmitter.fire({ cols, rows });
-
-      // Force full render
-      this.renderFrame(true);
-    } catch (e) {
-      console.error('Terminal resize failed:', e);
-    }
+    this.resizeEmitter.fire({ cols, rows });
+    this.renderFrame(true);
   }
 
   /**
@@ -965,7 +938,7 @@ export class Terminal implements ITerminalCore {
    * keeps its column. Nothing is sent to the program.
    */
   clear(): void {
-    this.assertOpen();
+    this.assertNotDisposed();
     const wasmTerm = this.wasmTerm!;
     // As in xterm.js, clearing drops every marker (unless already clear).
     if (wasmTerm.getCursor().y > 0 || wasmTerm.getScrollbackLength() > 0) {
@@ -984,7 +957,7 @@ export class Terminal implements ITerminalCore {
    * and addons stay as they are.
    */
   reset(): void {
-    this.assertOpen();
+    this.assertNotDisposed();
     this.wasmTerm!.reset();
     this.afterReset();
   }
@@ -1211,7 +1184,7 @@ export class Terminal implements ITerminalCore {
    * the buffer gives a marker that is already disposed.
    */
   public registerMarker(cursorYOffset: number = 0): IMarker {
-    this.assertOpen();
+    this.assertNotDisposed();
     const wasmTerm = this.wasmTerm!;
     const line = wasmTerm.getScrollbackLength() + wasmTerm.getCursor().y + cursorYOffset;
     return this.markerRegistry.create(wasmTerm, line);
@@ -1245,10 +1218,8 @@ export class Terminal implements ITerminalCore {
    * ```
    */
   public registerLinkProvider(provider: ILinkProvider): void {
-    if (!this.linkDetector) {
-      throw new Error('Terminal must be opened before registering link providers');
-    }
-    this.linkDetector.registerProvider(provider);
+    this.assertNotDisposed();
+    this.linkDetector!.registerProvider(provider);
   }
 
   // ==========================================================================
@@ -1464,8 +1435,8 @@ export class Terminal implements ITerminalCore {
     }
     this.addons = [];
 
-    // Clean up components
-    this.cleanupComponents();
+    this.cleanupView();
+    this.freeTerminal();
     this.isOpen = false;
 
     // Dispose event emitters
@@ -1561,10 +1532,8 @@ export class Terminal implements ITerminalCore {
     return this.wasmTerm.getScrollbackLength();
   }
 
-  /**
-   * Clean up components (called on dispose or error)
-   */
-  private cleanupComponents(): void {
+  /** Remove the view open() made (called by dispose(), or when open() fails). */
+  private cleanupView(): void {
     // Dispose selection manager
     if (this.selectionManager) {
       this.selectionManager.dispose();
@@ -1621,36 +1590,26 @@ export class Terminal implements ITerminalCore {
       this.scrollbarHideTimeout = undefined;
     }
 
-    // Dispose link detector
-    if (this.linkDetector) {
-      this.linkDetector.dispose();
-      this.linkDetector = undefined;
-    }
-
-    this.decorationService.dispose();
-    this.markerRegistry.dispose();
-
-    // Free WASM terminal
-    if (this.wasmTerm) {
-      this.wasmTerm.free();
-      this.wasmTerm = undefined;
-    }
-
-    // Clear references
-    this.ghostty = undefined;
+    this.currentHoveredLink = undefined;
     this.element = undefined;
     this.textarea = undefined;
   }
 
-  /**
-   * Assert terminal is open (throw if not)
-   */
-  private assertOpen(): void {
+  /** Free the terminal itself: links, decorations, markers and the libghostty terminal. */
+  private freeTerminal(): void {
+    this.linkDetector?.dispose();
+    this.linkDetector = undefined;
+    this.decorationService.dispose();
+    this.markerRegistry.dispose();
+    this.wasmTerm?.free();
+    this.wasmTerm = undefined;
+    this.ghostty = undefined;
+  }
+
+  /** Throw once the terminal is disposed. */
+  private assertNotDisposed(): void {
     if (this.isDisposed) {
       throw new Error('Terminal has been disposed');
-    }
-    if (!this.isOpen) {
-      throw new Error('Terminal must be opened before use. Call terminal.open(parent) first.');
     }
   }
 
@@ -2108,7 +2067,7 @@ export class Terminal implements ITerminalCore {
   // Terminal Modes
   // ============================================================================
 
-  /** The modes the program set (xterm.js `modes`), read from libghostty; defaults before open(). */
+  /** The modes the program set (xterm.js `modes`), read from libghostty; defaults once disposed. */
   public get modes(): IModes {
     return this.wasmTerm ? readModes(this.wasmTerm) : DEFAULT_MODES;
   }
@@ -2121,7 +2080,7 @@ export class Terminal implements ITerminalCore {
    * @returns true if mode is enabled
    */
   public getMode(mode: number, isAnsi: boolean = false): boolean {
-    this.assertOpen();
+    this.assertNotDisposed();
     return this.wasmTerm!.getMode(mode, isAnsi);
   }
 
@@ -2129,7 +2088,7 @@ export class Terminal implements ITerminalCore {
    * Check if bracketed paste mode is enabled
    */
   public hasBracketedPaste(): boolean {
-    this.assertOpen();
+    this.assertNotDisposed();
     return this.wasmTerm!.hasBracketedPaste();
   }
 
@@ -2137,7 +2096,7 @@ export class Terminal implements ITerminalCore {
    * Check if focus event reporting is enabled
    */
   public hasFocusEvents(): boolean {
-    this.assertOpen();
+    this.assertNotDisposed();
     return this.wasmTerm!.hasFocusEvents();
   }
 
@@ -2145,7 +2104,7 @@ export class Terminal implements ITerminalCore {
    * Check if mouse tracking is enabled
    */
   public hasMouseTracking(): boolean {
-    this.assertOpen();
+    this.assertNotDisposed();
     return this.wasmTerm!.hasMouseTracking();
   }
 }
