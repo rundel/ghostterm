@@ -7,7 +7,8 @@
 
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { Ghostty, KeyEncoderOption, SelectionAutoscroll } from './ghostty';
+import { AbiLayout } from './abi';
+import { FormatterExtras, Ghostty, KeyEncoderOption, SelectionAutoscroll } from './ghostty';
 import { createIsolatedTerminal } from './test-helpers';
 import { Key, KeyAction, Mods } from './types';
 
@@ -696,6 +697,27 @@ describe('library selection', () => {
     }
   });
 
+  test('gesture: reset cancels the click sequence', () => {
+    const term = ghostty.createTerminal(40, 5);
+    const gesture = term.createSelectionGesture();
+    try {
+      term.write('cat /tmp/some-file.txt now');
+      const click = (t: number) => {
+        gesture.press(8, 0, 85, 5, t);
+        gesture.release();
+      };
+      click(1000);
+      gesture.reset();
+      click(1100); // a first click again, not a double-click
+      expect(term.hasSelection()).toBe(false);
+      click(1200);
+      expect(term.getSelectionText()).toBe('/tmp/some-file.txt');
+    } finally {
+      gesture.dispose();
+      term.free();
+    }
+  });
+
   test('gesture: dragging above the top asks to autoscroll and extends upward', () => {
     const term = ghostty.createTerminal(40, 5);
     const gesture = term.createSelectionGesture();
@@ -956,5 +978,102 @@ describe('underline styles and overline', () => {
     } finally {
       term.free();
     }
+  });
+});
+
+describe('formatting the screen', () => {
+  test('fromRow starts the output at that absolute row', () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      for (let i = 0; i < 6; i++) term.write(`row ${i}\r\n`);
+      term.write('last');
+      // Rows 0-3 are scrollback, 4-6 the active area.
+      expect(term.formatScreen({ format: 'plain', trim: true })).toBe(
+        'row 0\nrow 1\nrow 2\nrow 3\nrow 4\nrow 5\nlast'
+      );
+      expect(term.formatScreen({ format: 'plain', trim: true, fromRow: 4 })).toBe(
+        'row 4\nrow 5\nlast'
+      );
+      expect(term.formatScreen({ format: 'plain', trim: true, fromRow: 6 })).toBe('last');
+    } finally {
+      term.free();
+    }
+  });
+
+  test('VT extras restore the terminal state they name', () => {
+    const term = ghostty.createTerminal(20, 3);
+    try {
+      term.write('\x1b]4;1;rgb:12/34/56\x07\x1b[?2004hhi');
+      const plain = term.formatScreen({ format: 'vt', extras: FormatterExtras.NONE });
+      const palette = term.formatScreen({ format: 'vt', extras: FormatterExtras.PALETTE });
+      const modes = term.formatScreen({ format: 'vt', extras: FormatterExtras.MODES });
+      expect(plain).not.toContain('\x1b]4;');
+      expect(plain).not.toContain('\x1b[?2004h');
+      expect(palette).toContain('\x1b]4;1;rgb:12/34/56');
+      expect(modes).toContain('\x1b[?2004h');
+
+      // Written to a fresh terminal, the output recreates the state.
+      const copy = ghostty.createTerminal(20, 3);
+      try {
+        copy.write(term.formatScreen({ format: 'vt', extras: FormatterExtras.ALL }));
+        expect(copy.hasBracketedPaste()).toBe(true);
+        copy.write('\x1b[31mX');
+        const x = copy.getLine(0)![2];
+        expect([x.fg_r, x.fg_g, x.fg_b]).toEqual([0x12, 0x34, 0x56]);
+      } finally {
+        copy.free();
+      }
+    } finally {
+      term.free();
+    }
+  });
+});
+
+describe('AbiLayout', () => {
+  const manifest = (types: Record<string, unknown>, abi = {}) =>
+    JSON.stringify({
+      abi: { pointer_size: 4, usize_size: 4, endian: 'little', ...abi },
+      library_version: '9.9.9',
+      types,
+    });
+  const layout = new AbiLayout(
+    manifest({
+      S: { kind: 'struct', size: 8, fields: { a: { offset: 4, size: 4, type: 'u32' } } },
+      Unsized: { kind: 'opaque' },
+      P: {
+        kind: 'packed',
+        size: 8,
+        bits: {
+          tag: { lsb: 0, width: 2 },
+          content: { lsb: 2, width: 30, arms: { X: { bits: { v: { lsb: 3, width: 5 } } } } },
+        },
+      },
+    })
+  );
+
+  test('reads sizes, offsets and bit positions', () => {
+    expect(layout.version).toBe('9.9.9');
+    expect(layout.size('S')).toBe(8);
+    expect(layout.offset('S', 'a')).toBe(4);
+    expect(layout.bits('P', 'tag')).toEqual({ lsb: 0, width: 2 });
+    expect(layout.unionBits('P', 'content', 'X', 'v')).toEqual({ lsb: 5, width: 5 });
+  });
+
+  test('throws on anything the manifest does not describe', () => {
+    expect(() => layout.size('Missing')).toThrow('has no type Missing');
+    expect(() => layout.size('Unsized')).toThrow('type Unsized has no size');
+    expect(() => layout.offset('S', 'b')).toThrow('struct S has no field b');
+    expect(() => layout.offset('Missing', 'a')).toThrow('has no type Missing');
+    expect(() => layout.bits('P', 'nope')).toThrow('packed type P has no field nope');
+    expect(() => layout.unionBits('P', 'content', 'Y', 'v')).toThrow('has no content.Y.v');
+    expect(() => layout.unionBits('P', 'content', 'X', 'w')).toThrow('has no content.X.w');
+    expect(() => layout.unionBits('P', 'tag', 'X', 'v')).toThrow('has no tag.X.v');
+  });
+
+  test('rejects modules built for another ABI', () => {
+    expect(() => new AbiLayout(manifest({}, { pointer_size: 8 }))).toThrow(
+      'Unsupported libghostty-vt ABI: pointer size 8, little endian'
+    );
+    expect(() => new AbiLayout(manifest({}, { endian: 'big' }))).toThrow('big endian');
   });
 });
