@@ -1662,16 +1662,15 @@ export class GhosttyTerminal {
    */
   setDefaultCursor(style: 'block' | 'underline' | 'bar', blink: boolean): void {
     const ptr = this.scratch;
-    const view = this.mem.view();
     const value =
       style === 'bar'
         ? CursorStyle.BAR
         : style === 'underline'
           ? CursorStyle.UNDERLINE
           : CursorStyle.BLOCK;
-    view.setUint32(ptr, value, true);
+    this.mem.view().setUint32(ptr, value, true);
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_STYLE, ptr);
-    view.setUint8(ptr, blink ? 1 : 0);
+    this.mem.view().setUint8(ptr, blink ? 1 : 0);
     this.exports.ghostty_terminal_set(this.handle, TerminalOpt.DEFAULT_CURSOR_BLINK, ptr);
     this.pendingUpdate = true;
   }
@@ -2649,16 +2648,15 @@ export class GhosttyTerminal {
 
     const opt = this.selScratch + 192;
     try {
-      const view = this.mem.view();
       const emit =
         options.format === 'vt'
           ? Formatter.FORMAT_VT
           : options.format === 'html'
             ? Formatter.FORMAT_HTML
             : Formatter.FORMAT_PLAIN;
-      view.setUint32(opt, emit, true);
+      this.mem.view().setUint32(opt, emit, true);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_EMIT, opt);
-      view.setUint8(opt, options.unwrap ? 1 : 0);
+      this.mem.view().setUint8(opt, options.unwrap ? 1 : 0);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_UNWRAP, opt);
       this.mem.view().setUint8(opt, options.trim ? 1 : 0);
       ex.ghostty_formatter_set(formatter, Formatter.OPT_TRIM, opt);
@@ -2833,10 +2831,9 @@ export class SelectionGesture {
     const ex = this.exports;
     const press = this.events[GestureEvent.PRESS];
     const p = this.scratch + 112;
-    const view = this.mem.view();
-    view.setBigUint64(p, BigInt(Math.round(intervalMs * 1e6)), true);
+    this.mem.view().setBigUint64(p, BigInt(Math.round(intervalMs * 1e6)), true);
     ex.ghostty_selection_gesture_event_set(press, GestureEvent.OPT_REPEAT_INTERVAL_NS, p);
-    view.setFloat64(p + 8, distancePx, true);
+    this.mem.view().setFloat64(p + 8, distancePx, true);
     ex.ghostty_selection_gesture_event_set(press, GestureEvent.OPT_REPEAT_DISTANCE, p + 8);
   }
 
