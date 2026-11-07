@@ -8,7 +8,6 @@ import { beforeEach, describe, expect, jest, spyOn, test } from 'bun:test';
 import { DEFAULT_THEME } from './renderer';
 import type { Terminal } from './terminal';
 import {
-  timers,
   internals,
   keyDown,
   mouseEvent,
@@ -300,9 +299,9 @@ describe('mouse gestures', () => {
     document.dispatchEvent(
       new MouseEvent('mousemove', { clientX: rect.left + 5, clientY: rect.top - 20, bubbles: true })
     );
-    timers.advanceTimersByTime(30 * 6);
+    jest.advanceTimersByTime(30 * 6);
     cellEvent('mouseup', 0, 0, { time: 1500, target: document });
-    timers.advanceTimersByTime(30 * 6);
+    jest.advanceTimersByTime(30 * 6);
 
     // Six ticks scroll six rows (then the release stops them). The pointer, 5 px
     // into the row, is past the first cell's midpoint.
@@ -397,10 +396,10 @@ describe('selecting scrollback', () => {
         new MouseEvent('mousemove', { clientX: rect.left, clientY, bubbles: true })
       );
     move(rect.top - 20);
-    timers.advanceTimersByTime(30 * 3);
+    jest.advanceTimersByTime(30 * 3);
     expect(term.getViewportY()).toBe(13);
     move(rect.top + 24 * renderer.charHeight + 20);
-    timers.advanceTimersByTime(30 * 5);
+    jest.advanceTimersByTime(30 * 5);
     expect(term.getViewportY()).toBe(8);
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });

@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
 import type { IAddonTerminal } from '../interfaces';
-import {
-  timers,
-  internals,
-  mouseEvent,
-  paintedRects,
-  stub,
-  terminalFixture,
-} from '../test-helpers';
+import { internals, mouseEvent, paintedRects, stub, terminalFixture } from '../test-helpers';
 import { FitAddon } from './fit';
 
 // A terminal stand-in with a real DOM element whose size is set per test. Cells are 9x16 and the
@@ -203,13 +196,13 @@ describe('FitAddon', () => {
 
       observers[0].fire();
       terminal.setSize(500, 320);
-      timers.advanceTimersByTime(60);
+      jest.advanceTimersByTime(60);
       observers[0].fire();
       observers[0].fire([]);
-      timers.advanceTimersByTime(60);
+      jest.advanceTimersByTime(60);
       expect(terminal.resizes).toEqual([]);
 
-      timers.advanceTimersByTime(40);
+      jest.advanceTimersByTime(40);
       expect(terminal.resizes).toEqual([[53, 20]]);
     });
 
@@ -218,7 +211,7 @@ describe('FitAddon', () => {
       observers[0].fire();
       addon.dispose();
       expect(observers[0].disconnected).toBe(true);
-      timers.advanceTimersByTime(200);
+      jest.advanceTimersByTime(200);
       expect(terminal.resizes).toEqual([]);
     });
 

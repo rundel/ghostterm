@@ -7,7 +7,6 @@ import type { ILink } from './interfaces';
 import type { LinkDetector } from './link-detector';
 import type { Terminal } from './terminal';
 import {
-  timers,
   type DrawCall,
   internals,
   mouseEvent,
@@ -222,12 +221,12 @@ describe('hovering and clicking links', () => {
       mouse('mousemove', 7, 0);
       await settle();
       expect(canvasCursor()).toBe('pointer');
-      timers.advanceTimersByTime(16);
+      jest.advanceTimersByTime(16);
       await settle();
       expect(canvasCursor()).toBe('text');
       expect(underlinedCells(render(term, false))).toEqual([]);
 
-      timers.advanceTimersByTime(16);
+      jest.advanceTimersByTime(16);
       mouse('mousemove', 2, 0);
       await settle();
       expect(canvasCursor()).toBe('pointer');
