@@ -15,7 +15,7 @@ ghostterm started as a fork of [ghostty-web](https://github.com/coder/ghostty-we
 Install a release's package tarball from GitHub:
 
 ```bash
-npm install https://github.com/rundel/ghostterm/releases/download/v0.1.0/ghostterm-0.1.0.tgz
+npm install https://github.com/rundel/ghostterm/releases/download/v0.0.1/ghostterm-0.0.1.tgz
 ```
 
 or build it from a checkout (`bun run build`) and depend on the directory (`"ghostterm": "file:../ghostterm"`).
@@ -53,7 +53,7 @@ import fastWasm from 'ghostterm/ghostty-vt-fast.wasm?url'; // Vite; other bundle
 await init({ wasmPath: fastWasm });
 ```
 
-`Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded.
+`Ghostty.load(path)` takes the same argument, and `ghostty.optimizeMode` reports which build was loaded. The module is loaded once: later `init()` calls, concurrent ones included, share it, and one asking for a different `wasmPath` logs a warning.
 
 ### Addons
 
@@ -82,7 +82,9 @@ newTerm.write(saved);
 const html = serializer.serializeAsHTML({ onlySelection: true });
 ```
 
-`SearchAddon` follows [`@xterm/addon-search`](https://www.npmjs.com/package/@xterm/addon-search) and `SerializeAddon` follows [`@xterm/addon-serialize`](https://www.npmjs.com/package/@xterm/addon-serialize).
+`SearchAddon` follows [`@xterm/addon-search`](https://www.npmjs.com/package/@xterm/addon-search) and `SerializeAddon` follows [`@xterm/addon-serialize`](https://www.npmjs.com/package/@xterm/addon-serialize). While a full-screen program has the alternate screen up, `serialize()` saves the normal screen and its scrollback first, then the alternate screen, so leaving the program after a restore shows the shell again; `excludeAltBuffer: true` keeps only the normal screen.
+
+Some xterm.js addons aren't needed: links (OSC 8 hyperlinks and plain URLs) are detected without `@xterm/addon-web-links`, character widths come from libghostty rather than `@xterm/addon-unicode11`, and OSC 52 clipboard writes arrive through `onClipboardWrite` instead of `@xterm/addon-clipboard`.
 
 ### Events from the running program
 
@@ -112,7 +114,7 @@ These follow Ghostty rather than xterm.js:
 - Scrolling: output arriving while you are scrolled up leaves the view where it is; typing returns to the bottom.
 - Paste: control characters in pasted text are replaced with spaces, so a paste can't break out of bracketed paste. Without bracketed paste, newlines are sent as carriage returns.
 - Clipboard: programs may write to the clipboard with OSC 52 (turn this off with `allowClipboardWrite: false`); reading it is always denied.
-- Search: literal text, case-insensitive for ASCII letters. `findNext()` moves toward older output (up from the prompt), as Ghostty's find does. The `regex`, `wholeWord` and `caseSensitive` options are not supported.
+- Search: literal text, case-insensitive for ASCII letters. `findNext()` moves toward older output (up from the prompt), as Ghostty's find does; `resultIndex` still counts matches from the top, as in xterm.js, so `findNext()` lowers it. The `regex`, `wholeWord` and `caseSensitive` options are not supported, and the first search that sets one logs a warning.
 - Scrollback limit: libghostty drops history a page at a time, so right after a page is dropped the number of lines kept can be somewhat below the `scrollback` option.
 
 ## Development
