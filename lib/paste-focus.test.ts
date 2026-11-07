@@ -69,6 +69,17 @@ describe('focus reporting', () => {
     expect(sent).toEqual(['\x1b[I', '\x1b[O']);
   });
 
+  test('a composition interrupted by losing focus does not block typing', () => {
+    const textarea = (term as any).textarea as HTMLTextAreaElement;
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true, cancelable: true })
+    );
+    expect(sent).toEqual(['a']);
+  });
+
   test('focus moving inside the terminal is not reported', () => {
     term.write('\x1b[?1004h');
     const textarea = (term as any).textarea as HTMLTextAreaElement;
