@@ -26,6 +26,12 @@ export interface IRenderable {
   getCursor(): {
     x: number;
     y: number;
+    /**
+     * Position in the frame being drawn, which a render hold (mode 2026)
+     * freezes, or -1 when it is not in view; x and y are used when absent.
+     */
+    viewportX?: number;
+    viewportY?: number;
     visible: boolean;
     /** Shape in effect (the program may have changed it); overrides cursorStyle. */
     style?: 'block' | 'underline' | 'bar';
@@ -409,14 +415,18 @@ export class CanvasRenderer {
 
     // The cursor is drawn only at the bottom, while shown (and in the visible
     // phase of a blink). When anything about it changes, the row it was drawn
-    // on is repainted to erase it.
+    // on is repainted to erase it. Its position comes from the frame being
+    // drawn (viewportX/Y), which a render hold (mode 2026) freezes along with
+    // the cells; x/y are the terminal's live position.
     let nextCursor: DrawnCursor | null = null;
-    if (offset === 0 && cursor.visible && this.cursorVisible && cursor.y < dims.rows) {
-      const line = buffer.getViewportLine(cursor.y);
+    const cx = cursor.viewportX ?? cursor.x;
+    const cy = cursor.viewportY ?? cursor.y;
+    if (offset === 0 && cursor.visible && this.cursorVisible && cy >= 0 && cy < dims.rows) {
+      const line = buffer.getViewportLine(cy);
       nextCursor = {
-        x: cursor.x,
-        y: cursor.y,
-        width: line?.[cursor.x]?.width === 2 ? 2 : 1,
+        x: cx,
+        y: cy,
+        width: line?.[cx]?.width === 2 ? 2 : 1,
         shape: this.cursorShape,
         color: this.cursorColor,
       };

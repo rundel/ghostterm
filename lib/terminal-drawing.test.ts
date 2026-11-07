@@ -72,3 +72,19 @@ describe('cell backgrounds', () => {
     expect(cellBackgrounds().size).toBe(0);
   });
 });
+
+describe('synchronized output', () => {
+  test('the cursor stays with the held frame until the update ends', () => {
+    const { renderer } = internals(term);
+    const cursorAt = () =>
+      paintedRects(term, 'rgb(255, 255, 255)')
+        .filter((r) => r.h === renderer.charHeight)
+        .map((r) => [Math.round(r.x / renderer.charWidth), Math.round(r.y / renderer.charHeight)]);
+    term.write('ab');
+    expect(cursorAt()).toEqual([[2, 0]]);
+    term.write('\x1b[?2026h\x1b[2J\x1b[3;1Hlonger text');
+    expect(cursorAt()).toEqual([[2, 0]]);
+    term.write('\x1b[?2026l');
+    expect(cursorAt()).toEqual([[11, 2]]);
+  });
+});
