@@ -431,12 +431,13 @@ describe('colors', () => {
     expect(rowBackground(render(term, false))).toBe('rgb(16, 32, 48)');
   });
 
-  test('without allowTransparency the background is opaque and so is the canvas', () => {
+  test('without allowTransparency the background is drawn opaque', () => {
     for (const background of ['rgba(0, 0, 128, 0.5)', '#00008080', 'transparent']) {
       const { term: opaque } = fixture.open({ theme: { background } });
       opaque.write('x');
       const { ctx } = internals(opaque);
-      expect(ctx.attributes.alpha).toBe(false);
+      // The context keeps alpha either way, so text keeps grayscale antialiasing.
+      expect(ctx.attributes.alpha).toBeUndefined();
       const fills = paintedRects(render(opaque)).map((r) => r.fillStyle);
       const expected = background === 'transparent' ? 'rgb(0, 0, 0)' : 'rgb(0, 0, 128)';
       expect(fills).toContain(expected);
@@ -448,7 +449,6 @@ describe('colors', () => {
     const background = 'rgba(0, 0, 128, 0.5)';
     const { term: clear } = fixture.open({ allowTransparency: true, theme: { background } });
     clear.write('x');
-    expect(internals(clear).ctx.attributes.alpha).toBe(true);
     const rows = paintedRects(render(clear)).filter((r) => r.x === 0 && r.w >= 20 * cell().w);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.fillStyle === background)).toBe(true);

@@ -20,10 +20,7 @@ export interface FixtureOptions {
 export async function openFixture(page: Page, options: FixtureOptions = {}): Promise<void> {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(options)) {
-    // allowTransparency defaults to on in the fixture; every other flag is off unless present.
-    if (key === 'allowTransparency') {
-      if (value === false) query.set(key, 'false');
-    } else if (value !== false) query.set(key, value === true ? '' : String(value));
+    if (value !== false) query.set(key, value === true ? '' : String(value));
   }
   await page.goto(`/e2e/fixture.html?${query}`);
   await page.evaluate(() => window.ready);

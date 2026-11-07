@@ -4,6 +4,8 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- Text keeps grayscale antialiasing without `allowTransparency`; 0.0.2's opaque canvas gave it colored subpixel edges in Chromium on Linux.
+
 ## 0.0.2 - 2026-11-07
 
 - Markers: `registerMarker()` and `markers`, tracked by libghostty as output scrolls, history is pruned and the screen reflows.

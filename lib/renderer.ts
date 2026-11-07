@@ -228,8 +228,11 @@ export class CanvasRenderer {
   constructor(canvas: HTMLCanvasElement, options: RendererOptions = {}) {
     this.canvas = canvas;
     this.allowTransparency = options.allowTransparency ?? false;
-    // An opaque canvas lets browsers draw text with subpixel antialiasing.
-    const ctx = canvas.getContext('2d', { alpha: this.allowTransparency });
+    // The context keeps its alpha channel even when the background is drawn opaque: an opaque
+    // context would switch Chromium on Linux to subpixel (LCD) text antialiasing, whose color
+    // fringes look wrong on many themes. allowTransparency only decides how the background is
+    // drawn.
+    const ctx = canvas.getContext('2d');
     if (!ctx) {
       throw new Error('Failed to get 2D rendering context');
     }
