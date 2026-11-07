@@ -1,16 +1,17 @@
 /**
- * TypeScript wrapper for libghostty-vt WASM API
+ * TypeScript wrapper for the official libghostty-vt WebAssembly module.
  *
- * High-performance terminal emulation using Ghostty's battle-tested VT100 parser.
- * The key optimization is the RenderState API which provides a pre-computed
- * snapshot of all render data in a single update call.
+ * This talks to the prebuilt `ghostty-vt.wasm` that Ghostty publishes with each
+ * libghostty-vt release, using only its stable C ABI. Rendering goes through the
+ * RenderState API: one update call snapshots the viewport, and each dirty row is
+ * read back with a single call that returns its raw cells.
  */
 
+import { AbiLayout, type BitField, readBits } from './abi';
 import {
   CellFlags,
   type Cursor,
   DirtyState,
-  GHOSTTY_CONFIG_SIZE,
   type GhosttyCell,
   type GhosttyTerminalConfig,
   type GhosttyWasmExports,
@@ -36,20 +37,339 @@ export {
   type RenderStateCursor,
 };
 
+// ============================================================================
+// C ABI constants (enum values are part of the libghostty-vt ABI promise)
+// ============================================================================
+
+const GHOSTTY_SUCCESS = 0;
+const GHOSTTY_OUT_OF_SPACE = -3;
+
+const TerminalOpt = {
+  WRITE_PTY: 2,
+  COLOR_FOREGROUND: 12,
+  COLOR_BACKGROUND: 13,
+  COLOR_CURSOR: 14,
+  COLOR_PALETTE: 15,
+  SCROLLBACK_MAX_BYTES: 28,
+  SCROLLBACK_MAX_LINES: 29,
+  MODE_DEFAULT: 34,
+  MODE: 35,
+} as const;
+
+const TerminalData = {
+  CURSOR_X: 3,
+  CURSOR_Y: 4,
+  ACTIVE_SCREEN: 6,
+  MOUSE_TRACKING: 11,
+  SCROLLBACK_ROWS: 15,
+  COLOR_PALETTE_DEFAULT: 25,
+  MODE: 37,
+} as const;
+
+const RenderData = {
+  DIRTY: 3,
+  ROW_ITERATOR: 4,
+  CURSOR: 18,
+  COLORS: 19,
+} as const;
+
+const RowData = {
+  DIRTY: 1,
+  CELLS: 3,
+  CELLS_RAW: 5,
+} as const;
+
+const RowCellsData = {
+  STYLE: 2,
+  GRAPHEMES_LEN: 3,
+} as const;
+
+const PointTag = {
+  ACTIVE: 0,
+  VIEWPORT: 1,
+  HISTORY: 3,
+} as const;
+
+const ROW_DATA_WRAP_CONTINUATION = 2;
+const SIZE_MAX = 0xffffffff;
+const SCREEN_ALTERNATE = 1;
+
+const CellContent = {
+  CODEPOINT: 0,
+  CODEPOINT_GRAPHEME: 1,
+  BG_COLOR_PALETTE: 2,
+  BG_COLOR_RGB: 3,
+} as const;
+
+const CellWide = {
+  NARROW: 0,
+  WIDE: 1,
+} as const;
+
+const StyleColorTag = {
+  NONE: 0,
+  PALETTE: 1,
+  RGB: 2,
+} as const;
+
+const CursorStyle = {
+  BAR: 0,
+  BLOCK: 1,
+  UNDERLINE: 2,
+  BLOCK_HOLLOW: 3,
+} as const;
+
+/** Mode 2027: grapheme clustering, on by default as in Ghostty itself. */
+const MODE_GRAPHEME_CLUSTER = 2027;
+
+/** Pack a mode number the way ghostty_mode_new() does. */
+function packMode(mode: number, ansi: boolean): number {
+  return (mode & 0x7fff) | (ansi ? 0x8000 : 0);
+}
+
+// ============================================================================
+// Layout derived from the module's type manifest
+// ============================================================================
+
+interface Layout {
+  abi: AbiLayout;
+  cell: {
+    contentTag: BitField;
+    codepoint: BitField;
+    bgPalette: BitField;
+    bgR: BitField;
+    bgG: BitField;
+    bgB: BitField;
+    styleId: BitField;
+    wide: BitField;
+    hyperlink: BitField;
+  };
+  styleFlags: {
+    bold: BitField;
+    italic: BitField;
+    faint: BitField;
+    blink: BitField;
+    inverse: BitField;
+    invisible: BitField;
+    strikethrough: BitField;
+    underline: BitField;
+  };
+  style: { size: number; fg: number; bg: number; flags: number };
+  cursor: {
+    size: number;
+    hasValue: number;
+    x: number;
+    y: number;
+    visible: number;
+    blinking: number;
+    style: number;
+  };
+  colors: {
+    size: number;
+    bg: number;
+    fg: number;
+    cursor: number;
+    hasCursor: number;
+    palette: number;
+  };
+  point: { size: number; value: number; x: number; y: number };
+  gridRef: number;
+  cellsView: { ptr: number; len: number };
+  modeConfig: { size: number; value: number };
+}
+
+function buildLayout(abi: AbiLayout): Layout {
+  const cellBits = (f: string) => abi.bits('GhosttyCell', f);
+  const content = (arm: string, inner: string) =>
+    abi.unionBits('GhosttyCell', 'content', arm, inner);
+  const flag = (f: string) => abi.bits('GhosttyStyleFlags', f);
+  return {
+    abi,
+    cell: {
+      contentTag: cellBits('content_tag'),
+      codepoint: content('CODEPOINT', 'codepoint'),
+      bgPalette: content('BG_COLOR_PALETTE', 'index'),
+      bgR: content('BG_COLOR_RGB', 'r'),
+      bgG: content('BG_COLOR_RGB', 'g'),
+      bgB: content('BG_COLOR_RGB', 'b'),
+      styleId: cellBits('style_id'),
+      wide: cellBits('wide'),
+      hyperlink: cellBits('hyperlink'),
+    },
+    styleFlags: {
+      bold: flag('bold'),
+      italic: flag('italic'),
+      faint: flag('faint'),
+      blink: flag('blink'),
+      inverse: flag('inverse'),
+      invisible: flag('invisible'),
+      strikethrough: flag('strikethrough'),
+      underline: flag('underline'),
+    },
+    style: {
+      size: abi.size('GhosttyStyle'),
+      fg: abi.offset('GhosttyStyle', 'fg_color'),
+      bg: abi.offset('GhosttyStyle', 'bg_color'),
+      flags: abi.offset('GhosttyStyle', 'flags'),
+    },
+    cursor: {
+      size: abi.size('GhosttyRenderStateCursor'),
+      hasValue: abi.offset('GhosttyRenderStateCursor', 'viewport_has_value'),
+      x: abi.offset('GhosttyRenderStateCursor', 'viewport_x'),
+      y: abi.offset('GhosttyRenderStateCursor', 'viewport_y'),
+      visible: abi.offset('GhosttyRenderStateCursor', 'visible'),
+      blinking: abi.offset('GhosttyRenderStateCursor', 'blinking'),
+      style: abi.offset('GhosttyRenderStateCursor', 'visual_style'),
+    },
+    colors: {
+      size: abi.size('GhosttyRenderStateColors'),
+      bg: abi.offset('GhosttyRenderStateColors', 'background'),
+      fg: abi.offset('GhosttyRenderStateColors', 'foreground'),
+      cursor: abi.offset('GhosttyRenderStateColors', 'cursor'),
+      hasCursor: abi.offset('GhosttyRenderStateColors', 'cursor_has_value'),
+      palette: abi.offset('GhosttyRenderStateColors', 'palette'),
+    },
+    point: {
+      size: abi.size('GhosttyPoint'),
+      value: abi.offset('GhosttyPoint', 'value'),
+      x: abi.offset('GhosttyPointCoordinate', 'x'),
+      y: abi.offset('GhosttyPointCoordinate', 'y'),
+    },
+    gridRef: abi.size('GhosttyGridRef'),
+    cellsView: {
+      ptr: abi.offset('GhosttyCellsView', 'ptr'),
+      len: abi.offset('GhosttyCellsView', 'len'),
+    },
+    modeConfig: {
+      size: abi.size('GhosttyTerminalModeConfig'),
+      value: abi.offset('GhosttyTerminalModeConfig', 'value'),
+    },
+  };
+}
+
+// ============================================================================
+// WASM memory helpers
+// ============================================================================
+
+/**
+ * Views over the module's linear memory. Any export can grow memory, which
+ * detaches earlier views, so callers fetch a fresh view right before each access.
+ */
+class Memory {
+  private buffer: ArrayBuffer | null = null;
+  private dv!: DataView;
+  private u8!: Uint8Array;
+
+  constructor(private memory: WebAssembly.Memory) {}
+
+  private refresh(): void {
+    const buffer = this.memory.buffer;
+    if (buffer !== this.buffer) {
+      this.buffer = buffer;
+      this.dv = new DataView(buffer);
+      this.u8 = new Uint8Array(buffer);
+    }
+  }
+
+  view(): DataView {
+    this.refresh();
+    return this.dv;
+  }
+
+  bytes(): Uint8Array {
+    this.refresh();
+    return this.u8;
+  }
+}
+
+/**
+ * Build a tiny module that re-exports a JavaScript function as a WebAssembly
+ * function taking `params` i32 arguments and returning nothing. Only WebAssembly
+ * functions can be stored in a function table, so this is how a JS callback gets
+ * a function pointer that libghostty-vt can call.
+ */
+function wasmCallback(fn: (...args: number[]) => void, params: number): unknown {
+  const typeSection = [0x01, 0x60, params, ...new Array(params).fill(0x7f), 0x00];
+  const importSection = [0x01, 0x03, 0x65, 0x6e, 0x76, 0x01, 0x66, 0x00, 0x00];
+  const exportSection = [0x01, 0x01, 0x66, 0x00, 0x00];
+  const bytes = new Uint8Array([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    typeSection.length,
+    ...typeSection,
+    0x02,
+    importSection.length,
+    ...importSection,
+    0x07,
+    exportSection.length,
+    ...exportSection,
+  ]);
+  const module = new WebAssembly.Module(bytes);
+  const instance = new WebAssembly.Instance(module, { env: { f: fn } });
+  return instance.exports.f;
+}
+
+// ============================================================================
+// Ghostty: module loader and factory
+// ============================================================================
+
 /**
  * Main Ghostty WASM wrapper class
  */
 export class Ghostty {
   private exports: GhosttyWasmExports;
   private memory: WebAssembly.Memory;
+  private mem: Memory;
+  private layout: Layout;
+  private terminals = new Map<number, GhosttyTerminal>();
+  private writePtyFn = 0;
 
   constructor(wasmInstance: WebAssembly.Instance) {
     this.exports = wasmInstance.exports as GhosttyWasmExports;
     this.memory = this.exports.memory;
+    this.mem = new Memory(this.memory);
+    this.layout = buildLayout(new AbiLayout(this.readTypeJson()));
+  }
+
+  /** The libghostty-vt version reported by the loaded module. */
+  get version(): string | undefined {
+    return this.layout.abi.version;
+  }
+
+  private readTypeJson(): string {
+    const ptr = this.exports.ghostty_type_json();
+    const bytes = this.mem.bytes();
+    let end = ptr;
+    while (bytes[end] !== 0) end++;
+    return new TextDecoder().decode(bytes.subarray(ptr, end));
+  }
+
+  /**
+   * Function-table index of the shared write_pty callback, created on first use.
+   * libghostty-vt passes the terminal handle as the first argument, which routes
+   * the bytes to the right GhosttyTerminal.
+   */
+  private writePtyCallback(): number {
+    if (this.writePtyFn) return this.writePtyFn;
+    const fn = wasmCallback((term: number, _userdata: number, ptr: number, len: number) => {
+      this.terminals.get(term)?.queueResponse(this.mem.bytes().slice(ptr, ptr + len));
+    }, 4);
+    const table = this.exports.__indirect_function_table;
+    const index = table.grow(1);
+    table.set(index, fn);
+    this.writePtyFn = index;
+    return index;
   }
 
   createKeyEncoder(): KeyEncoder {
-    return new KeyEncoder(this.exports);
+    return new KeyEncoder(this.exports, this.mem);
   }
 
   createTerminal(
@@ -57,7 +377,10 @@ export class Ghostty {
     rows: number = 24,
     config?: GhosttyTerminalConfig
   ): GhosttyTerminal {
-    return new GhosttyTerminal(this.exports, this.memory, cols, rows, config);
+    const term = new GhosttyTerminal(this.exports, this.mem, this.layout, cols, rows, config);
+    this.terminals.set(term.handle, term);
+    term.setWritePty(this.writePtyCallback(), () => this.terminals.delete(term.handle));
+    return term;
   }
 
   static async load(wasmPath?: string): Promise<Ghostty> {
@@ -138,46 +461,42 @@ export class Ghostty {
       throw new Error(`Could not load WASM from path: ${path}`);
     }
 
+    // The official module has no imports.
     const wasmModule = await WebAssembly.compile(wasmBytes);
-    const wasmInstance = await WebAssembly.instantiate(wasmModule, {
-      env: {
-        log: (ptr: number, len: number) => {
-          const bytes = new Uint8Array(
-            (wasmInstance.exports as GhosttyWasmExports).memory.buffer,
-            ptr,
-            len
-          );
-          console.log('[ghostty-vt]', new TextDecoder().decode(bytes));
-        },
-      },
-    });
+    const wasmInstance = await WebAssembly.instantiate(wasmModule, {});
     return new Ghostty(wasmInstance);
   }
 }
+
+// ============================================================================
+// Key encoder
+// ============================================================================
 
 /**
  * Key Encoder - converts keyboard events into terminal escape sequences
  */
 export class KeyEncoder {
   private exports: GhosttyWasmExports;
+  private mem: Memory;
   private encoder: number = 0;
 
-  constructor(exports: GhosttyWasmExports) {
+  constructor(exports: GhosttyWasmExports, mem: Memory) {
     this.exports = exports;
-    const encoderPtrPtr = this.exports.ghostty_wasm_alloc_opaque();
-    const result = this.exports.ghostty_key_encoder_new(0, encoderPtrPtr);
-    if (result !== 0) throw new Error(`Failed to create key encoder: ${result}`);
-    const view = new DataView(this.exports.memory.buffer);
-    this.encoder = view.getUint32(encoderPtrPtr, true);
-    this.exports.ghostty_wasm_free_opaque(encoderPtrPtr);
+    this.mem = mem;
+    const slot = this.exports.ghostty_wasm_alloc_opaque();
+    const result = this.exports.ghostty_key_encoder_new(0, slot);
+    this.encoder = this.exports.ghostty_wasm_take_opaque(slot);
+    this.exports.ghostty_wasm_free_opaque(slot);
+    if (result !== GHOSTTY_SUCCESS) throw new Error(`Failed to create key encoder: ${result}`);
   }
 
   setOption(option: KeyEncoderOption, value: boolean | number): void {
-    const valuePtr = this.exports.ghostty_wasm_alloc_u8();
-    const view = new DataView(this.exports.memory.buffer);
-    view.setUint8(valuePtr, typeof value === 'boolean' ? (value ? 1 : 0) : value);
-    this.exports.ghostty_key_encoder_setopt(this.encoder, option, valuePtr);
-    this.exports.ghostty_wasm_free_u8(valuePtr);
+    // Options are a bool, a u8 (kitty flags) or a 4-byte enum (option-as-alt);
+    // a little-endian u32 write covers all three.
+    const valuePtr = this.exports.ghostty_wasm_alloc(4);
+    this.mem.view().setUint32(valuePtr, typeof value === 'boolean' ? (value ? 1 : 0) : value, true);
+    this.exports.ghostty_key_encoder_set(this.encoder, option, valuePtr);
+    this.exports.ghostty_wasm_free(valuePtr, 4);
   }
 
   setKittyFlags(flags: KittyKeyFlags): void {
@@ -185,54 +504,68 @@ export class KeyEncoder {
   }
 
   encode(event: KeyEvent): Uint8Array {
-    const eventPtrPtr = this.exports.ghostty_wasm_alloc_opaque();
-    const createResult = this.exports.ghostty_key_event_new(0, eventPtrPtr);
-    if (createResult !== 0) throw new Error(`Failed to create key event: ${createResult}`);
+    const ex = this.exports;
+    const slot = ex.ghostty_wasm_alloc_opaque();
+    const createResult = ex.ghostty_key_event_new(0, slot);
+    const eventPtr = ex.ghostty_wasm_take_opaque(slot);
+    ex.ghostty_wasm_free_opaque(slot);
+    if (createResult !== GHOSTTY_SUCCESS)
+      throw new Error(`Failed to create key event: ${createResult}`);
 
-    const view = new DataView(this.exports.memory.buffer);
-    const eventPtr = view.getUint32(eventPtrPtr, true);
-    this.exports.ghostty_wasm_free_opaque(eventPtrPtr);
+    // The key event borrows its UTF-8 text, so it must outlive encode().
+    let utf8Ptr = 0;
+    let utf8Len = 0;
+    let stringPtr = 0;
+    const bufferSize = 128;
+    const bufPtr = ex.ghostty_wasm_alloc(bufferSize);
+    const writtenPtr = ex.ghostty_wasm_alloc(4);
 
-    this.exports.ghostty_key_event_set_action(eventPtr, event.action);
-    this.exports.ghostty_key_event_set_key(eventPtr, event.key);
-    this.exports.ghostty_key_event_set_mods(eventPtr, event.mods);
+    try {
+      ex.ghostty_key_event_set_action(eventPtr, event.action);
+      ex.ghostty_key_event_set_key(eventPtr, event.key);
+      ex.ghostty_key_event_set_mods(eventPtr, event.mods);
+      if (event.consumedMods !== undefined) {
+        ex.ghostty_key_event_set_consumed_mods(eventPtr, event.consumedMods);
+      }
+      if (event.composing !== undefined) {
+        ex.ghostty_key_event_set_composing(eventPtr, event.composing);
+      }
+      if (event.unshiftedCodepoint !== undefined) {
+        ex.ghostty_key_event_set_unshifted_codepoint(eventPtr, event.unshiftedCodepoint);
+      }
 
-    if (event.utf8) {
-      const encoder = new TextEncoder();
-      const utf8Bytes = encoder.encode(event.utf8);
-      const utf8Ptr = this.exports.ghostty_wasm_alloc_u8_array(utf8Bytes.length);
-      new Uint8Array(this.exports.memory.buffer).set(utf8Bytes, utf8Ptr);
-      this.exports.ghostty_key_event_set_utf8(eventPtr, utf8Ptr, utf8Bytes.length);
-      this.exports.ghostty_wasm_free_u8_array(utf8Ptr, utf8Bytes.length);
+      if (event.utf8) {
+        const utf8Bytes = new TextEncoder().encode(event.utf8);
+        utf8Len = utf8Bytes.length;
+        utf8Ptr = ex.ghostty_wasm_alloc(utf8Len);
+        stringPtr = ex.ghostty_wasm_alloc(8);
+        this.mem.bytes().set(utf8Bytes, utf8Ptr);
+        const view = this.mem.view();
+        view.setUint32(stringPtr, utf8Ptr, true);
+        view.setUint32(stringPtr + 4, utf8Len, true);
+        ex.ghostty_key_event_set_utf8(eventPtr, stringPtr);
+      }
+
+      const encodeResult = ex.ghostty_key_encoder_encode(
+        this.encoder,
+        eventPtr,
+        bufPtr,
+        bufferSize,
+        writtenPtr
+      );
+      if (encodeResult !== GHOSTTY_SUCCESS) {
+        throw new Error(`Failed to encode key: ${encodeResult}`);
+      }
+
+      const bytesWritten = this.mem.view().getUint32(writtenPtr, true);
+      return this.mem.bytes().slice(bufPtr, bufPtr + bytesWritten);
+    } finally {
+      ex.ghostty_wasm_free(bufPtr, bufferSize);
+      ex.ghostty_wasm_free(writtenPtr, 4);
+      if (stringPtr) ex.ghostty_wasm_free(stringPtr, 8);
+      if (utf8Ptr) ex.ghostty_wasm_free(utf8Ptr, utf8Len);
+      ex.ghostty_key_event_free(eventPtr);
     }
-
-    const bufferSize = 32;
-    const bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufferSize);
-    const writtenPtr = this.exports.ghostty_wasm_alloc_usize();
-
-    const encodeResult = this.exports.ghostty_key_encoder_encode(
-      this.encoder,
-      eventPtr,
-      bufPtr,
-      bufferSize,
-      writtenPtr
-    );
-
-    if (encodeResult !== 0) {
-      this.exports.ghostty_wasm_free_u8_array(bufPtr, bufferSize);
-      this.exports.ghostty_wasm_free_usize(writtenPtr);
-      this.exports.ghostty_key_event_free(eventPtr);
-      throw new Error(`Failed to encode key: ${encodeResult}`);
-    }
-
-    const bytesWritten = view.getUint32(writtenPtr, true);
-    const encoded = new Uint8Array(this.exports.memory.buffer, bufPtr, bytesWritten).slice();
-
-    this.exports.ghostty_wasm_free_u8_array(bufPtr, bufferSize);
-    this.exports.ghostty_wasm_free_usize(writtenPtr);
-    this.exports.ghostty_key_event_free(eventPtr);
-
-    return encoded;
   }
 
   dispose(): void {
@@ -243,88 +576,97 @@ export class KeyEncoder {
   }
 }
 
+// ============================================================================
+// Terminal
+// ============================================================================
+
+/** Size of the per-terminal scratch area for out-parameters. */
+const SCRATCH_SIZE = 2048;
+
 /**
- * GhosttyTerminal - High-performance terminal emulator
+ * GhosttyTerminal - terminal emulator backed by libghostty-vt
  *
- * Uses Ghostty's native RenderState for optimal performance:
- * - ONE call to update all state (renderStateUpdate)
- * - ONE call to get all cells (getViewport)
- * - No per-row WASM boundary crossings!
+ * The viewport is read through a RenderState. Rows are cached on the JS side and
+ * only re-read when libghostty-vt reports them dirty, so rendering a frame costs
+ * one call per changed row plus one call per styled cell in those rows.
  */
 export class GhosttyTerminal {
   private exports: GhosttyWasmExports;
-  private memory: WebAssembly.Memory;
-  private handle: TerminalHandle;
+  private mem: Memory;
+  private L: Layout;
+  readonly handle: TerminalHandle;
   private _cols: number;
   private _rows: number;
 
-  /** Size of GhosttyCell in WASM (16 bytes) */
-  private static readonly CELL_SIZE = 16;
+  private renderState = 0;
+  private rowIterSlot = 0;
+  private rowCellsSlot = 0;
+  private scratch = 0;
+  private onFree: (() => void) | null = null;
 
-  /** Reusable buffer for viewport operations */
-  private viewportBufferPtr: number = 0;
-  private viewportBufferSize: number = 0;
+  /** Dirty flags since the last markClean(), mirroring the render state's. */
+  private dirty: DirtyState = DirtyState.FULL;
+  private rowDirty: Uint8Array;
+  /** Rows whose cached cells no longer match the render state. */
+  private rowStale: Uint8Array;
 
   /** Cell pool for zero-allocation rendering */
   private cellPool: GhosttyCell[] = [];
 
+  /** Default colors and palette from the last update, used to resolve cell colors. */
+  private fgDefault: RGB = { r: 204, g: 204, b: 204 };
+  private bgDefault: RGB = { r: 0, g: 0, b: 0 };
+  private palette = new Uint8Array(256 * 3);
+  private colorsFresh = false;
+  /** Set by write()/resize(); getViewport() updates the render state first. */
+  private pendingUpdate = true;
+
+  /** Bytes the terminal wrote back for the pty (DSR, DA, DECRQM replies, ...). */
+  private responses: Uint8Array[] = [];
+
   constructor(
     exports: GhosttyWasmExports,
-    memory: WebAssembly.Memory,
+    mem: Memory,
+    layout: Layout,
     cols: number = 80,
     rows: number = 24,
     config?: GhosttyTerminalConfig
   ) {
     this.exports = exports;
-    this.memory = memory;
+    this.mem = mem;
+    this.L = layout;
     this._cols = cols;
     this._rows = rows;
 
-    if (config) {
-      // Allocate config struct in WASM memory
-      const configPtr = this.exports.ghostty_wasm_alloc_u8_array(GHOSTTY_CONFIG_SIZE);
-      if (configPtr === 0) {
-        throw new Error('Failed to allocate config (out of memory)');
-      }
+    const ex = this.exports;
+    this.scratch = ex.ghostty_wasm_alloc(SCRATCH_SIZE);
+    if (!this.scratch) throw new Error('Failed to allocate terminal scratch memory');
 
-      try {
-        // Write config to WASM memory
-        const view = new DataView(this.memory.buffer);
-        let offset = configPtr;
-
-        // scrollback_limit (u32)
-        view.setUint32(offset, config.scrollbackLimit ?? 10000, true);
-        offset += 4;
-
-        // fg_color (u32)
-        view.setUint32(offset, config.fgColor ?? 0, true);
-        offset += 4;
-
-        // bg_color (u32)
-        view.setUint32(offset, config.bgColor ?? 0, true);
-        offset += 4;
-
-        // cursor_color (u32)
-        view.setUint32(offset, config.cursorColor ?? 0, true);
-        offset += 4;
-
-        // palette[16] (u32 * 16)
-        for (let i = 0; i < 16; i++) {
-          view.setUint32(offset, config.palette?.[i] ?? 0, true);
-          offset += 4;
-        }
-
-        this.handle = this.exports.ghostty_terminal_new_with_config(cols, rows, configPtr);
-      } finally {
-        // Free the config memory
-        this.exports.ghostty_wasm_free_u8_array(configPtr, GHOSTTY_CONFIG_SIZE);
-      }
-    } else {
-      this.handle = this.exports.ghostty_terminal_new(cols, rows);
+    const slot = ex.ghostty_wasm_alloc_opaque();
+    try {
+      this.check(ex.ghostty_terminal_new(0, slot, cols, rows), 'create terminal');
+      this.handle = ex.ghostty_wasm_take_opaque(slot);
+      this.check(ex.ghostty_render_state_new(0, slot), 'create render state');
+      this.renderState = ex.ghostty_wasm_take_opaque(slot);
+    } finally {
+      ex.ghostty_wasm_free_opaque(slot);
     }
 
-    if (!this.handle) throw new Error('Failed to create terminal');
+    // Iterator and row-cell handles are reused for every frame; the render state
+    // fills them in place, so they live in persistent slots.
+    this.rowIterSlot = ex.ghostty_wasm_alloc_opaque();
+    this.check(
+      ex.ghostty_render_state_row_iterator_new(0, this.rowIterSlot),
+      'create row iterator'
+    );
+    this.rowCellsSlot = ex.ghostty_wasm_alloc_opaque();
+    this.check(ex.ghostty_render_state_row_cells_new(0, this.rowCellsSlot), 'create row cells');
 
+    this.setMode(MODE_GRAPHEME_CLUSTER, false, true);
+    this.applyConfig(config);
+
+    this.rowDirty = new Uint8Array(rows).fill(1);
+    this.rowStale = new Uint8Array(rows).fill(1);
     this.initCellPool();
   }
 
@@ -335,54 +677,173 @@ export class GhosttyTerminal {
     return this._rows;
   }
 
+  private check(result: number, what: string): void {
+    if (result !== GHOSTTY_SUCCESS) throw new Error(`libghostty-vt: failed to ${what} (${result})`);
+  }
+
+  /** @internal Called by Ghostty to route write_pty callbacks here. */
+  setWritePty(fnIndex: number, onFree: () => void): void {
+    this.onFree = onFree;
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.WRITE_PTY, fnIndex);
+  }
+
+  /** @internal */
+  queueResponse(bytes: Uint8Array): void {
+    this.responses.push(bytes);
+  }
+
+  private setMode(mode: number, ansi: boolean, value: boolean): void {
+    const ptr = this.scratch;
+    const view = this.mem.view();
+    view.setUint16(ptr, packMode(mode, ansi), true);
+    view.setUint8(ptr + this.L.modeConfig.value, value ? 1 : 0);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE_DEFAULT, ptr);
+    this.exports.ghostty_terminal_set(this.handle, TerminalOpt.MODE, ptr);
+  }
+
+  private setColor(option: number, hex: number): void {
+    const ptr = this.scratch;
+    const view = this.mem.view();
+    view.setUint8(ptr, (hex >> 16) & 0xff);
+    view.setUint8(ptr + 1, (hex >> 8) & 0xff);
+    view.setUint8(ptr + 2, hex & 0xff);
+    this.exports.ghostty_terminal_set(this.handle, option, ptr);
+  }
+
+  /** Apply ghostty-web's config. A color of 0 means "keep the library default". */
+  private applyConfig(config?: GhosttyTerminalConfig): void {
+    const ex = this.exports;
+    // ghostty-web's scrollback option counts lines (0 = unlimited). The library
+    // also caps history by bytes, 10,000 by default, which would otherwise win.
+    const scrollback = config?.scrollbackLimit ?? 10000;
+    const view = this.mem.view();
+    view.setUint32(this.scratch, SIZE_MAX, true);
+    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_BYTES, this.scratch);
+    view.setUint32(this.scratch, scrollback === 0 ? SIZE_MAX : scrollback, true);
+    ex.ghostty_terminal_set(this.handle, TerminalOpt.SCROLLBACK_MAX_LINES, this.scratch);
+
+    if (!config) return;
+    if (config.fgColor) this.setColor(TerminalOpt.COLOR_FOREGROUND, config.fgColor);
+    if (config.bgColor) this.setColor(TerminalOpt.COLOR_BACKGROUND, config.bgColor);
+    if (config.cursorColor) this.setColor(TerminalOpt.COLOR_CURSOR, config.cursorColor);
+
+    if (config.palette?.some((c) => c)) {
+      const ptr = this.scratch;
+      this.check(
+        ex.ghostty_terminal_get(this.handle, TerminalData.COLOR_PALETTE_DEFAULT, ptr),
+        'read default palette'
+      );
+      const view = this.mem.view();
+      config.palette.forEach((hex, i) => {
+        if (!hex || i >= 256) return;
+        view.setUint8(ptr + i * 3, (hex >> 16) & 0xff);
+        view.setUint8(ptr + i * 3 + 1, (hex >> 8) & 0xff);
+        view.setUint8(ptr + i * 3 + 2, hex & 0xff);
+      });
+      ex.ghostty_terminal_set(this.handle, TerminalOpt.COLOR_PALETTE, ptr);
+    }
+  }
+
   // ==========================================================================
   // Lifecycle
   // ==========================================================================
 
   write(data: string | Uint8Array): void {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const ptr = this.exports.ghostty_wasm_alloc_u8_array(bytes.length);
-    new Uint8Array(this.memory.buffer).set(bytes, ptr);
-    this.exports.ghostty_terminal_write(this.handle, ptr, bytes.length);
-    this.exports.ghostty_wasm_free_u8_array(ptr, bytes.length);
+    if (bytes.length === 0) return;
+    const ptr = this.exports.ghostty_wasm_alloc(bytes.length);
+    if (!ptr) throw new Error('Failed to allocate write buffer (out of memory)');
+    this.mem.bytes().set(bytes, ptr);
+    this.exports.ghostty_terminal_vt_write(this.handle, ptr, bytes.length);
+    this.pendingUpdate = true;
+    this.exports.ghostty_wasm_free(ptr, bytes.length);
   }
 
   resize(cols: number, rows: number): void {
     if (cols === this._cols && rows === this._rows) return;
     this._cols = cols;
     this._rows = rows;
-    this.exports.ghostty_terminal_resize(this.handle, cols, rows);
-    this.invalidateBuffers();
+    this.exports.ghostty_terminal_resize(this.handle, cols, rows, 0, 0);
+    this.pendingUpdate = true;
+    this.rowDirty = new Uint8Array(rows).fill(1);
+    this.rowStale = new Uint8Array(rows).fill(1);
+    this.dirty = DirtyState.FULL;
     this.initCellPool();
   }
 
   free(): void {
-    if (this.viewportBufferPtr) {
-      this.exports.ghostty_wasm_free_u8_array(this.viewportBufferPtr, this.viewportBufferSize);
-      this.viewportBufferPtr = 0;
+    const ex = this.exports;
+    this.onFree?.();
+    this.onFree = null;
+    if (this.rowCellsSlot) {
+      ex.ghostty_render_state_row_cells_free(this.mem.view().getUint32(this.rowCellsSlot, true));
+      ex.ghostty_wasm_free_opaque(this.rowCellsSlot);
+      this.rowCellsSlot = 0;
     }
-    this.exports.ghostty_terminal_free(this.handle);
+    if (this.rowIterSlot) {
+      ex.ghostty_render_state_row_iterator_free(this.mem.view().getUint32(this.rowIterSlot, true));
+      ex.ghostty_wasm_free_opaque(this.rowIterSlot);
+      this.rowIterSlot = 0;
+    }
+    if (this.renderState) {
+      ex.ghostty_render_state_free(this.renderState);
+      this.renderState = 0;
+    }
+    ex.ghostty_terminal_free(this.handle);
+    if (this.scratch) {
+      ex.ghostty_wasm_free(this.scratch, SCRATCH_SIZE);
+      this.scratch = 0;
+    }
   }
 
   // ==========================================================================
-  // RenderState API - The key performance optimization
+  // RenderState API
   // ==========================================================================
 
   /**
    * Update render state from terminal.
    *
-   * This syncs the RenderState with the current Terminal state.
-   * The dirty state (full/partial/none) is stored in the WASM RenderState
-   * and can be queried via isRowDirty(). When dirty==full, isRowDirty()
-   * returns true for ALL rows.
-   *
-   * The WASM layer automatically detects screen switches (normal <-> alternate)
-   * and returns FULL dirty state when switching screens (e.g., vim exit).
-   *
-   * Safe to call multiple times - dirty state persists until markClean().
+   * libghostty-vt only ever adds dirty state on update; it is cleared by
+   * markClean(). So this is safe to call any number of times per frame.
+   * Screen switches (normal <-> alternate) are reported as FULL.
    */
   update(): DirtyState {
-    return this.exports.ghostty_render_state_update(this.handle) as DirtyState;
+    const ex = this.exports;
+    ex.ghostty_render_state_update(this.renderState, this.handle);
+    this.colorsFresh = false;
+    this.pendingUpdate = false;
+
+    ex.ghostty_render_state_get(this.renderState, RenderData.DIRTY, this.scratch);
+    const dirty = this.mem.view().getInt32(this.scratch, true) as DirtyState;
+    if (dirty === DirtyState.NONE) return this.dirty;
+    if (dirty > this.dirty) this.dirty = dirty;
+
+    if (dirty === DirtyState.FULL) {
+      this.rowDirty.fill(1);
+      this.rowStale.fill(1);
+      return this.dirty;
+    }
+
+    // Partial: record exactly which rows changed.
+    const iter = this.rowIterator();
+    const yPtr = this.scratch;
+    while (ex.ghostty_render_state_row_iterator_next_dirty(iter, yPtr)) {
+      const y = this.mem.view().getUint16(yPtr, true);
+      if (y < this._rows) {
+        this.rowDirty[y] = 1;
+        this.rowStale[y] = 1;
+      }
+    }
+    return this.dirty;
+  }
+
+  private rowIterator(): number {
+    this.exports.ghostty_render_state_get(
+      this.renderState,
+      RenderData.ROW_ITERATOR,
+      this.rowIterSlot
+    );
+    return this.mem.view().getUint32(this.rowIterSlot, true);
   }
 
   /**
@@ -390,38 +851,69 @@ export class GhosttyTerminal {
    * Ensures render state is fresh by calling update().
    */
   getCursor(): RenderStateCursor {
-    // Call update() to ensure render state is fresh.
-    // This is safe to call multiple times - dirty state persists until markClean().
     this.update();
+    const ptr = this.scratch;
+    const c = this.L.cursor;
+    const view = this.mem.view();
+    view.setUint32(ptr, c.size, true);
+    this.exports.ghostty_render_state_get(this.renderState, RenderData.CURSOR, ptr);
+
+    const v = this.mem.view();
+    const hasValue = v.getUint8(ptr + c.hasValue) !== 0;
+    let x: number;
+    let y: number;
+    if (hasValue) {
+      x = v.getUint16(ptr + c.x, true);
+      y = v.getUint16(ptr + c.y, true);
+    } else {
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_X, ptr + 64);
+      this.exports.ghostty_terminal_get(this.handle, TerminalData.CURSOR_Y, ptr + 68);
+      x = this.mem.view().getUint16(ptr + 64, true);
+      y = this.mem.view().getUint16(ptr + 68, true);
+    }
+    const style = v.getInt32(ptr + c.style, true);
     return {
-      x: this.exports.ghostty_render_state_get_cursor_x(this.handle),
-      y: this.exports.ghostty_render_state_get_cursor_y(this.handle),
-      viewportX: this.exports.ghostty_render_state_get_cursor_x(this.handle),
-      viewportY: this.exports.ghostty_render_state_get_cursor_y(this.handle),
-      visible: this.exports.ghostty_render_state_get_cursor_visible(this.handle),
-      blinking: false, // TODO: Add blinking support
-      style: 'block', // TODO: Add style support
+      x,
+      y,
+      viewportX: hasValue ? x : -1,
+      viewportY: hasValue ? y : -1,
+      visible: v.getUint8(ptr + c.visible) !== 0,
+      blinking: v.getUint8(ptr + c.blinking) !== 0,
+      style:
+        style === CursorStyle.BAR ? 'bar' : style === CursorStyle.UNDERLINE ? 'underline' : 'block',
     };
+  }
+
+  /** Refresh the default colors and palette used to resolve cell colors. */
+  private loadColors(force = false): void {
+    if (this.colorsFresh && !force) return;
+    const ptr = this.scratch;
+    const c = this.L.colors;
+    this.mem.view().setUint32(ptr, c.size, true);
+    this.exports.ghostty_render_state_get(this.renderState, RenderData.COLORS, ptr);
+    const b = this.mem.bytes();
+    this.bgDefault = { r: b[ptr + c.bg], g: b[ptr + c.bg + 1], b: b[ptr + c.bg + 2] };
+    this.fgDefault = { r: b[ptr + c.fg], g: b[ptr + c.fg + 1], b: b[ptr + c.fg + 2] };
+    this.palette.set(b.subarray(ptr + c.palette, ptr + c.palette + 768));
+    this.colorsFresh = true;
   }
 
   /**
    * Get default colors from render state
    */
   getColors(): RenderStateColors {
-    const bg = this.exports.ghostty_render_state_get_bg_color(this.handle);
-    const fg = this.exports.ghostty_render_state_get_fg_color(this.handle);
+    // Forced so the cursor color below is read from a fresh copy in scratch.
+    this.loadColors(true);
+    const ptr = this.scratch;
+    const c = this.L.colors;
+    const b = this.mem.bytes();
+    const hasCursor = b[ptr + c.hasCursor] !== 0;
     return {
-      background: {
-        r: (bg >> 16) & 0xff,
-        g: (bg >> 8) & 0xff,
-        b: bg & 0xff,
-      },
-      foreground: {
-        r: (fg >> 16) & 0xff,
-        g: (fg >> 8) & 0xff,
-        b: fg & 0xff,
-      },
-      cursor: null, // TODO: Add cursor color support
+      background: { ...this.bgDefault },
+      foreground: { ...this.fgDefault },
+      cursor: hasCursor
+        ? { r: b[ptr + c.cursor], g: b[ptr + c.cursor + 1], b: b[ptr + c.cursor + 2] }
+        : null,
     };
   }
 
@@ -429,45 +921,187 @@ export class GhosttyTerminal {
    * Check if a specific row is dirty
    */
   isRowDirty(y: number): boolean {
-    return this.exports.ghostty_render_state_is_row_dirty(this.handle, y);
+    return this.dirty === DirtyState.FULL || this.rowDirty[y] === 1;
   }
 
   /**
    * Mark render state as clean (call after rendering)
    */
   markClean(): void {
-    this.exports.ghostty_render_state_mark_clean(this.handle);
+    this.exports.ghostty_render_state_clean(this.renderState);
+    this.dirty = DirtyState.NONE;
+    this.rowDirty.fill(0);
   }
 
   /**
-   * Get ALL viewport cells in ONE WASM call - the key performance optimization!
-   * Returns a reusable cell array (zero allocation after warmup).
+   * Get all viewport cells. Returns a reusable cell array (zero allocation
+   * after warmup); only rows that changed since they were last read are
+   * fetched from WASM.
    */
   getViewport(): GhosttyCell[] {
-    const totalCells = this._cols * this._rows;
-    const neededSize = totalCells * GhosttyTerminal.CELL_SIZE;
+    if (this.pendingUpdate) this.update();
+    if (!this.rowStale.includes(1)) return this.cellPool;
+    this.loadColors();
 
-    // Ensure buffer is allocated
-    if (!this.viewportBufferPtr || this.viewportBufferSize < neededSize) {
-      if (this.viewportBufferPtr) {
-        this.exports.ghostty_wasm_free_u8_array(this.viewportBufferPtr, this.viewportBufferSize);
+    const ex = this.exports;
+    const iter = this.rowIterator();
+    const viewPtr = this.scratch;
+    const cellsHandle = () => this.mem.view().getUint32(this.rowCellsSlot, true);
+    let y = 0;
+    while (y < this._rows && ex.ghostty_render_state_row_iterator_next(iter)) {
+      if (this.rowStale[y]) {
+        if (ex.ghostty_render_state_row_get(iter, RowData.CELLS_RAW, viewPtr) === GHOSTTY_SUCCESS) {
+          // Row cells are only fetched (and the iterator only positioned on this
+          // row) when a cell needs its style or grapheme cluster.
+          let cellsReady = false;
+          const rowCells = () => {
+            if (!cellsReady) {
+              ex.ghostty_render_state_row_get(iter, RowData.CELLS, this.rowCellsSlot);
+              cellsReady = true;
+            }
+            return cellsHandle();
+          };
+          this.readRow(y, viewPtr, rowCells);
+        }
+        this.rowStale[y] = 0;
       }
-      this.viewportBufferPtr = this.exports.ghostty_wasm_alloc_u8_array(neededSize);
-      this.viewportBufferSize = neededSize;
+      y++;
+    }
+    return this.cellPool;
+  }
+
+  /** Decode one viewport row from its raw cells view into the cell pool. */
+  private readRow(y: number, viewPtr: number, rowCells: () => number): void {
+    const ex = this.exports;
+    const L = this.L;
+    const view = this.mem.view();
+    const cellsPtr = view.getUint32(viewPtr + L.cellsView.ptr, true);
+    const len = Math.min(view.getUint32(viewPtr + L.cellsView.len, true), this._cols);
+    const base = y * this._cols;
+    const stylePtr = this.scratch + 64;
+    const lenPtr = this.scratch + 128;
+
+    // Copy the raw row out first: style lookups below may grow memory.
+    const raw = this.mem.bytes().slice(cellsPtr, cellsPtr + len * 8);
+    const rawView = new DataView(raw.buffer);
+
+    for (let x = 0; x < this._cols; x++) {
+      const cell = this.cellPool[base + x];
+      if (x >= len) {
+        this.setBlank(cell);
+        continue;
+      }
+      const lo = rawView.getUint32(x * 8, true);
+      const hi = rawView.getUint32(x * 8 + 4, true);
+      const styleId = readBits(lo, hi, L.cell.styleId);
+      const tag = readBits(lo, hi, L.cell.contentTag);
+
+      let graphemeLen = 0;
+      let style: DataView | null = null;
+      if (styleId !== 0 || tag === CellContent.CODEPOINT_GRAPHEME) {
+        const cells = rowCells();
+        ex.ghostty_render_state_row_cells_select(cells, x);
+        if (styleId !== 0) {
+          ex.ghostty_render_state_row_cells_get(cells, RowCellsData.STYLE, stylePtr);
+          style = new DataView(this.mem.bytes().slice(stylePtr, stylePtr + L.style.size).buffer);
+        }
+        if (tag === CellContent.CODEPOINT_GRAPHEME) {
+          ex.ghostty_render_state_row_cells_get(cells, RowCellsData.GRAPHEMES_LEN, lenPtr);
+          graphemeLen = Math.max(0, this.mem.view().getUint32(lenPtr, true) - 1);
+        }
+      }
+      this.decodeCell(cell, lo, hi, style, graphemeLen);
+    }
+  }
+
+  private setBlank(cell: GhosttyCell): void {
+    cell.codepoint = 0;
+    cell.fg_r = this.fgDefault.r;
+    cell.fg_g = this.fgDefault.g;
+    cell.fg_b = this.fgDefault.b;
+    cell.bg_r = this.bgDefault.r;
+    cell.bg_g = this.bgDefault.g;
+    cell.bg_b = this.bgDefault.b;
+    cell.flags = 0;
+    cell.width = 1;
+    cell.hyperlink_id = 0;
+    cell.grapheme_len = 0;
+  }
+
+  /**
+   * Fill a GhosttyCell from a raw cell (as two 32-bit halves) and its style.
+   * Colors are resolved against the current palette and default colors, the
+   * same way Ghostty's own renderer does it; inverse is left to the renderer.
+   */
+  private decodeCell(
+    cell: GhosttyCell,
+    lo: number,
+    hi: number,
+    style: DataView | null,
+    graphemeLen: number
+  ): void {
+    const L = this.L;
+    const tag = readBits(lo, hi, L.cell.contentTag);
+    const hasText = tag === CellContent.CODEPOINT || tag === CellContent.CODEPOINT_GRAPHEME;
+    cell.codepoint = hasText ? readBits(lo, hi, L.cell.codepoint) : 0;
+
+    let fg = this.fgDefault;
+    let bg = this.bgDefault;
+    let flags = 0;
+    if (style) {
+      fg = this.resolveStyleColor(style, L.style.fg) ?? fg;
+      bg = this.resolveStyleColor(style, L.style.bg) ?? bg;
+      const f = style.getUint16(L.style.flags, true);
+      const sf = L.styleFlags;
+      if (readBits(f, 0, sf.bold)) flags |= CellFlags.BOLD;
+      if (readBits(f, 0, sf.italic)) flags |= CellFlags.ITALIC;
+      if (readBits(f, 0, sf.underline)) flags |= CellFlags.UNDERLINE;
+      if (readBits(f, 0, sf.strikethrough)) flags |= CellFlags.STRIKETHROUGH;
+      if (readBits(f, 0, sf.inverse)) flags |= CellFlags.INVERSE;
+      if (readBits(f, 0, sf.invisible)) flags |= CellFlags.INVISIBLE;
+      if (readBits(f, 0, sf.blink)) flags |= CellFlags.BLINK;
+      if (readBits(f, 0, sf.faint)) flags |= CellFlags.FAINT;
+    }
+    if (tag === CellContent.BG_COLOR_PALETTE) {
+      bg = this.paletteColor(readBits(lo, hi, L.cell.bgPalette));
+    } else if (tag === CellContent.BG_COLOR_RGB) {
+      bg = {
+        r: readBits(lo, hi, L.cell.bgR),
+        g: readBits(lo, hi, L.cell.bgG),
+        b: readBits(lo, hi, L.cell.bgB),
+      };
     }
 
-    // Get all cells in one call
-    const count = this.exports.ghostty_render_state_get_viewport(
-      this.handle,
-      this.viewportBufferPtr,
-      totalCells
-    );
+    cell.fg_r = fg.r;
+    cell.fg_g = fg.g;
+    cell.fg_b = fg.b;
+    cell.bg_r = bg.r;
+    cell.bg_g = bg.g;
+    cell.bg_b = bg.b;
+    cell.flags = flags;
+    const wide = readBits(lo, hi, L.cell.wide);
+    cell.width = wide === CellWide.NARROW ? 1 : wide === CellWide.WIDE ? 2 : 0;
+    cell.hyperlink_id = readBits(lo, hi, L.cell.hyperlink) ? 1 : 0;
+    cell.grapheme_len = graphemeLen;
+  }
 
-    if (count < 0) return this.cellPool;
+  private paletteColor(index: number): RGB {
+    const p = this.palette;
+    return { r: p[index * 3], g: p[index * 3 + 1], b: p[index * 3 + 2] };
+  }
 
-    // Parse cells into pool (reuses existing objects)
-    this.parseCellsIntoPool(this.viewportBufferPtr, totalCells);
-    return this.cellPool;
+  /** Resolve a GhosttyStyleColor at `offset`; null means "use the default". */
+  private resolveStyleColor(style: DataView, offset: number): RGB | null {
+    const tag = style.getUint8(offset);
+    if (tag === StyleColorTag.PALETTE) return this.paletteColor(style.getUint8(offset + 1));
+    if (tag === StyleColorTag.RGB) {
+      return {
+        r: style.getUint8(offset + 1),
+        g: style.getUint8(offset + 2),
+        b: style.getUint8(offset + 3),
+      };
+    }
+    return null;
   }
 
   // ==========================================================================
@@ -481,12 +1115,9 @@ export class GhosttyTerminal {
    */
   getLine(y: number): GhosttyCell[] | null {
     if (y < 0 || y >= this._rows) return null;
-    // Call update() to ensure render state is fresh.
-    // This is safe to call multiple times - dirty state persists until markClean().
     this.update();
     const viewport = this.getViewport();
     const start = y * this._cols;
-    // Return deep copies to avoid cell pool reference issues
     return viewport.slice(start, start + this._cols).map((cell) => ({ ...cell }));
   }
 
@@ -513,7 +1144,8 @@ export class GhosttyTerminal {
   // ==========================================================================
 
   isAlternateScreen(): boolean {
-    return !!this.exports.ghostty_terminal_is_alternate_screen(this.handle);
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.ACTIVE_SCREEN, this.scratch);
+    return this.mem.view().getInt32(this.scratch, true) === SCREEN_ALTERNATE;
   }
 
   hasBracketedPaste(): boolean {
@@ -527,11 +1159,27 @@ export class GhosttyTerminal {
   }
 
   hasMouseTracking(): boolean {
-    return this.exports.ghostty_terminal_has_mouse_tracking(this.handle) !== 0;
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.MOUSE_TRACKING, this.scratch);
+    return this.mem.view().getUint8(this.scratch) !== 0;
+  }
+
+  /**
+   * Query arbitrary terminal mode by number
+   * @param mode Mode number (e.g., 25 for cursor visibility, 2004 for bracketed paste)
+   * @param isAnsi True for ANSI modes, false for DEC modes (default: false)
+   */
+  getMode(mode: number, isAnsi: boolean = false): boolean {
+    const ptr = this.scratch;
+    const view = this.mem.view();
+    view.setUint16(ptr, packMode(mode, isAnsi), true);
+    view.setUint8(ptr + this.L.modeConfig.value, 0);
+    const result = this.exports.ghostty_terminal_get(this.handle, TerminalData.MODE, ptr);
+    if (result !== GHOSTTY_SUCCESS) return false;
+    return this.mem.view().getUint8(ptr + this.L.modeConfig.value) !== 0;
   }
 
   // ==========================================================================
-  // Extended API (scrollback, modes, etc.)
+  // Grid access (scrollback, wrapping, graphemes, hyperlinks)
   // ==========================================================================
 
   /** Get dimensions - for compatibility */
@@ -541,68 +1189,113 @@ export class GhosttyTerminal {
 
   /** Get number of scrollback lines (history, not including active screen) */
   getScrollbackLength(): number {
-    return this.exports.ghostty_terminal_get_scrollback_length(this.handle);
+    this.exports.ghostty_terminal_get(this.handle, TerminalData.SCROLLBACK_ROWS, this.scratch);
+    return this.mem.view().getUint32(this.scratch, true);
+  }
+
+  /**
+   * Resolve a grid point to a GhosttyGridRef written at `refPtr`.
+   * Returns false if the point is outside the requested area.
+   */
+  private gridRef(tag: number, x: number, y: number, refPtr: number): boolean {
+    const P = this.L.point;
+    const pointPtr = this.scratch + 256;
+    const view = this.mem.view();
+    for (let i = 0; i < P.size; i += 4) view.setUint32(pointPtr + i, 0, true);
+    view.setInt32(pointPtr, tag, true);
+    view.setUint16(pointPtr + P.value + P.x, x, true);
+    view.setUint32(pointPtr + P.value + P.y, y, true);
+    return (
+      this.exports.ghostty_terminal_grid_ref(this.handle, pointPtr, refPtr) === GHOSTTY_SUCCESS
+    );
   }
 
   /**
    * Get a line from the scrollback buffer.
-   * Ensures render state is fresh by calling update().
    * @param offset 0 = oldest line, (length-1) = most recent scrollback line
    */
   getScrollbackLine(offset: number): GhosttyCell[] | null {
-    const neededSize = this._cols * GhosttyTerminal.CELL_SIZE;
-
-    // Ensure buffer is allocated
-    if (!this.viewportBufferPtr || this.viewportBufferSize < neededSize) {
-      if (this.viewportBufferPtr) {
-        this.exports.ghostty_wasm_free_u8_array(this.viewportBufferPtr, this.viewportBufferSize);
-      }
-      this.viewportBufferPtr = this.exports.ghostty_wasm_alloc_u8_array(neededSize);
-      this.viewportBufferSize = neededSize;
-    }
-
-    // Call update() to ensure render state is fresh (needed for colors).
-    // This is safe to call multiple times - dirty state persists until markClean().
+    if (offset < 0 || offset >= this.getScrollbackLength()) return null;
     this.update();
+    this.loadColors();
 
-    const count = this.exports.ghostty_terminal_get_scrollback_line(
-      this.handle,
-      offset,
-      this.viewportBufferPtr,
-      this._cols
-    );
-
-    if (count < 0) return null;
-
-    // Parse cells
+    const ex = this.exports;
+    const refPtr = this.scratch + 320;
+    const rawPtr = this.scratch + 336;
+    const stylePtr = this.scratch + 352;
+    const L = this.L;
     const cells: GhosttyCell[] = [];
-    const buffer = this.memory.buffer;
-    const u8 = new Uint8Array(buffer, this.viewportBufferPtr, count * GhosttyTerminal.CELL_SIZE);
-    const view = new DataView(buffer, this.viewportBufferPtr, count * GhosttyTerminal.CELL_SIZE);
 
-    for (let i = 0; i < count; i++) {
-      const cellOffset = i * GhosttyTerminal.CELL_SIZE;
-      cells.push({
-        codepoint: view.getUint32(cellOffset, true),
-        fg_r: u8[cellOffset + 4],
-        fg_g: u8[cellOffset + 5],
-        fg_b: u8[cellOffset + 6],
-        bg_r: u8[cellOffset + 7],
-        bg_g: u8[cellOffset + 8],
-        bg_b: u8[cellOffset + 9],
-        flags: u8[cellOffset + 10],
-        width: u8[cellOffset + 11],
-        hyperlink_id: view.getUint16(cellOffset + 12, true),
-        grapheme_len: u8[cellOffset + 14],
-      });
+    for (let x = 0; x < this._cols; x++) {
+      const cell = {} as GhosttyCell;
+      if (
+        !this.gridRef(PointTag.HISTORY, x, offset, refPtr) ||
+        ex.ghostty_grid_ref_cell(refPtr, rawPtr) !== GHOSTTY_SUCCESS
+      ) {
+        if (x === 0) return null;
+        this.setBlank(cell);
+        cells.push(cell);
+        continue;
+      }
+      let view = this.mem.view();
+      const lo = view.getUint32(rawPtr, true);
+      const hi = view.getUint32(rawPtr + 4, true);
+
+      let style: DataView | null = null;
+      if (readBits(lo, hi, L.cell.styleId) !== 0) {
+        if (ex.ghostty_grid_ref_style(refPtr, stylePtr) === GHOSTTY_SUCCESS) {
+          style = new DataView(this.mem.bytes().slice(stylePtr, stylePtr + L.style.size).buffer);
+        }
+      }
+      let graphemeLen = 0;
+      if (readBits(lo, hi, L.cell.contentTag) === CellContent.CODEPOINT_GRAPHEME) {
+        const writtenPtr = this.scratch + 384;
+        ex.ghostty_grid_ref_graphemes(refPtr, 0, 0, writtenPtr);
+        view = this.mem.view();
+        graphemeLen = Math.max(0, view.getUint32(writtenPtr, true) - 1);
+      }
+      this.decodeCell(cell, lo, hi, style, graphemeLen);
+      cells.push(cell);
     }
-
     return cells;
   }
 
-  /** Check if a row in the active screen is wrapped (soft-wrapped to next line) */
+  /** Check if a row in the active screen continues a soft-wrapped previous row */
   isRowWrapped(row: number): boolean {
-    return this.exports.ghostty_terminal_is_row_wrapped(this.handle, row) !== 0;
+    const refPtr = this.scratch + 320;
+    const rowPtr = this.scratch + 336;
+    const outPtr = this.scratch + 352;
+    if (!this.gridRef(PointTag.ACTIVE, 0, row, refPtr)) return false;
+    if (this.exports.ghostty_grid_ref_row(refPtr, rowPtr) !== GHOSTTY_SUCCESS) return false;
+    const rowValue = this.mem.view().getBigUint64(rowPtr, true);
+    if (
+      this.exports.ghostty_row_get(rowValue, ROW_DATA_WRAP_CONTINUATION, outPtr) !== GHOSTTY_SUCCESS
+    ) {
+      return false;
+    }
+    return this.mem.view().getUint8(outPtr) !== 0;
+  }
+
+  /** Read a grid reference's hyperlink URI, or null if the cell has none. */
+  private hyperlinkAt(tag: number, x: number, y: number): string | null {
+    const ex = this.exports;
+    const refPtr = this.scratch + 320;
+    const lenPtr = this.scratch + 336;
+    if (!this.gridRef(tag, x, y, refPtr)) return null;
+    const sizeResult = ex.ghostty_grid_ref_hyperlink_uri(refPtr, 0, 0, lenPtr);
+    if (sizeResult !== GHOSTTY_OUT_OF_SPACE) return null;
+    const len = this.mem.view().getUint32(lenPtr, true);
+    if (len === 0) return null;
+    const buf = ex.ghostty_wasm_alloc(len);
+    try {
+      if (ex.ghostty_grid_ref_hyperlink_uri(refPtr, buf, len, lenPtr) !== GHOSTTY_SUCCESS) {
+        return null;
+      }
+      const written = this.mem.view().getUint32(lenPtr, true);
+      return new TextDecoder().decode(this.mem.bytes().slice(buf, buf + written));
+    } finally {
+      ex.ghostty_wasm_free(buf, len);
+    }
   }
 
   /**
@@ -612,44 +1305,7 @@ export class GhosttyTerminal {
    * @returns The URI string, or null if no hyperlink at that position
    */
   getHyperlinkUri(row: number, col: number): string | null {
-    // Check if WASM has this function (requires rebuilt WASM with hyperlink support)
-    if (!this.exports.ghostty_terminal_get_hyperlink_uri) {
-      return null;
-    }
-
-    // Try with initial buffer, retry with larger if needed (for very long URLs)
-    const bufferSizes = [2048, 8192, 32768];
-
-    for (const bufSize of bufferSizes) {
-      const bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufSize);
-
-      try {
-        const bytesWritten = this.exports.ghostty_terminal_get_hyperlink_uri(
-          this.handle,
-          row,
-          col,
-          bufPtr,
-          bufSize
-        );
-
-        // 0 means no hyperlink at this position
-        if (bytesWritten === 0) return null;
-
-        // -1 means buffer too small, try next size
-        if (bytesWritten === -1) continue;
-
-        // Negative values other than -1 are errors
-        if (bytesWritten < 0) return null;
-
-        const bytes = new Uint8Array(this.memory.buffer, bufPtr, bytesWritten);
-        return new TextDecoder().decode(bytes.slice());
-      } finally {
-        this.exports.ghostty_wasm_free_u8_array(bufPtr, bufSize);
-      }
-    }
-
-    // URI too long even for largest buffer
-    return null;
+    return this.hyperlinkAt(PointTag.VIEWPORT, col, row);
   }
 
   /**
@@ -659,44 +1315,7 @@ export class GhosttyTerminal {
    * @returns The URI string, or null if no hyperlink at that position
    */
   getScrollbackHyperlinkUri(offset: number, col: number): string | null {
-    // Check if WASM has this function
-    if (!this.exports.ghostty_terminal_get_scrollback_hyperlink_uri) {
-      return null;
-    }
-
-    // Try with initial buffer, retry with larger if needed (for very long URLs)
-    const bufferSizes = [2048, 8192, 32768];
-
-    for (const bufSize of bufferSizes) {
-      const bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufSize);
-
-      try {
-        const bytesWritten = this.exports.ghostty_terminal_get_scrollback_hyperlink_uri(
-          this.handle,
-          offset,
-          col,
-          bufPtr,
-          bufSize
-        );
-
-        // 0 means no hyperlink at this position
-        if (bytesWritten === 0) return null;
-
-        // -1 means buffer too small, try next size
-        if (bytesWritten === -1) continue;
-
-        // Negative values other than -1 are errors
-        if (bytesWritten < 0) return null;
-
-        const bytes = new Uint8Array(this.memory.buffer, bufPtr, bytesWritten);
-        return new TextDecoder().decode(bytes.slice());
-      } finally {
-        this.exports.ghostty_wasm_free_u8_array(bufPtr, bufSize);
-      }
-    }
-
-    // URI too long even for largest buffer
-    return null;
+    return this.hyperlinkAt(PointTag.HISTORY, col, offset);
   }
 
   /**
@@ -704,7 +1323,7 @@ export class GhosttyTerminal {
    * Responses are generated by escape sequences like DSR (Device Status Report).
    */
   hasResponse(): boolean {
-    return this.exports.ghostty_terminal_has_response(this.handle);
+    return this.responses.length > 0;
   }
 
   /**
@@ -716,30 +1335,16 @@ export class GhosttyTerminal {
    * - DSR 5 (operating status): Returns \x1b[0n
    */
   readResponse(): string | null {
-    if (!this.hasResponse()) return null;
-
-    const bufSize = 256; // Most responses are small
-    const bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufSize);
-
-    try {
-      const bytesRead = this.exports.ghostty_terminal_read_response(this.handle, bufPtr, bufSize);
-
-      if (bytesRead <= 0) return null;
-
-      const bytes = new Uint8Array(this.memory.buffer, bufPtr, bytesRead);
-      return new TextDecoder().decode(bytes.slice());
-    } finally {
-      this.exports.ghostty_wasm_free_u8_array(bufPtr, bufSize);
+    if (this.responses.length === 0) return null;
+    const total = this.responses.reduce((n, r) => n + r.length, 0);
+    const all = new Uint8Array(total);
+    let at = 0;
+    for (const r of this.responses) {
+      all.set(r, at);
+      at += r.length;
     }
-  }
-
-  /**
-   * Query arbitrary terminal mode by number
-   * @param mode Mode number (e.g., 25 for cursor visibility, 2004 for bracketed paste)
-   * @param isAnsi True for ANSI modes, false for DEC modes (default: false)
-   */
-  getMode(mode: number, isAnsi: boolean = false): boolean {
-    return this.exports.ghostty_terminal_get_mode(this.handle, mode, isAnsi) !== 0;
+    this.responses = [];
+    return new TextDecoder().decode(all);
   }
 
   // ==========================================================================
@@ -767,31 +1372,31 @@ export class GhosttyTerminal {
     }
   }
 
-  private parseCellsIntoPool(ptr: number, count: number): void {
-    const buffer = this.memory.buffer;
-    const u8 = new Uint8Array(buffer, ptr, count * GhosttyTerminal.CELL_SIZE);
-    const view = new DataView(buffer, ptr, count * GhosttyTerminal.CELL_SIZE);
-
-    for (let i = 0; i < count; i++) {
-      const offset = i * GhosttyTerminal.CELL_SIZE;
-      const cell = this.cellPool[i];
-      cell.codepoint = view.getUint32(offset, true);
-      cell.fg_r = u8[offset + 4];
-      cell.fg_g = u8[offset + 5];
-      cell.fg_b = u8[offset + 6];
-      cell.bg_r = u8[offset + 7];
-      cell.bg_g = u8[offset + 8];
-      cell.bg_b = u8[offset + 9];
-      cell.flags = u8[offset + 10];
-      cell.width = u8[offset + 11];
-      cell.hyperlink_id = view.getUint16(offset + 12, true);
-      cell.grapheme_len = u8[offset + 14]; // grapheme_len is at byte 14
+  /** Read the grapheme codepoints at a grid point. */
+  private graphemeAt(tag: number, x: number, y: number): number[] | null {
+    const ex = this.exports;
+    const refPtr = this.scratch + 320;
+    const countPtr = this.scratch + 336;
+    if (!this.gridRef(tag, x, y, refPtr)) return null;
+    const cap = 16;
+    const buf = this.scratch + 1024;
+    let result = ex.ghostty_grid_ref_graphemes(refPtr, buf, cap, countPtr);
+    if (result === GHOSTTY_SUCCESS) {
+      const count = this.mem.view().getUint32(countPtr, true);
+      return Array.from(new Uint32Array(this.mem.bytes().slice(buf, buf + count * 4).buffer));
+    }
+    if (result !== GHOSTTY_OUT_OF_SPACE) return null;
+    const needed = this.mem.view().getUint32(countPtr, true);
+    const big = ex.ghostty_wasm_alloc(needed * 4);
+    try {
+      result = ex.ghostty_grid_ref_graphemes(refPtr, big, needed, countPtr);
+      if (result !== GHOSTTY_SUCCESS) return null;
+      const count = this.mem.view().getUint32(countPtr, true);
+      return Array.from(new Uint32Array(this.mem.bytes().slice(big, big + count * 4).buffer));
+    } finally {
+      ex.ghostty_wasm_free(big, needed * 4);
     }
   }
-
-  /** Small buffer for grapheme lookups (reused to avoid allocation) */
-  private graphemeBuffer: Uint32Array | null = null;
-  private graphemeBufferPtr: number = 0;
 
   /**
    * Get all codepoints for a grapheme cluster at the given position.
@@ -800,25 +1405,7 @@ export class GhosttyTerminal {
    * @returns Array of codepoints, or null on error
    */
   getGrapheme(row: number, col: number): number[] | null {
-    // Allocate buffer on first use (16 codepoints should be enough for any grapheme)
-    if (!this.graphemeBuffer) {
-      this.graphemeBufferPtr = this.exports.ghostty_wasm_alloc_u8_array(16 * 4);
-      this.graphemeBuffer = new Uint32Array(this.memory.buffer, this.graphemeBufferPtr, 16);
-    }
-
-    const count = this.exports.ghostty_render_state_get_grapheme(
-      this.handle,
-      row,
-      col,
-      this.graphemeBufferPtr,
-      16
-    );
-
-    if (count < 0) return null;
-
-    // Re-create view in case memory grew
-    const view = new Uint32Array(this.memory.buffer, this.graphemeBufferPtr, count);
-    return Array.from(view);
+    return this.graphemeAt(PointTag.VIEWPORT, col, row);
   }
 
   /**
@@ -838,25 +1425,7 @@ export class GhosttyTerminal {
    * @returns Array of codepoints, or null on error
    */
   getScrollbackGrapheme(offset: number, col: number): number[] | null {
-    // Reuse the same buffer as getGrapheme
-    if (!this.graphemeBuffer) {
-      this.graphemeBufferPtr = this.exports.ghostty_wasm_alloc_u8_array(16 * 4);
-      this.graphemeBuffer = new Uint32Array(this.memory.buffer, this.graphemeBufferPtr, 16);
-    }
-
-    const count = this.exports.ghostty_terminal_get_scrollback_grapheme(
-      this.handle,
-      offset,
-      col,
-      this.graphemeBufferPtr,
-      16
-    );
-
-    if (count < 0) return null;
-
-    // Re-create view in case memory grew
-    const view = new Uint32Array(this.memory.buffer, this.graphemeBufferPtr, count);
-    return Array.from(view);
+    return this.graphemeAt(PointTag.HISTORY, col, offset);
   }
 
   /**
@@ -866,18 +1435,5 @@ export class GhosttyTerminal {
     const codepoints = this.getScrollbackGrapheme(offset, col);
     if (!codepoints || codepoints.length === 0) return ' ';
     return String.fromCodePoint(...codepoints);
-  }
-
-  private invalidateBuffers(): void {
-    if (this.viewportBufferPtr) {
-      this.exports.ghostty_wasm_free_u8_array(this.viewportBufferPtr, this.viewportBufferSize);
-      this.viewportBufferPtr = 0;
-      this.viewportBufferSize = 0;
-    }
-    if (this.graphemeBufferPtr) {
-      this.exports.ghostty_wasm_free_u8_array(this.graphemeBufferPtr, 16 * 4);
-      this.graphemeBufferPtr = 0;
-    }
-    this.graphemeBuffer = null;
   }
 }

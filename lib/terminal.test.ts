@@ -1447,12 +1447,23 @@ describe('Terminal Config', () => {
         term.write(`Line ${i}\r\n`);
       }
 
-      // Scrollback should be limited based on the config
+      // libghostty-vt prunes history in whole pages once the line limit is
+      // exceeded, so the retained count is at most the limit but can be well
+      // below it right after a page is dropped.
       const scrollbackLength = term.wasmTerm!.getScrollbackLength();
-      // With 500 scrollback limit, we wrote 600 lines so scrollback should be capped
-      // The actual value depends on ghostty's implementation but should be around 500
-      expect(scrollbackLength).toBeLessThan(600);
-      expect(scrollbackLength).toBeGreaterThan(450);
+      expect(scrollbackLength).toBeLessThanOrEqual(500);
+
+      // The same output with the default limit keeps every line.
+      const roomy = await createIsolatedTerminal({ cols: 80, rows: 24 });
+      roomy.open(document.createElement('div'));
+      try {
+        for (let i = 0; i < 600; i++) {
+          roomy.write(`Line ${i}\r\n`);
+        }
+        expect(roomy.wasmTerm!.getScrollbackLength()).toBe(600 + 1 - 24);
+      } finally {
+        roomy.dispose();
+      }
     } finally {
       term.dispose();
     }

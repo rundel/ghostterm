@@ -53,7 +53,6 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
-          submodules: recursive
 
       - name: Validate tag and source versions
         env:
@@ -83,10 +82,8 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Zig
-        uses: ./.github/actions/setup-zig
-        with:
-          version: 0.15.2
+      - name: Fetch WASM
+        run: ./scripts/fetch-wasm.sh
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -110,8 +107,8 @@ jobs:
         run: |
           SIZE=$(stat -c%s ghostty-vt.wasm)
           echo "WASM size: $SIZE bytes"
-          if [ "$SIZE" -gt 524288 ]; then
-            echo "❌ Error: WASM exceeds 512 KiB limit"
+          if [ "$SIZE" -gt 1048576 ]; then
+            echo "❌ Error: WASM exceeds 1 MiB limit"
             exit 1
           fi
 
@@ -179,7 +176,6 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          submodules: recursive
 
       - name: Skip release commits
         id: release-commit
@@ -202,11 +198,9 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Zig
+      - name: Fetch WASM
         if: steps.release-commit.outputs.skip != 'true'
-        uses: ./.github/actions/setup-zig
-        with:
-          version: 0.15.2
+        run: ./scripts/fetch-wasm.sh
 
       - name: Install dependencies
         if: steps.release-commit.outputs.skip != 'true'

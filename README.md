@@ -69,18 +69,18 @@ For a comprehensive client <-> server example, refer to the [demo](./demo/index.
 
 ## Development
 
-ghostty-web builds from Ghostty's source with a [patch](./patches/ghostty-wasm-api.patch) to expose additional
-functionality.
+ghostty-web runs on the official prebuilt WebAssembly module that Ghostty publishes with each
+[libghostty-vt](https://lib.ghostty.org/) release, and talks to it only through the library's stable C ABI.
+`scripts/fetch-wasm.sh` downloads the pinned release and checks its SHA-256.
 
-> Requires Zig and Bun.
+> Requires Bun and curl.
 
 ```bash
 bun run build
 ```
 
-Mitchell Hashimoto (author of Ghostty) has [been working](https://mitchellh.com/writing/libghostty-is-coming) on `libghostty` which makes this all possible. The patches are very minimal thanks to the work the Ghostty team has done, and we expect them to get smaller.
-
-This library will eventually consume a native Ghostty WASM distribution once available, and will continue to provide an xterm.js compatible API.
+Mitchell Hashimoto (author of Ghostty) built `libghostty`, which makes this all possible. ghostty-web provides an
+xterm.js compatible API on top of it.
 
 At Coder we're big fans of Ghostty, so kudos to that team for all the amazing work.
 

@@ -20,7 +20,7 @@
           buildInputs = [
             pkgs.bun
             pkgs.nodejs_22
-            zig
+            pkgs.curl
           ];
         };
 
