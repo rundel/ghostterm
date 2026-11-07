@@ -59,6 +59,62 @@ describe('SerializeAddon', () => {
     expect(restored.wasmTerm!.hasBracketedPaste()).toBe(false);
   });
 
+  describe('with the alternate screen active', () => {
+    let normalText: string;
+    let scrollback: number;
+
+    beforeEach(() => {
+      normalText = text(term);
+      scrollback = term.wasmTerm!.getScrollbackLength();
+      term.write('\x1b[?1049h\x1b[2;3Hfull screen app');
+    });
+
+    test('restores both screens, and leaving the alternate one shows the normal one', async () => {
+      const altText = text(term);
+
+      const restored = await make();
+      restored.write(serializer.serialize());
+      expect(restored.wasmTerm!.isAlternateScreen()).toBe(true);
+      expect(text(restored)).toBe(altText);
+      expect(restored.wasmTerm!.getCursor()).toMatchObject({ x: 17, y: 1 });
+
+      restored.write('\x1b[?1049l');
+      expect(restored.wasmTerm!.isAlternateScreen()).toBe(false);
+      expect(text(restored)).toBe(normalText);
+      expect(restored.wasmTerm!.getScrollbackLength()).toBe(scrollback);
+      expect(restored.wasmTerm!.hasBracketedPaste()).toBe(true);
+    });
+
+    test('also without modes', async () => {
+      const restored = await make();
+      restored.write(serializer.serialize({ excludeModes: true }));
+      expect(text(restored)).toBe(text(term));
+      restored.write('\x1b[?1049l');
+      expect(text(restored)).toBe(normalText);
+    });
+
+    test('excludeAltBuffer keeps only the normal screen', async () => {
+      const restored = await make();
+      restored.write(serializer.serialize({ excludeAltBuffer: true }));
+      expect(restored.wasmTerm!.isAlternateScreen()).toBe(false);
+      expect(text(restored)).toBe(normalText);
+      expect(restored.wasmTerm!.hasBracketedPaste()).toBe(true);
+    });
+
+    test('leaves the terminal as it was', () => {
+      term.select(2, 1, 4);
+      const before = term.wasmTerm!.getSelectionRange();
+      serializer.serialize();
+      expect(term.wasmTerm!.isAlternateScreen()).toBe(true);
+      expect(term.wasmTerm!.getMode(47)).toBe(false);
+      expect(term.wasmTerm!.getMode(1049)).toBe(true);
+      expect(term.wasmTerm!.getSelectionRange()).toEqual(before);
+      expect(term.getSelection()).toBe('full');
+      term.write('\x1b[?1049l');
+      expect(text(term)).toContain('row 5');
+    });
+  });
+
   test('the palette is left alone unless asked for', () => {
     expect(serializer.serialize()).not.toContain('\x1b]4;');
     expect(serializer.serialize({ includePalette: true })).toContain('\x1b]4;1;');
