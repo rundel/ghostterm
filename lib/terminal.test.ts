@@ -121,9 +121,21 @@ describe('Terminal', () => {
   });
 
   describe('Lifecycle', () => {
-    test('terminal is not open before open() is called', async () => {
-      const term = await createIsolatedTerminal();
-      expect(() => term.write('test')).toThrow('Terminal must be opened');
+    test('writes before open() are kept and written by open(), as in xterm.js', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+      let called = false;
+      term.write('hello ', () => {
+        called = true;
+      });
+      term.writeln('world');
+      term.write('next');
+      expect(term.buffer.active.getLine(0)).toBeUndefined();
+      term.open(container!);
+      expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('hello world');
+      expect(term.buffer.active.getLine(1)!.translateToString(true)).toBe('next');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(called).toBe(true);
+      term.dispose();
     });
 
     test('can be disposed without being opened', async () => {
@@ -305,9 +317,58 @@ describe('Terminal', () => {
       term.dispose();
     });
 
-    test('resize() throws if not open', async () => {
+    test('resize() before open() sets the size open() uses', async () => {
       const term = await createIsolatedTerminal();
-      expect(() => term.resize(100, 30)).toThrow('must be opened');
+      term.resize(100, 30);
+      expect(term.options.cols).toBe(100);
+      term.open(container!);
+      expect(term.wasmTerm!.cols).toBe(100);
+      expect(term.wasmTerm!.rows).toBe(30);
+      term.dispose();
+    });
+
+    test('options.cols/rows set before open() apply when opening', async () => {
+      const term = await createIsolatedTerminal();
+      term.options.cols = 50;
+      term.options.rows = 12;
+      term.open(container!);
+      expect([term.cols, term.rows]).toEqual([50, 12]);
+      expect(term.wasmTerm!.cols).toBe(50);
+      term.dispose();
+    });
+
+    test('resize() keeps options.cols/rows in step', async () => {
+      const term = await createIsolatedTerminal({ cols: 80, rows: 24 });
+      term.open(container!);
+      term.resize(60, 20);
+      expect([term.options.cols, term.options.rows]).toEqual([60, 20]);
+      term.dispose();
+    });
+
+    test('resize() keeps a scrolled view within the remaining history', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+      term.open(container!);
+      for (let i = 0; i < 10; i++) term.write(`${i}\r\n`);
+      term.scrollToTop();
+      expect(term.viewportY).toBeGreaterThan(0);
+      // Taller: history rows move back onto the screen.
+      term.resize(20, 15);
+      expect(term.viewportY).toBeLessThanOrEqual(term.wasmTerm!.getScrollbackLength());
+      expect(term.wasmTerm!.getViewportOffset()).toBe(Math.floor(term.viewportY));
+      term.dispose();
+    });
+
+    test('resize() leaves the canvas size to the renderer (device pixel ratio, gutter)', async () => {
+      const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+      term.open(container!);
+      const renderer = (term as any).renderer;
+      renderer.setDevicePixelRatio(2);
+      term.resize(30, 6);
+      const canvas = renderer.getCanvas() as HTMLCanvasElement;
+      const cssWidth = Number.parseFloat(canvas.style.width);
+      expect(cssWidth).toBeGreaterThan(30 * renderer.charWidth);
+      expect(canvas.width).toBe(Math.round(cssWidth * 2));
+      term.dispose();
     });
   });
 
@@ -461,6 +522,148 @@ describe('Terminal', () => {
       const finalChildCount = container.children.length;
       expect(finalChildCount).toBe(0);
     });
+
+    test('dispose() removes the listeners open() added and restores the parent', async () => {
+      const term = await createIsolatedTerminal();
+      term.open(container!);
+      expect(container.getAttribute('tabindex')).toBe('0');
+      const beforeInput = () => {
+        const e = new Event('beforeinput', { cancelable: true });
+        container.dispatchEvent(e);
+        return e.defaultPrevented;
+      };
+      expect(beforeInput()).toBe(true);
+      term.dispose();
+
+      expect(beforeInput()).toBe(false);
+      // The document-level mouseup (scrollbar drag) is gone too.
+      (term as any).isDraggingScrollbar = true;
+      document.dispatchEvent(new MouseEvent('mouseup'));
+      expect((term as any).isDraggingScrollbar).toBe(true);
+      const wheel = new WheelEvent('wheel', { deltaY: 100, cancelable: true });
+      container.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(false);
+
+      expect(container.hasAttribute('tabindex')).toBe(false);
+      expect(container.hasAttribute('contenteditable')).toBe(false);
+    });
+
+    test('dispose() keeps a tabindex the page set', async () => {
+      container.setAttribute('tabindex', '-1');
+      const term = await createIsolatedTerminal();
+      term.open(container!);
+      term.dispose();
+      expect(container.getAttribute('tabindex')).toBe('-1');
+      container.removeAttribute('tabindex');
+    });
+  });
+});
+
+describe('Display changes', () => {
+  test('a devicePixelRatio change resizes the canvas backing store', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const queries: EventTarget[] = [];
+    const matchMedia = window.matchMedia;
+    const dpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    (window as any).matchMedia = () => {
+      const q = new EventTarget();
+      queries.push(q);
+      return q;
+    };
+    const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    try {
+      term.open(container);
+      const canvas = (term as any).renderer.getCanvas() as HTMLCanvasElement;
+      const cssWidth = Number.parseFloat(canvas.style.width);
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+      queries.at(-1)!.dispatchEvent(new Event('change'));
+      expect(canvas.width).toBe(cssWidth * 2);
+      expect(queries.length).toBe(2);
+    } finally {
+      term.dispose();
+      container.remove();
+      (window as any).matchMedia = matchMedia;
+      if (dpr) Object.defineProperty(window, 'devicePixelRatio', dpr);
+      else Reflect.deleteProperty(window, 'devicePixelRatio');
+    }
+  });
+
+  test('a web font finishing loading remeasures the cells', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const fonts = new EventTarget();
+    const had = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    const term = await createIsolatedTerminal({ cols: 20, rows: 5 });
+    try {
+      term.open(container);
+      const renderer = (term as any).renderer;
+      let remeasured = 0;
+      renderer.remeasureFont = () => {
+        remeasured++;
+        renderer.metrics = { ...renderer.metrics, width: renderer.metrics.width + 1 };
+        return true;
+      };
+      fonts.dispatchEvent(new Event('loadingdone'));
+      expect(remeasured).toBe(1);
+      const canvas = renderer.getCanvas() as HTMLCanvasElement;
+      expect(Number.parseFloat(canvas.style.width)).toBe(20 * renderer.charWidth + 15);
+    } finally {
+      term.dispose();
+      container.remove();
+      if (had) Object.defineProperty(document, 'fonts', had);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+});
+
+describe('Re-entrant writes', () => {
+  let container: HTMLElement;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => container.remove());
+
+  test('a write from an event listener during a write is not lost', async () => {
+    const term = await createIsolatedTerminal({ cols: 30, rows: 5 });
+    term.open(container);
+    term.onTitleChange((title) => term.write(`[${title}]`));
+    term.write('a\x1b]2;T\x07b');
+    expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('ab[T]');
+    term.dispose();
+  });
+
+  test('a write from onData (a reply) during a write follows it', async () => {
+    const term = await createIsolatedTerminal({ cols: 30, rows: 5 });
+    term.open(container);
+    term.onData(() => term.write('!'));
+    term.write('x\x1b[6ny');
+    expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('xy!');
+    term.dispose();
+  });
+});
+
+describe('allowClipboardWrite', () => {
+  test('false is honored', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const term = await createIsolatedTerminal({ allowClipboardWrite: false });
+    term.open(container);
+    const writes: string[] = [];
+    const clipboard = navigator.clipboard;
+    const original = clipboard?.writeText;
+    if (clipboard) clipboard.writeText = async (t: string) => void writes.push(t);
+    try {
+      term.write(`\x1b]52;c;${btoa('secret')}\x07`);
+      expect(writes).toEqual([]);
+      expect(term.options.allowClipboardWrite).toBe(false);
+    } finally {
+      if (clipboard && original) clipboard.writeText = original;
+      term.dispose();
+      container.remove();
+    }
   });
 });
 

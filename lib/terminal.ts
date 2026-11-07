@@ -72,6 +72,8 @@ export class Terminal implements ITerminalCore {
 
   // Options (public for xterm.js compatibility)
   public readonly options!: Required<ITerminalOptions>;
+  /** The object behind the options proxy, for updates that must not trigger it. */
+  private rawOptions: { cols: number; rows: number };
 
   // Components (created on open())
   private ghostty?: Ghostty;
@@ -133,8 +135,16 @@ export class Terminal implements ITerminalCore {
   private isOpen = false;
   private isDisposed = false;
   private animationFrameId?: number;
-  private writeQueue: Uint8Array[] = [];
+  /** Writes waiting for open() or for the write in progress to finish. */
+  private pendingWrites: Array<{ data: string | Uint8Array; callback?: () => void }> = [];
+  /** Set while writes are being processed (listeners may write re-entrantly). */
+  private writing = false;
   private awaitingEcho = false;
+  /** Remove the listeners open() added (see listen()); run by dispose(). */
+  private listenerRemovers: Array<() => void> = [];
+  private stopWatchingDevicePixelRatio?: () => void;
+  /** What open() changed on the parent element, restored by dispose(). */
+  private parentState?: { tabindex: string | null; cursor: string };
 
   // Addons
   private addons: ITerminalAddon[] = [];
@@ -188,7 +198,9 @@ export class Terminal implements ITerminalCore {
       convertEol: options.convertEol ?? false,
       disableStdin: options.disableStdin ?? false,
       smoothScrollDuration: options.smoothScrollDuration ?? 100, // Default: 100ms smooth scroll
+      allowClipboardWrite: options.allowClipboardWrite ?? true,
     };
+    this.rawOptions = baseOptions;
 
     // Wrap in Proxy to intercept runtime changes (xterm.js compatibility)
     (this.options as any) = new Proxy(baseOptions, {
@@ -356,9 +368,16 @@ export class Terminal implements ITerminalCore {
     // Store parent element
     this.element = parent;
     this.isOpen = true;
+    // Size set through options before open() (options.cols = ...) applies now.
+    this.cols = this.options.cols;
+    this.rows = this.options.rows;
 
     try {
-      // Make parent focusable if it isn't already
+      // Make parent focusable if it isn't already (undone by dispose())
+      this.parentState = {
+        tabindex: parent.getAttribute('tabindex'),
+        cursor: parent.style.cursor,
+      };
       if (!parent.hasAttribute('tabindex')) {
         parent.setAttribute('tabindex', '0');
       }
@@ -367,7 +386,7 @@ export class Terminal implements ITerminalCore {
       // this as an input element and don't intercept keyboard events.
       parent.setAttribute('contenteditable', 'true');
       // Prevent actual content editing - we handle input ourselves
-      parent.addEventListener('beforeinput', (e) => {
+      this.listen(parent, 'beforeinput', (e) => {
         if (e.target === parent) {
           e.preventDefault();
         }
@@ -416,12 +435,12 @@ export class Terminal implements ITerminalCore {
       // Focus textarea on interaction - preventDefault before focus
       const textarea = this.textarea;
       // Desktop: mousedown
-      this.canvas.addEventListener('mousedown', (ev) => {
+      this.listen(this.canvas, 'mousedown', (ev) => {
         ev.preventDefault();
         textarea.focus();
       });
       // Mobile: touchend with preventDefault to suppress iOS caret
-      this.canvas.addEventListener('touchend', (ev) => {
+      this.listen(this.canvas, 'touchend', (ev) => {
         ev.preventDefault();
         textarea.focus();
       });
@@ -441,9 +460,7 @@ export class Terminal implements ITerminalCore {
       // Create mouse tracking configuration
       const canvas = this.canvas;
       const renderer = this.renderer;
-      const wasmTerm = this.wasmTerm;
       const mouseConfig: MouseTrackingConfig = {
-        // this.wasmTerm, not a captured reference: reset() replaces it.
         hasMouseTracking: () => this.wasmTerm?.hasMouseTracking() ?? false,
         getScreenSize: () => ({
           width: this.cols * renderer.charWidth,
@@ -515,17 +532,25 @@ export class Terminal implements ITerminalCore {
 
       // Setup mouse event handling for links and scrollbar
       // Use capture phase to intercept scrollbar clicks before SelectionManager
-      parent.addEventListener('mousedown', this.handleMouseDown, { capture: true });
-      parent.addEventListener('mousemove', this.handleMouseMove);
-      parent.addEventListener('mouseleave', this.handleMouseLeave);
-      parent.addEventListener('click', this.handleClick);
+      this.listen(parent, 'mousedown', this.handleMouseDown, { capture: true });
+      this.listen(parent, 'mousemove', this.handleMouseMove);
+      this.listen(parent, 'mouseleave', this.handleMouseLeave);
+      this.listen(parent, 'click', this.handleClick);
 
       // Setup document-level mouseup for scrollbar drag (so drag works even outside canvas)
-      document.addEventListener('mouseup', this.handleMouseUp);
+      this.listen(document, 'mouseup', this.handleMouseUp);
 
-      // Setup wheel event handling for scrolling (Phase 2)
       // Use capture phase to ensure we get the event before browser scrolling
-      parent.addEventListener('wheel', this.handleWheel, { passive: false, capture: true });
+      this.listen(parent, 'wheel', this.handleWheel, { passive: false, capture: true });
+
+      // Measure again when a web font arrives or the window moves to a
+      // screen with another pixel density (or the page is zoomed).
+      if (document.fonts) {
+        this.listen(document.fonts, 'loadingdone', () => {
+          if (this.renderer?.remeasureFont()) this.handleFontChange();
+        });
+      }
+      this.watchDevicePixelRatio();
 
       // Render initial blank screen (force full redraw)
       this.renderer.render(this.wasmTerm, true, this.viewportY, this.scrollbarOpacity);
@@ -537,24 +562,75 @@ export class Terminal implements ITerminalCore {
       this.focus();
     } catch (error) {
       // Clean up on error
-      this.isOpen = false;
       this.cleanupComponents();
+      this.isOpen = false;
       throw new Error(`Failed to open terminal: ${error}`);
     }
+
+    // Writes made before open() (xterm.js buffers them too)
+    this.flushPendingWrites();
+  }
+
+  /** Add a listener that dispose() removes. */
+  private listen(
+    target: EventTarget,
+    type: string,
+    listener: (e: any) => void,
+    options?: AddEventListenerOptions
+  ): void {
+    target.addEventListener(type, listener, options);
+    this.listenerRemovers.push(() => target.removeEventListener(type, listener, options));
   }
 
   /**
-   * Write data to terminal
+   * Follow devicePixelRatio changes. A resolution media query matches one
+   * ratio, so each change replaces it with a query for the new one.
+   */
+  private watchDevicePixelRatio(): void {
+    this.stopWatchingDevicePixelRatio?.();
+    this.stopWatchingDevicePixelRatio = undefined;
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    if (typeof query?.addEventListener !== 'function') return;
+    const onChange = () => {
+      this.renderer?.setDevicePixelRatio(window.devicePixelRatio);
+      this.watchDevicePixelRatio();
+    };
+    query.addEventListener('change', onChange);
+    this.stopWatchingDevicePixelRatio = () => query.removeEventListener('change', onChange);
+  }
+
+  /**
+   * Write data to terminal. Before open(), and while a write is being
+   * processed (e.g. from an event listener), data is queued and written
+   * afterwards, in order.
    */
   write(data: string | Uint8Array, callback?: () => void): void {
-    this.assertOpen();
+    if (this.isDisposed) {
+      throw new Error('Terminal has been disposed');
+    }
 
     // Handle convertEol option
     if (this.options.convertEol && typeof data === 'string') {
       data = data.replace(/\n/g, '\r\n');
     }
 
-    this.writeInternal(data, callback);
+    this.pendingWrites.push({ data, callback });
+    if (this.isOpen && !this.writing) this.flushPendingWrites();
+  }
+
+  /** Write queued data. Listeners that write while this runs append to the queue. */
+  private flushPendingWrites(): void {
+    if (this.writing) return;
+    this.writing = true;
+    try {
+      while (this.pendingWrites.length > 0 && this.isOpen) {
+        const { data, callback } = this.pendingWrites.shift()!;
+        this.writeInternal(data, callback);
+      }
+    } finally {
+      this.writing = false;
+    }
   }
 
   /**
@@ -673,10 +749,22 @@ export class Terminal implements ITerminalCore {
    * Resize terminal
    */
   resize(cols: number, rows: number): void {
-    this.assertOpen();
+    if (this.isDisposed) {
+      throw new Error('Terminal has been disposed');
+    }
 
     if (cols === this.cols && rows === this.rows) {
       return; // No change
+    }
+    // Keep options.cols/rows in step, without going through the proxy (which
+    // would resize again).
+    this.rawOptions.cols = cols;
+    this.rawOptions.rows = rows;
+    if (!this.isOpen) {
+      // Before open(): the size open() creates the terminal with
+      this.cols = cols;
+      this.rows = rows;
+      return;
     }
 
     // Cancel render loop before resize to prevent accessing detached TypedArray
@@ -696,6 +784,12 @@ export class Terminal implements ITerminalCore {
       // Resize renderer (sizes the canvas for the device pixel ratio and gutter)
       this.renderer!.resize(cols, rows);
 
+      // Reflow can shorten the history; stay within it.
+      const scrollback = this.getScrollbackLength();
+      if (this.viewportY > scrollback || this.targetViewportY > scrollback) {
+        this.scrollToViewportOffset(Math.min(this.viewportY, scrollback));
+      }
+
       // Fire resize event
       this.resizeEmitter.fire({ cols, rows });
 
@@ -705,8 +799,6 @@ export class Terminal implements ITerminalCore {
       console.error('Terminal resize failed:', e);
     }
 
-    // Flush any writes that were queued during resize, then restart render loop
-    this.flushWriteQueue();
     this.startRenderLoop();
   }
 
@@ -1069,11 +1161,10 @@ export class Terminal implements ITerminalCore {
     }
 
     this.isDisposed = true;
-    this.isOpen = false;
 
     // Stop render loop and clear write queue
     this.cancelRenderLoop();
-    this.writeQueue.length = 0;
+    this.pendingWrites.length = 0;
 
     this.cancelScrollAnimation();
 
@@ -1092,6 +1183,7 @@ export class Terminal implements ITerminalCore {
 
     // Clean up components
     this.cleanupComponents();
+    this.isOpen = false;
 
     // Dispose event emitters
     this.dataEmitter.dispose();
@@ -1122,16 +1214,6 @@ export class Terminal implements ITerminalCore {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
-    }
-  }
-
-  /**
-   * Flush any writes that were queued during resize
-   */
-  private flushWriteQueue(): void {
-    while (this.writeQueue.length > 0) {
-      const data = this.writeQueue.shift()!;
-      this.wasmTerm!.write(data);
     }
   }
 
@@ -1207,25 +1289,25 @@ export class Terminal implements ITerminalCore {
       this.textarea = undefined;
     }
 
-    // Remove event listeners
-    if (this.element) {
-      this.element.removeEventListener('wheel', this.handleWheel, { capture: true });
-      this.element.removeEventListener('mousedown', this.handleMouseDown, { capture: true });
-      this.element.removeEventListener('mousemove', this.handleMouseMove);
-      this.element.removeEventListener('mouseleave', this.handleMouseLeave);
-      this.element.removeEventListener('click', this.handleClick);
+    // Remove every listener open() added (parent, canvas, document, media query)
+    for (const remove of this.listenerRemovers) remove();
+    this.listenerRemovers = [];
+    this.stopWatchingDevicePixelRatio?.();
+    this.stopWatchingDevicePixelRatio = undefined;
 
-      // Remove contenteditable and accessibility attributes added in open()
+    // Undo what open() changed on the parent element
+    if (this.element) {
       this.element.removeAttribute('contenteditable');
       this.element.removeAttribute('role');
       this.element.removeAttribute('aria-label');
       this.element.removeAttribute('aria-multiline');
+      if (this.parentState) {
+        if (this.parentState.tabindex === null) this.element.removeAttribute('tabindex');
+        else this.element.setAttribute('tabindex', this.parentState.tabindex);
+        this.element.style.cursor = this.parentState.cursor;
+      }
     }
-
-    // Remove document-level listeners (only if opened)
-    if (this.isOpen && typeof document !== 'undefined') {
-      document.removeEventListener('mouseup', this.handleMouseUp);
-    }
+    this.parentState = undefined;
 
     // Clean up scrollbar timers
     if (this.scrollbarHideTimeout) {
