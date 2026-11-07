@@ -83,6 +83,49 @@ describe('Mouse reporting', () => {
     expect(sent.slice(1)).toEqual(['\x1b[<35;9;3M']);
   });
 
+  test('a drag that leaves the terminal is followed, clamped to the edge, and released', () => {
+    term.write('\x1b[?1002h\x1b[?1006h');
+    mouse('mousedown', 5, 5);
+    // Outside the terminal, the events reach only the document.
+    const renderer = (term as any).renderer;
+    const rect = renderer.getCanvas().getBoundingClientRect();
+    const outside = (type: string) =>
+      document.body.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          clientX: rect.left + 100 * renderer.charWidth,
+          clientY: rect.top - 3 * renderer.charHeight,
+        })
+      );
+    outside('mousemove');
+    outside('mouseup');
+    expect(sent).toEqual(['\x1b[<0;6;6M', '\x1b[<32;40;1M', '\x1b[<0;40;1m']);
+
+    // The button is no longer held: motion is not a drag.
+    sent = [];
+    mouse('mousemove', 6, 5);
+    outside('mousemove');
+    expect(sent).toEqual([]);
+  });
+
+  test('a drag inside the terminal is reported once per event', () => {
+    term.write('\x1b[?1002h\x1b[?1006h');
+    mouse('mousedown', 1, 1);
+    mouse('mousemove', 2, 1);
+    mouse('mouseup', 2, 1);
+    expect(sent).toEqual(['\x1b[<0;2;2M', '\x1b[<32;3;2M', '\x1b[<0;3;2m']);
+  });
+
+  test('dispose during a drag stops following the pointer', async () => {
+    term.write('\x1b[?1002h\x1b[?1006h');
+    mouse('mousedown', 1, 1);
+    term.dispose();
+    document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    document.body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    expect(sent).toEqual(['\x1b[<0;2;2M']);
+    term = await createIsolatedTerminal();
+  });
+
   test('the wheel is reported instead of scrolling', () => {
     for (let i = 0; i < 30; i++) term.write(`line ${i}\r\n`);
     term.write('\x1b[?1000h\x1b[?1006h');

@@ -1,16 +1,13 @@
 /**
- * InputHandler - Converts browser keyboard events to terminal input
+ * InputHandler - Converts browser input events to terminal input
  *
- * Handles:
- * - Keyboard event listening on a container element
- * - Mapping KeyboardEvent.code to USB HID Key codes
- * - Extracting modifier keys (Ctrl, Alt, Shift, Meta)
- * - Encoding keys using Ghostty's KeyEncoder
- * - Emitting data for Terminal to send to PTY
- *
- * Limitations:
- * - Does not handle IME/composition events (CJK input) - to be added later
- * - Captures all keyboard input (preventDefault on everything)
+ * Handles, on the terminal's container element:
+ * - Keyboard events, encoded by libghostty's key encoder following the
+ *   program's keyboard modes (Kitty protocol, modifyOtherKeys, cursor keys)
+ * - IME and dead-key composition, and text from mobile keyboards (beforeinput)
+ * - Paste, encoded by libghostty (bracketed paste, unsafe-byte stripping)
+ * - Focus reporting (mode 1004)
+ * - Mouse reporting through libghostty's mouse encoder
  */
 
 import {
@@ -25,10 +22,6 @@ import {
 import type { IKeyEvent } from './interfaces';
 import { Key, KeyAction, KeyEncoderOption, Mods } from './types';
 
-/**
- * Map KeyboardEvent.code values to USB HID Key enum values
- * Based on: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
- */
 /** Keys that extend a selection when Shift is held (Ghostty's defaults). */
 const SELECTION_KEYS: Record<string, SelectionAdjust> = {
   ArrowLeft: 'left',
@@ -44,6 +37,10 @@ const SELECTION_KEYS: Record<string, SelectionAdjust> = {
 /** GhosttyOptionAsAlt: Option acts as Alt on both sides. */
 const OPTION_AS_ALT_TRUE = 1;
 
+/**
+ * Map KeyboardEvent.code values to USB HID Key enum values
+ * Based on: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
+ */
 const KEY_MAP: Record<string, Key> = {
   // Letters
   KeyA: Key.A,
@@ -176,21 +173,11 @@ const KEY_MAP: Record<string, Key> = {
 };
 
 /**
- * InputHandler class
- * Attaches keyboard event listeners to a container and converts
- * keyboard events to terminal input data
- */
-/**
  * Mouse tracking configuration
  */
 export interface MouseTrackingConfig {
   /** Check if any mouse tracking mode is enabled */
   hasMouseTracking: () => boolean;
-  /**
-   * @deprecated The report format now comes from the terminal's modes through
-   * libghostty's mouse encoder; this is no longer called.
-   */
-  hasSgrMouseMode?: () => boolean;
   /** Size of the cell grid in CSS pixels (defaults to the canvas size) */
   getScreenSize?: () => { width: number; height: number };
   /** Get cell dimensions for pixel to cell conversion */
@@ -199,41 +186,58 @@ export interface MouseTrackingConfig {
   getCanvasOffset: () => { left: number; top: number };
 }
 
+export interface InputHandlerOptions {
+  /** The loaded module, for creating the key and mouse encoders. */
+  ghostty: Ghostty;
+  /** Element whose keyboard, focus, composition, paste and mouse events are handled. */
+  container: HTMLElement;
+  /**
+   * The element that holds keyboard focus and receives text input (the hidden
+   * textarea). Focus given to the container is passed on to it, so IME
+   * composition always happens there.
+   */
+  inputElement?: HTMLElement;
+  /**
+   * The WASM terminal, looked up on every use (Terminal.reset() replaces it).
+   * The key encoder follows its keyboard modes; paste, focus and mouse reports
+   * are encoded for it.
+   */
+  getTerminal: () => GhosttyTerminal | undefined;
+  /** Bytes for the pty. */
+  onData: (data: string) => void;
+  /** Called with the bytes a key press produced, just before they are sent. */
+  onKey?: (keyEvent: IKeyEvent) => void;
+  /** Runs first for every keydown and keyup; returning false stops processing. */
+  customKeyEventHandler?: (event: KeyboardEvent) => boolean;
+  /** Copy shortcut (Cmd+C, Ctrl+Shift+C): returns true if there was a selection to copy. */
+  onCopy?: () => boolean;
+  mouseConfig?: MouseTrackingConfig;
+}
+
 export class InputHandler {
   private encoder: KeyEncoder;
   private ghostty: Ghostty;
   private container: HTMLElement;
   private inputElement?: HTMLElement;
   private onDataCallback: (data: string) => void;
-  private onBellCallback: () => void;
   private onKeyCallback?: (keyEvent: IKeyEvent) => void;
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
-  private getModeCallback?: (mode: number) => boolean;
-  private getTerminal?: () => GhosttyTerminal | undefined;
+  private getTerminal: () => GhosttyTerminal | undefined;
   /** Called after Shift+arrow keys moved the selection. */
   onSelectionAdjusted?: () => void;
-  private keyupListener: ((e: KeyboardEvent) => void) | null = null;
-  private focusInListener: ((e: FocusEvent) => void) | null = null;
-  private focusOutListener: ((e: FocusEvent) => void) | null = null;
   private onCopyCallback?: () => boolean;
   private mouseConfig?: MouseTrackingConfig;
-  private keydownListener: ((e: KeyboardEvent) => void) | null = null;
-  private keypressListener: ((e: KeyboardEvent) => void) | null = null;
-  private pasteListener: ((e: ClipboardEvent) => void) | null = null;
-  private beforeInputListener: ((e: InputEvent) => void) | null = null;
-  private compositionStartListener: ((e: CompositionEvent) => void) | null = null;
-  private compositionUpdateListener: ((e: CompositionEvent) => void) | null = null;
-  private compositionEndListener: ((e: CompositionEvent) => void) | null = null;
-  private mousedownListener: ((e: MouseEvent) => void) | null = null;
-  private mouseupListener: ((e: MouseEvent) => void) | null = null;
-  private mousemoveListener: ((e: MouseEvent) => void) | null = null;
-  private wheelListener: ((e: WheelEvent) => void) | null = null;
+  private listeners: Array<[EventTarget, string, EventListener, AddEventListenerOptions?]> = [];
   private isComposing = false;
   private isDisposed = false;
+  /** Codes of keys whose press went to the key encoder: only these get a release. */
+  private encodedKeys = new Set<string>();
+  /** The custom key handler stopped the current key: drop the text it inserts. */
+  private keySwallowed = false;
   private mouseButtonsPressed = 0; // Buttons held, as a bitmask of 1 << MouseButton
+  /** Whether document-level listeners follow a mouse drag (a button is held). */
+  private trackingDrag = false;
   private mouseEncoder: MouseEncoder | null = null;
-  private lastKeyDownData: string | null = null;
-  private lastKeyDownTime = 0;
   private lastPasteData: string | null = null;
   private lastPasteTime = 0;
   private lastPasteSource: 'paste' | 'beforeinput' | null = null;
@@ -243,58 +247,45 @@ export class InputHandler {
   private lastBeforeInputTime = 0;
   private static readonly BEFORE_INPUT_IGNORE_MS = 100;
 
-  /**
-   * Create a new InputHandler
-   * @param ghostty - Ghostty instance (for creating KeyEncoder)
-   * @param container - DOM element to attach listeners to
-   * @param onData - Callback for terminal data (escape sequences to send to PTY)
-   * @param onBell - Callback for bell/beep event
-   * @param onKey - Optional callback for raw key events
-   * @param customKeyEventHandler - Optional custom key event handler
-   * @param getMode - Optional callback to query terminal mode state (for application cursor mode)
-   * @param onCopy - Optional callback to handle copy (Cmd+C/Ctrl+C with selection)
-   * @param inputElement - Optional input element for beforeinput events
-   * @param mouseConfig - Optional mouse tracking configuration
-   * @param getTerminal - Optional accessor for the WASM terminal. When given,
-   *   the key encoder follows all of the terminal's keyboard modes (Kitty
-   *   keyboard protocol, modifyOtherKeys, keypad mode, ...); otherwise only
-   *   cursor key mode is followed, through getMode.
-   */
-  constructor(
-    ghostty: Ghostty,
-    container: HTMLElement,
-    onData: (data: string) => void,
-    onBell: () => void,
-    onKey?: (keyEvent: IKeyEvent) => void,
-    customKeyEventHandler?: (event: KeyboardEvent) => boolean,
-    getMode?: (mode: number) => boolean,
-    onCopy?: () => boolean,
-    inputElement?: HTMLElement,
-    mouseConfig?: MouseTrackingConfig,
-    getTerminal?: () => GhosttyTerminal | undefined
-  ) {
-    this.ghostty = ghostty;
-    this.encoder = ghostty.createKeyEncoder();
-    this.container = container;
-    this.inputElement = inputElement;
-    this.onDataCallback = onData;
-    this.onBellCallback = onBell;
-    this.onKeyCallback = onKey;
-    this.customKeyEventHandler = customKeyEventHandler;
-    this.getModeCallback = getMode;
-    this.onCopyCallback = onCopy;
-    this.mouseConfig = mouseConfig;
-    this.getTerminal = getTerminal;
+  constructor(options: InputHandlerOptions) {
+    this.ghostty = options.ghostty;
+    this.encoder = options.ghostty.createKeyEncoder();
+    this.container = options.container;
+    this.inputElement = options.inputElement;
+    this.onDataCallback = options.onData;
+    this.onKeyCallback = options.onKey;
+    this.customKeyEventHandler = options.customKeyEventHandler;
+    this.onCopyCallback = options.onCopy;
+    this.mouseConfig = options.mouseConfig;
+    this.getTerminal = options.getTerminal;
 
-    // Attach event listeners
     this.attach();
   }
 
   /**
    * Set custom key event handler (for runtime updates)
    */
-  setCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+  setCustomKeyEventHandler(handler: ((event: KeyboardEvent) => boolean) | undefined): void {
     this.customKeyEventHandler = handler;
+  }
+
+  private listen<E extends Event>(
+    target: EventTarget,
+    type: string,
+    handler: (e: E) => void,
+    options?: AddEventListenerOptions
+  ): void {
+    const listener = handler.bind(this) as EventListener;
+    target.addEventListener(type, listener, options);
+    this.listeners.push([target, type, listener, options]);
+  }
+
+  private unlisten(target: EventTarget, type: string): void {
+    this.listeners = this.listeners.filter(([t, ty, listener, options]) => {
+      if (t !== target || ty !== type) return true;
+      t.removeEventListener(ty, listener, options);
+      return false;
+    });
   }
 
   /**
@@ -309,58 +300,31 @@ export class InputHandler {
       if (!this.container.hasAttribute('tabindex')) {
         this.container.setAttribute('tabindex', '0');
       }
-
-      // Add visual focus indication (only if style exists - for browser environments)
       if (this.container.style) {
-        this.container.style.outline = 'none'; // Remove default outline
+        this.container.style.outline = 'none';
       }
     }
 
-    this.keydownListener = this.handleKeyDown.bind(this);
-    this.container.addEventListener('keydown', this.keydownListener);
-
+    const c = this.container;
+    this.listen(c, 'keydown', this.handleKeyDown);
     // Key releases are only sent when a program asks for them (Kitty keyboard
     // protocol); the encoder produces nothing for them otherwise.
-    this.keyupListener = this.handleKeyUp.bind(this);
-    this.container.addEventListener('keyup', this.keyupListener);
-
-    this.focusInListener = (e: FocusEvent) => this.handleFocusChange(e, true);
-    this.focusOutListener = (e: FocusEvent) => this.handleFocusChange(e, false);
-    this.container.addEventListener('focusin', this.focusInListener);
-    this.container.addEventListener('focusout', this.focusOutListener);
-
-    this.pasteListener = this.handlePaste.bind(this);
-    this.container.addEventListener('paste', this.pasteListener);
-    if (this.inputElement && this.inputElement !== this.container) {
-      this.inputElement.addEventListener('paste', this.pasteListener);
+    this.listen(c, 'keyup', this.handleKeyUp);
+    this.listen<FocusEvent>(c, 'focusin', (e) => this.handleFocusChange(e, true));
+    this.listen<FocusEvent>(c, 'focusout', (e) => this.handleFocusChange(e, false));
+    this.listen(c, 'paste', this.handlePaste);
+    if (this.inputElement && this.inputElement !== c) {
+      this.listen(this.inputElement, 'paste', this.handlePaste);
     }
-
     if (this.inputElement) {
-      this.beforeInputListener = this.handleBeforeInput.bind(this);
-      this.inputElement.addEventListener('beforeinput', this.beforeInputListener);
+      this.listen(this.inputElement, 'beforeinput', this.handleBeforeInput);
     }
-
-    this.compositionStartListener = this.handleCompositionStart.bind(this);
-    this.container.addEventListener('compositionstart', this.compositionStartListener);
-
-    this.compositionUpdateListener = this.handleCompositionUpdate.bind(this);
-    this.container.addEventListener('compositionupdate', this.compositionUpdateListener);
-
-    this.compositionEndListener = this.handleCompositionEnd.bind(this);
-    this.container.addEventListener('compositionend', this.compositionEndListener);
-
-    // Mouse event listeners (for terminal mouse tracking)
-    this.mousedownListener = this.handleMouseDown.bind(this);
-    this.container.addEventListener('mousedown', this.mousedownListener);
-
-    this.mouseupListener = this.handleMouseUp.bind(this);
-    this.container.addEventListener('mouseup', this.mouseupListener);
-
-    this.mousemoveListener = this.handleMouseMove.bind(this);
-    this.container.addEventListener('mousemove', this.mousemoveListener);
-
-    this.wheelListener = this.handleWheel.bind(this);
-    this.container.addEventListener('wheel', this.wheelListener, { passive: false });
+    this.listen(c, 'compositionstart', this.handleCompositionStart);
+    this.listen(c, 'compositionend', this.handleCompositionEnd);
+    this.listen(c, 'mousedown', this.handleMouseDown);
+    this.listen(c, 'mouseup', this.handleMouseUp);
+    this.listen(c, 'mousemove', this.handleMouseMove);
+    this.listen(c, 'wheel', this.handleWheel, { passive: false });
   }
 
   /**
@@ -373,22 +337,15 @@ export class InputHandler {
   }
 
   /**
-   * Extract modifier flags from KeyboardEvent
-   * @param event - KeyboardEvent
-   * @returns Mods flags
+   * Extract modifier flags from KeyboardEvent. CapsLock and NumLock are not
+   * reported.
    */
   private extractModifiers(event: KeyboardEvent): Mods {
     let mods = Mods.NONE;
-
     if (event.shiftKey) mods |= Mods.SHIFT;
     if (event.ctrlKey) mods |= Mods.CTRL;
     if (event.altKey) mods |= Mods.ALT;
     if (event.metaKey) mods |= Mods.SUPER;
-
-    // Note: CapsLock and NumLock are not in KeyboardEvent modifiers
-    // They would need to be tracked separately if needed
-    // For now, we don't set CAPSLOCK or NUMLOCK flags
-
     return mods;
   }
 
@@ -425,18 +382,15 @@ export class InputHandler {
    * acting as Alt/Meta, as it always has in ghostterm.
    */
   private syncEncoder(): void {
-    const terminal = this.getTerminal?.();
-    if (terminal) {
-      this.encoder.syncFromTerminal(terminal);
-    } else if (this.getModeCallback) {
-      this.encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, this.getModeCallback(1));
-    }
+    const terminal = this.getTerminal();
+    if (terminal) this.encoder.syncFromTerminal(terminal);
     this.encoder.setOption(KeyEncoderOption.MACOS_OPTION_AS_ALT, OPTION_AS_ALT_TRUE);
   }
 
   /**
    * Encode a key event with libghostty's key encoder.
-   * @returns the bytes for the pty, or '' when the event produces nothing
+   * @returns the bytes for the pty, '' when the event produces nothing, or
+   *   null for a key with no mapping
    */
   private encodeKey(event: KeyboardEvent, action: KeyAction): string | null {
     const key = this.mapKeyCode(event.code);
@@ -474,6 +428,12 @@ export class InputHandler {
     return new TextDecoder().decode(encoded);
   }
 
+  /** Encode a press of a key that carries no text, following the terminal's modes. */
+  private encodeNamedKey(key: Key, mods: Mods = Mods.NONE): string {
+    this.syncEncoder();
+    return new TextDecoder().decode(this.encoder.encode({ action: KeyAction.PRESS, key, mods }));
+  }
+
   /**
    * Handle keydown event
    * @param event - KeyboardEvent
@@ -481,50 +441,42 @@ export class InputHandler {
   private handleKeyDown(event: KeyboardEvent): void {
     if (this.isDisposed) return;
 
+    // As in xterm.js, the custom handler sees every key first; returning false
+    // stops the terminal processing it.
+    this.keySwallowed = false;
+    if (this.customKeyEventHandler && this.customKeyEventHandler(event) === false) {
+      this.keySwallowed = true;
+      return;
+    }
+
     // Ignore keydown events during composition
     // Note: Some browsers send keyCode 229 for all keys during composition
     if (this.isComposing || event.isComposing || event.keyCode === 229) {
       return;
     }
 
-    // Emit onKey event first (before any processing)
-    if (this.onKeyCallback) {
-      this.onKeyCallback({ key: event.key, domEvent: event });
+    // Paste shortcuts are the browser's: its paste event delivers the text.
+    // Plain Ctrl+V is a key like any other (^V, quoted insert).
+    if (event.code === 'KeyV' && (event.metaKey || (event.ctrlKey && event.shiftKey))) {
+      return;
     }
 
-    // Check custom key event handler
-    if (this.customKeyEventHandler) {
-      const handled = this.customKeyEventHandler(event);
-      if (handled) {
-        // Custom handler consumed the event
+    // Copy shortcuts copy the selection. Without one, Cmd+C stays the
+    // browser's (other text on the page may be selected) and Ctrl+Shift+C goes
+    // to the program.
+    if (event.code === 'KeyC' && (event.metaKey || (event.ctrlKey && event.shiftKey))) {
+      if (this.onCopyCallback?.()) {
         event.preventDefault();
         return;
       }
-    }
-
-    // Allow Ctrl+V and Cmd+V to trigger paste event (don't preventDefault)
-    if ((event.ctrlKey || event.metaKey) && event.code === 'KeyV') {
-      // Let the browser's native paste event fire
-      return;
-    }
-
-    // Handle Cmd+C for copy (on Mac, Cmd+C should copy, not send interrupt)
-    // Note: Ctrl+C on all platforms sends interrupt signal (0x03)
-    if (event.metaKey && event.code === 'KeyC') {
-      // Try to copy selection via callback
-      // If there's a selection and copy succeeds, prevent default
-      // If no selection, let it fall through (browser may have other text selected)
-      if (this.onCopyCallback && this.onCopyCallback()) {
-        event.preventDefault();
-      }
-      return;
+      if (event.metaKey) return;
     }
 
     // Shift+arrows (and Home/End/PageUp/PageDown) extend an existing
     // selection, as in Ghostty; without a selection they go to the program.
     const adjust = SELECTION_KEYS[event.code];
     if (adjust && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      const terminal = this.getTerminal?.();
+      const terminal = this.getTerminal();
       if (terminal?.hasSelection() && terminal.adjustSelection(adjust)) {
         event.preventDefault();
         this.onSelectionAdjusted?.();
@@ -542,14 +494,15 @@ export class InputHandler {
     try {
       data = this.encodeKey(event, event.repeat ? KeyAction.REPEAT : KeyAction.PRESS);
     } catch (error) {
-      // Encoding failed - log but don't crash
       console.warn('Failed to encode key:', event.code, error);
       return;
     }
 
-    // A key with no physical mapping (unusual layouts and devices): fall back
-    // to the text it produced, if any.
-    if (data === null) {
+    if (data !== null) {
+      this.encodedKeys.add(event.code);
+    } else {
+      // A key with no physical mapping (unusual layouts and devices): fall
+      // back to the text it produced, if any.
       const text = this.keyText(event);
       if (!text || event.ctrlKey || event.metaKey) return;
       data = text;
@@ -558,8 +511,8 @@ export class InputHandler {
     if (data.length > 0) {
       event.preventDefault();
       event.stopPropagation();
+      this.onKeyCallback?.({ key: data, domEvent: event });
       this.onDataCallback(data);
-      this.recordKeyDownData(data);
     } else if (!event.metaKey) {
       // Nothing to send (e.g. a bare modifier). Keep the browser from acting on
       // it, except for Cmd shortcuts, which stay the browser's.
@@ -573,10 +526,7 @@ export class InputHandler {
    * as arrows for wheel scrolling in full-screen apps.
    */
   sendKey(key: Key, mods: Mods = Mods.NONE): void {
-    this.syncEncoder();
-    const data = new TextDecoder().decode(
-      this.encoder.encode({ action: KeyAction.PRESS, key, mods })
-    );
+    const data = this.encodeNamedKey(key, mods);
     if (data) this.onDataCallback(data);
   }
 
@@ -586,10 +536,15 @@ export class InputHandler {
   }
 
   /**
-   * Handle keyup: send a release event when the program asked for them.
+   * Handle keyup: send a release event when the program asked for them, for
+   * keys whose press it was sent.
    */
   private handleKeyUp(event: KeyboardEvent): void {
-    if (this.isDisposed || this.isComposing || event.isComposing) return;
+    if (this.isDisposed) return;
+    this.keySwallowed = false;
+    const pressed = this.encodedKeys.delete(event.code);
+    if (this.customKeyEventHandler && this.customKeyEventHandler(event) === false) return;
+    if (!pressed || this.isComposing || event.isComposing) return;
     try {
       const data = this.encodeKey(event, KeyAction.RELEASE);
       if (data) this.onDataCallback(data);
@@ -605,23 +560,11 @@ export class InputHandler {
   private handlePaste(event: ClipboardEvent): void {
     if (this.isDisposed) return;
 
-    // Prevent default paste behavior
     event.preventDefault();
     event.stopPropagation();
 
-    // Get clipboard data
-    const clipboardData = event.clipboardData;
-    if (!clipboardData) {
-      console.warn('No clipboard data available');
-      return;
-    }
-
-    // Get text from clipboard
-    const text = clipboardData.getData('text/plain');
-    if (!text) {
-      console.warn('No text in clipboard');
-      return;
-    }
+    const text = event.clipboardData?.getData('text/plain');
+    if (!text) return;
 
     if (this.shouldIgnorePasteEvent(text, 'paste')) {
       return;
@@ -646,6 +589,12 @@ export class InputHandler {
     const data = event.data ?? '';
     let output: string | null = null;
 
+    // Text from a key the custom key handler stopped.
+    if (this.keySwallowed && inputType === 'insertText') {
+      event.preventDefault();
+      return;
+    }
+
     switch (inputType) {
       case 'insertText':
       case 'insertReplacementText':
@@ -656,22 +605,20 @@ export class InputHandler {
         output = '\r';
         break;
       case 'deleteContentBackward':
-        output = '\x7F';
+        output = this.encodeNamedKey(Key.BACKSPACE);
         break;
       case 'deleteContentForward':
-        output = '\x1B[3~';
+        output = this.encodeNamedKey(Key.DELETE);
         break;
       case 'insertFromPaste':
         if (!data) {
           return;
         }
-        if (this.shouldIgnorePasteEvent(data, 'beforeinput')) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
         event.preventDefault();
         event.stopPropagation();
+        if (this.shouldIgnorePasteEvent(data, 'beforeinput')) {
+          return;
+        }
         this.emitPasteData(data);
         this.recordPasteData(data, 'beforeinput');
         return;
@@ -683,20 +630,13 @@ export class InputHandler {
       return;
     }
 
-    if (this.shouldIgnoreBeforeInput(output)) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
-    if (data && this.shouldIgnoreBeforeInputFromComposition(data)) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
     event.preventDefault();
     event.stopPropagation();
+
+    if (data && this.shouldIgnoreBeforeInputFromComposition(data)) {
+      return;
+    }
+
     this.onDataCallback(output);
     if (data) {
       this.recordBeforeInputData(data);
@@ -712,51 +652,17 @@ export class InputHandler {
   }
 
   /**
-   * Handle compositionupdate event
-   */
-  private handleCompositionUpdate(_event: CompositionEvent): void {
-    if (this.isDisposed) return;
-    // We could track the current composition string here if we wanted to
-    // display it in a custom way, but for now we rely on the browser's
-    // input method editor UI.
-  }
-
-  /**
-   * Handle compositionend event
+   * Handle compositionend event: the composed text is sent.
    */
   private handleCompositionEnd(event: CompositionEvent): void {
     if (this.isDisposed) return;
     this.isComposing = false;
 
     const data = event.data;
-    if (data && data.length > 0) {
-      if (this.shouldIgnoreCompositionEnd(data)) {
-        this.cleanupCompositionTextNodes();
-        return;
-      }
-      this.onDataCallback(data);
-      this.recordCompositionData(data);
-    }
-
-    this.cleanupCompositionTextNodes();
-  }
-
-  /**
-   * Cleanup text nodes in container after composition
-   */
-  private cleanupCompositionTextNodes(): void {
-    // Cleanup text nodes in container (fix for duplicate text display)
-    // When the container is contenteditable, the browser might insert text nodes
-    // upon composition end. We need to remove them to prevent duplicate display.
-    if (this.container && this.container.childNodes) {
-      for (let i = this.container.childNodes.length - 1; i >= 0; i--) {
-        const node = this.container.childNodes[i];
-        // Node.TEXT_NODE === 3
-        if (node.nodeType === 3) {
-          this.container.removeChild(node);
-        }
-      }
-    }
+    if (!data) return;
+    if (this.shouldIgnoreCompositionEnd(data)) return;
+    this.onDataCallback(data);
+    this.recordCompositionData(data);
   }
 
   // ==========================================================================
@@ -769,9 +675,11 @@ export class InputHandler {
    * mouse reports, or Shift is held: like Ghostty, Shift+mouse is always the
    * terminal's own (for selecting text).
    */
-  private prepareMouse(event: MouseEvent): MouseEncoder | null {
+  private prepareMouse(
+    event: MouseEvent
+  ): { encoder: MouseEncoder; width: number; height: number } | null {
     if (!this.mouseConfig?.hasMouseTracking() || event.shiftKey) return null;
-    const terminal = this.getTerminal?.();
+    const terminal = this.getTerminal();
     if (!terminal) return null;
 
     this.mouseEncoder ??= this.ghostty.createMouseEncoder();
@@ -791,13 +699,7 @@ export class InputHandler {
       cellHeight: cell.height,
     });
     encoder.setAnyButtonPressed(this.mouseButtonsPressed !== 0);
-    return encoder;
-  }
-
-  /** Pointer position relative to the cell grid, in CSS pixels. */
-  private mousePosition(event: MouseEvent): { x: number; y: number } {
-    const offset = this.mouseConfig!.getCanvasOffset();
-    return { x: event.clientX - offset.left, y: event.clientY - offset.top };
+    return { encoder, width: screen.width, height: screen.height };
   }
 
   private mouseMods(event: MouseEvent): number {
@@ -818,17 +720,27 @@ export class InputHandler {
     4: 9 as MouseButton,
   };
 
+  /**
+   * Report a mouse event at the pointer, relative to the cell grid. A pointer
+   * outside the grid (while dragging) is reported at the nearest edge cell, as
+   * xterm.js does.
+   */
   private reportMouse(event: MouseEvent, action: MouseAction, button: MouseButton | null): boolean {
-    const encoder = this.prepareMouse(event);
-    if (!encoder) return false;
-    const { x, y } = this.mousePosition(event);
-    const data = encoder.encode(action, button, this.mouseMods(event), x, y);
+    const prepared = this.prepareMouse(event);
+    if (!prepared) return false;
+    const offset = this.mouseConfig!.getCanvasOffset();
+    const clamp = (v: number, size: number) => Math.max(0, Math.min(v, Math.max(0, size - 1)));
+    const x = clamp(event.clientX - offset.left, prepared.width);
+    const y = clamp(event.clientY - offset.top, prepared.height);
+    const data = prepared.encoder.encode(action, button, this.mouseMods(event), x, y);
     if (data) this.onDataCallback(data);
     return data.length > 0;
   }
 
   /**
-   * Handle mousedown event
+   * Handle mousedown event. While a button is held, motion and the release
+   * are followed on the whole document, so a drag that leaves the terminal
+   * still ends with a release.
    */
   private handleMouseDown(event: MouseEvent): void {
     if (this.isDisposed) return;
@@ -837,27 +749,57 @@ export class InputHandler {
     if (!this.mouseConfig?.hasMouseTracking() || event.shiftKey) return;
     this.mouseButtonsPressed |= 1 << button;
     this.reportMouse(event, MouseAction.PRESS, button);
+    this.startDragTracking();
   }
 
-  /**
-   * Handle mouseup event
-   */
+  private startDragTracking(): void {
+    if (this.trackingDrag || typeof document === 'undefined') return;
+    this.trackingDrag = true;
+    this.listen(document, 'mousemove', this.handleDragMove);
+    this.listen(document, 'mouseup', this.handleDragUp);
+  }
+
+  private stopDragTracking(): void {
+    if (!this.trackingDrag) return;
+    this.trackingDrag = false;
+    this.unlisten(document, 'mousemove');
+    this.unlisten(document, 'mouseup');
+  }
+
+  /** Handle mouseup on the terminal (no button held through a drag). */
   private handleMouseUp(event: MouseEvent): void {
-    if (this.isDisposed) return;
+    if (this.isDisposed || this.trackingDrag) return;
+    this.releaseButton(event);
+  }
+
+  private releaseButton(event: MouseEvent): void {
     const button = InputHandler.DOM_BUTTONS[event.button];
     if (button === undefined) return;
     const wasPressed = (this.mouseButtonsPressed & (1 << button)) !== 0;
     this.mouseButtonsPressed &= ~(1 << button);
+    if (this.mouseButtonsPressed === 0) this.stopDragTracking();
     if (!wasPressed) return;
     this.reportMouse(event, MouseAction.RELEASE, button);
   }
 
   /**
-   * Handle mousemove event: the encoder decides, from the tracking mode and
-   * whether a button is held, if motion is reported.
+   * Handle mousemove on the terminal: the encoder decides, from the tracking
+   * mode and whether a button is held, if motion is reported.
    */
   private handleMouseMove(event: MouseEvent): void {
-    if (this.isDisposed) return;
+    if (this.isDisposed || this.trackingDrag) return;
+    this.reportMotion(event);
+  }
+
+  private handleDragMove(event: MouseEvent): void {
+    if (!this.isDisposed) this.reportMotion(event);
+  }
+
+  private handleDragUp(event: MouseEvent): void {
+    if (!this.isDisposed) this.releaseButton(event);
+  }
+
+  private reportMotion(event: MouseEvent): void {
     let held: MouseButton | null = null;
     for (const b of [MouseButton.LEFT, MouseButton.MIDDLE, MouseButton.RIGHT]) {
       if (this.mouseButtonsPressed & (1 << b)) {
@@ -922,41 +864,36 @@ export class InputHandler {
   }
 
   /**
-   * Emit paste data with bracketed paste support
+   * Send pasted text. libghostty applies the terminal's paste modes (bracketed
+   * paste, Kitty paste events) and makes the text safe to send.
    */
   private emitPasteData(text: string): void {
-    const terminal = this.getTerminal?.();
-    if (terminal) {
-      // libghostty applies the terminal's paste modes (bracketed paste, Kitty
-      // paste events) and makes the text safe to send.
-      const data = terminal.encodePaste(text);
-      if (data) this.onDataCallback(data);
-      return;
-    }
-    const hasBracketedPaste = this.getModeCallback?.(2004) ?? false;
-    this.onDataCallback(hasBracketedPaste ? '\x1b[200~' + text + '\x1b[201~' : text);
-  }
-
-  /**
-   * Report focus changes to programs that asked for them (mode 1004). Focus
-   * moving between elements inside the terminal doesn't count.
-   */
-  private handleFocusChange(event: FocusEvent, focused: boolean): void {
-    if (this.isDisposed) return;
-    const other = event.relatedTarget as Node | null;
-    if (other && typeof this.container.contains === 'function' && this.container.contains(other)) {
-      return;
-    }
-    const data = this.getTerminal?.()?.encodeFocus(focused);
+    const data = this.getTerminal()?.encodePaste(text);
     if (data) this.onDataCallback(data);
   }
 
   /**
-   * Record keydown data for beforeinput de-duplication
+   * Report focus changes to programs that asked for them (mode 1004). Focus
+   * moving between elements inside the terminal doesn't count. Focus given to
+   * the container itself is passed on to the input element.
    */
-  private recordKeyDownData(data: string): void {
-    this.lastKeyDownData = data;
-    this.lastKeyDownTime = this.getNow();
+  private handleFocusChange(event: FocusEvent, focused: boolean): void {
+    if (this.isDisposed) return;
+    if (focused && event.target === this.container && this.inputElement) {
+      this.inputElement.focus();
+    }
+    const other = event.relatedTarget as Node | null;
+    if (other && typeof this.container.contains === 'function' && this.container.contains(other)) {
+      return;
+    }
+    if (!focused) {
+      // Keys released elsewhere never reach us, and a composition interrupted
+      // by the focus change won't end here.
+      this.isComposing = false;
+      this.encodedKeys.clear();
+    }
+    const data = this.getTerminal()?.encodeFocus(focused);
+    if (data) this.onDataCallback(data);
   }
 
   /**
@@ -966,21 +903,6 @@ export class InputHandler {
     this.lastPasteData = data;
     this.lastPasteTime = this.getNow();
     this.lastPasteSource = source;
-  }
-
-  /**
-   * Check if beforeinput should be ignored due to a recent keydown
-   */
-  private shouldIgnoreBeforeInput(data: string): boolean {
-    if (!this.lastKeyDownData) {
-      return false;
-    }
-    const now = this.getNow();
-    const isDuplicate =
-      now - this.lastKeyDownTime < InputHandler.BEFORE_INPUT_IGNORE_MS &&
-      this.lastKeyDownData === data;
-    this.lastKeyDownData = null;
-    return isDuplicate;
   }
 
   /**
@@ -1063,84 +985,20 @@ export class InputHandler {
   }
 
   /**
-   * Dispose the InputHandler and remove event listeners
+   * Dispose the InputHandler: remove event listeners and free the encoders.
    */
   dispose(): void {
     if (this.isDisposed) return;
 
+    for (const [target, type, listener, options] of this.listeners) {
+      target.removeEventListener(type, listener, options);
+    }
+    this.listeners = [];
+    this.trackingDrag = false;
+
+    this.encoder.dispose();
     this.mouseEncoder?.dispose();
     this.mouseEncoder = null;
-
-    if (this.keydownListener) {
-      this.container.removeEventListener('keydown', this.keydownListener);
-      this.keydownListener = null;
-    }
-
-    if (this.keyupListener) {
-      this.container.removeEventListener('keyup', this.keyupListener);
-      this.keyupListener = null;
-    }
-    if (this.focusInListener) {
-      this.container.removeEventListener('focusin', this.focusInListener);
-      this.focusInListener = null;
-    }
-    if (this.focusOutListener) {
-      this.container.removeEventListener('focusout', this.focusOutListener);
-      this.focusOutListener = null;
-    }
-
-    if (this.keypressListener) {
-      this.container.removeEventListener('keypress', this.keypressListener);
-      this.keypressListener = null;
-    }
-
-    if (this.pasteListener) {
-      this.container.removeEventListener('paste', this.pasteListener);
-      if (this.inputElement && this.inputElement !== this.container) {
-        this.inputElement.removeEventListener('paste', this.pasteListener);
-      }
-      this.pasteListener = null;
-    }
-
-    if (this.beforeInputListener && this.inputElement) {
-      this.inputElement.removeEventListener('beforeinput', this.beforeInputListener);
-      this.beforeInputListener = null;
-    }
-
-    if (this.compositionStartListener) {
-      this.container.removeEventListener('compositionstart', this.compositionStartListener);
-      this.compositionStartListener = null;
-    }
-
-    if (this.compositionUpdateListener) {
-      this.container.removeEventListener('compositionupdate', this.compositionUpdateListener);
-      this.compositionUpdateListener = null;
-    }
-
-    if (this.compositionEndListener) {
-      this.container.removeEventListener('compositionend', this.compositionEndListener);
-      this.compositionEndListener = null;
-    }
-
-    if (this.mousedownListener) {
-      this.container.removeEventListener('mousedown', this.mousedownListener);
-      this.mousedownListener = null;
-    }
-
-    if (this.mouseupListener) {
-      this.container.removeEventListener('mouseup', this.mouseupListener);
-      this.mouseupListener = null;
-    }
-
-    if (this.mousemoveListener) {
-      this.container.removeEventListener('mousemove', this.mousemoveListener);
-      this.mousemoveListener = null;
-    }
-
-    if (this.wheelListener) {
-      this.container.removeEventListener('wheel', this.wheelListener);
-      this.wheelListener = null;
-    }
 
     this.isDisposed = true;
   }

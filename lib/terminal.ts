@@ -464,10 +464,12 @@ export class Terminal implements ITerminalCore {
       };
 
       // Create input handler
-      this.inputHandler = new InputHandler(
-        this.ghostty!,
-        parent,
-        (data: string) => {
+      this.inputHandler = new InputHandler({
+        ghostty: this.ghostty!,
+        container: parent,
+        inputElement: this.textarea,
+        getTerminal: () => this.wasmTerm,
+        onData: (data: string) => {
           // Check if stdin is disabled
           if (this.options.disableStdin) {
             return;
@@ -481,27 +483,12 @@ export class Terminal implements ITerminalCore {
           // Input handler fires data events
           this.dataEmitter.fire(data);
         },
-        () => {
-          // Input handler can also fire bell
-          this.bellEmitter.fire();
-        },
-        (keyEvent: IKeyEvent) => {
-          // Forward key events
-          this.keyEmitter.fire(keyEvent);
-        },
-        this.customKeyEventHandler,
-        (mode: number) => {
-          // Query terminal mode state (e.g., mode 1 for application cursor mode)
-          return this.wasmTerm?.getMode(mode, false) ?? false;
-        },
-        () => {
-          // Handle Cmd+C copy - returns true if there was a selection to copy
-          return this.copySelection();
-        },
-        this.textarea,
+        onKey: (keyEvent: IKeyEvent) => this.keyEmitter.fire(keyEvent),
+        customKeyEventHandler: this.customKeyEventHandler,
+        // Copy shortcuts: returns true if there was a selection to copy
+        onCopy: () => this.copySelection(),
         mouseConfig,
-        () => this.wasmTerm
-      );
+      });
 
       this.syncCellPixelSize();
 
@@ -875,8 +862,11 @@ export class Terminal implements ITerminalCore {
   // ==========================================================================
 
   /**
-   * Attach a custom keyboard event handler
-   * Returns true to prevent default handling
+   * Attach a custom keyboard event handler, run before the terminal processes
+   * each keydown and keyup. As in xterm.js, it returns whether the terminal
+   * should process the event: returning false stops it (nothing is sent and
+   * onKey does not fire), so the handler can take over the key. The handler
+   * may call preventDefault itself.
    */
   public attachCustomKeyEventHandler(
     customKeyEventHandler: (event: KeyboardEvent) => boolean
