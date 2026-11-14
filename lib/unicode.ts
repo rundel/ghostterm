@@ -14,6 +14,7 @@ import type { IUnicodeHandling, IUnicodeVersionProvider } from './interfaces';
 /** The Unicode version of each libghostty-vt release's tables (from its uucode dependency). */
 export const UNICODE_VERSIONS: Record<string, string> = {
   '1.0.0': '18',
+  '1.0.1': '18',
 };
 
 /** The newest version recorded, for a module whose release isn't listed. */

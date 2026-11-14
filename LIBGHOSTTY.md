@@ -1,6 +1,6 @@
 # libghostty-vt gaps
 
-What ghostterm works around in, or can't do because of, the libghostty-vt release it bundles (currently 1.0.0, the `libghostty-vt` field in `package.json`). Every bump rechecks both lists (see the `bump-libghostty` skill): when a release fixes a quirk or adds a missing API, replace the workaround (or add the feature), adjust the tests and the README's "Behavior worth knowing", and drop the item. Bring the version above up to date with each bump.
+What ghostterm works around in, or can't do because of, the libghostty-vt release it bundles (currently 1.0.1, the `libghostty-vt` field in `package.json`). Every bump rechecks both lists (see the `bump-libghostty` skill): when a release fixes a quirk or adds a missing API, replace the workaround (or add the feature), adjust the tests and the README's "Behavior worth knowing", and drop the item. Bring the version above up to date with each bump.
 
 ## Quirks
 

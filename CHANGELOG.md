@@ -4,6 +4,8 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
+- Update libghostty-vt to 1.0.1: stale prompts no longer pile up when resizing, and growing rows while shrinking columns pulls scrollback back down.
+
 ## 0.0.2 - 2026-11-07
 
 - Works headless: writes, the buffer, markers and modes no longer need `open()`.

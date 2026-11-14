@@ -2,7 +2,7 @@
   "name": "ghostterm",
   "version": "0.0.2",
   "private": true,
-  "libghostty-vt": "1.0.0",
+  "libghostty-vt": "1.0.1",
   "description": "Browser terminal on libghostty-vt's WebAssembly module, with an xterm.js-compatible API",
   "type": "module",
   "module": "./dist/ghostterm.js",

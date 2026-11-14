@@ -14,9 +14,9 @@ set -euo pipefail
 # from the release's SHA256SUMS file, which is signed with Ghostty's minisign
 # key (see https://lib.ghostty.org/ "Release Files").
 
-VERSION="1.0.0"
-SMALL_SHA256="dad8e14ce8da57db3864f66ae36caf66a17c4e2691ad0a0110e05c746de047a4"
-FAST_SHA256="7b428fee6d0677bc81279458f8f9a3335454834123a9ff47efb3fd177f6da5a8"
+VERSION="1.0.1"
+SMALL_SHA256="e226900d2126faab515668e5400b69fc78ba3d99aaf9525b325f79707b29bf01"
+FAST_SHA256="2ee8434a58866aa3ce43cebbbf284d684f5f5b64c4f6040fa031cfe789e11646"
 BASE_URL="https://release.files.ghostty.org/libghostty-vt/${VERSION}"
 
 sha256() {
