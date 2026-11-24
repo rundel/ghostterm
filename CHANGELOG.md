@@ -4,7 +4,7 @@ High-level changes in each ghostterm release. Add entries under Unreleased as ch
 
 ## Unreleased
 
-- Update libghostty-vt to 1.0.1: stale prompts no longer pile up when resizing, and growing rows while shrinking columns pulls scrollback back down.
+- Update libghostty-vt to 1.0.2: stale prompts no longer pile up when resizing, growing rows while shrinking columns pulls scrollback back down, mouse motion within one cell is reported once, and skin-toned emoji are two cells wide.
 
 ## 0.0.2 - 2026-11-07
 
