@@ -85,6 +85,19 @@ describe('buttons and motion', () => {
     expect(sent).toEqual(['\x1b[<35;9;3M']);
   });
 
+  test('motion within one cell is reported once, and a still click is press then release', () => {
+    term.write(`\x1b[?1003h${SGR}`);
+    const [x, y] = cellPoint(4, 2);
+    const move = (type: string, dx: number) =>
+      internals(term).canvas.dispatchEvent(mouseEvent(type, x + dx, y));
+    move('mousemove', -2);
+    move('mousemove', 2);
+    move('mousedown', 2);
+    move('mousemove', 1);
+    move('mouseup', 1);
+    expect(sent).toEqual(['\x1b[<35;5;3M', '\x1b[<0;5;3M', '\x1b[<0;5;3m']);
+  });
+
   test('a drag that leaves the terminal is followed, clamped to the edge, and released', () => {
     term.write(`\x1b[?1002h${SGR}`);
     mouse('mousedown', 5, 5);

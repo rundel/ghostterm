@@ -222,6 +222,16 @@ describe('viewport cells', () => {
     expect(row[0].chars).toBe(family);
   });
 
+  test('a skin tone modifier makes a text-default emoji wide', () => {
+    const term = fixture.wasm(20, 5);
+    // U+261D (index pointing up) is 1 cell alone; the modifier asks for its emoji form.
+    term.write('☝\u{1F3FB}x');
+    const row = term.getLine(0)!;
+    expect(row[0].chars).toBe('☝\u{1F3FB}');
+    expect(row[0].width).toBe(2);
+    expect(row[2].codepoint).toBe(0x78);
+  });
+
   test('viewport cells carry their full grapheme cluster', () => {
     const term = fixture.wasm(20, 3);
     const family = '👨‍👩‍👧';

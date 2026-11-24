@@ -15,6 +15,7 @@ import type { IUnicodeHandling, IUnicodeVersionProvider } from './interfaces';
 export const UNICODE_VERSIONS: Record<string, string> = {
   '1.0.0': '18',
   '1.0.1': '18',
+  '1.0.2': '18',
 };
 
 /** The newest version recorded, for a module whose release isn't listed. */
